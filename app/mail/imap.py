@@ -133,15 +133,17 @@ class GmailIMAP:
                 else:
                     since = (datetime.now(UTC) - timedelta(hours=hours))
                     criteria = ["SINCE", since.strftime("%d-%b-%Y")]
-                ok, data = box.uid("SEARCH", None, *criteria)
-                if ok != "OK":
-                    raise MailboxError(f"search failed: {ok}")
-                uids = [u.decode() for u in (data[0] or b"").split()]
+                uids = self._search(box, criteria)
                 # A "UID n:*" search always returns at least the last message, even when it is
                 # older than n — the server clamps the range rather than answering nothing.
                 if uid_after:
                     uids = [u for u in uids if int(u) > int(uid_after)]
                 newest = uids[-1] if uids else uid_after
+                # Only what is still unread goes in the digest: mail the user has already opened
+                # on the phone is mail they have seen. `newest` still moves past it, so it is not
+                # picked up again once it is older than the next run.
+                unread = set(self._search(box, [*criteria, "UNSEEN"])) if uids else set()
+                uids = [u for u in uids if u in unread]
                 messages = [self._one(box, uid) for uid in uids[-limit:]]
                 return [m for m in messages if m is not None], newest, validity
         except (imaplib.IMAP4.error, OSError) as e:
@@ -159,6 +161,13 @@ class GmailIMAP:
                 box.logout()
             raise
         return box
+
+    @staticmethod
+    def _search(box: imaplib.IMAP4_SSL, criteria: list[str]) -> list[str]:
+        ok, data = box.uid("SEARCH", None, *criteria)
+        if ok != "OK":
+            raise MailboxError(f"search failed: {ok}")
+        return [u.decode() for u in (data[0] or b"").split()]
 
     @staticmethod
     def _validity(box: imaplib.IMAP4_SSL) -> str:

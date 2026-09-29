@@ -240,3 +240,53 @@ def test_two_digest_times_a_day():
 def test_the_app_password_is_never_in_a_digest(password):
     text = digest(MailRun(sorted=[Sorted(message("1"), "bills", "счёт")]), BUCKETS)
     assert password not in text
+
+
+# ---- the IMAP search itself --------------------------------------------------------------------
+
+class FakeBox:
+    """Just enough of imaplib.IMAP4_SSL for fetch_since: a mailbox of uid -> (bytes, seen)."""
+
+    def __init__(self, mail: dict[int, tuple[bytes, bool]]) -> None:
+        self.mail = mail
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc) -> None:
+        return None
+
+    def status(self, folder, what):
+        return "OK", [b"INBOX (UIDVALIDITY 7)"]
+
+    def uid(self, command, *args):
+        if command == "SEARCH":
+            criteria = [a for a in args if a is not None]
+            first = int(criteria[1].split(":")[0]) if criteria[0] == "UID" else 1
+            # The server clamps "n:*" and always answers with the last message.
+            found = [u for u in sorted(self.mail) if u >= first] or [max(self.mail)]
+            if "UNSEEN" in criteria:
+                found = [u for u in found if not self.mail[u][1]]
+            return "OK", [" ".join(str(u) for u in found).encode()]
+        if command == "FETCH":
+            return "OK", [(b"1 (BODY[] {1}", self.mail[int(args[0])][0])]
+        raise AssertionError(command)
+
+
+def test_mail_already_read_is_left_out_of_the_digest(monkeypatch):
+    """The digest showed mail the user had just read on the phone: the search asked for
+    everything that *arrived* since the last run, read or not. The newest uid still moves past
+    the read ones, so they are not picked up again later either."""
+    from app.mail.imap import GmailIMAP
+
+    box = FakeBox({
+        10: (raw("A <a@x.ee>", "old", "t"), False),
+        11: (raw("B <b@x.ee>", "read already", "t"), True),
+        12: (raw("C <c@x.ee>", "still unread", "t"), False),
+        13: (raw("D <d@x.ee>", "read too", "t"), True),
+    })
+    imap = GmailIMAP("me@x.ee", "pw")
+    monkeypatch.setattr(imap, "_open", lambda: box)
+    messages, newest, validity = imap.fetch_since("10")
+    assert [m.subject for m in messages] == ["still unread"]
+    assert newest == "13" and validity == "7"
