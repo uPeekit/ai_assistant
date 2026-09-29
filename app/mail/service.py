@@ -25,16 +25,24 @@ FIRST_RUN_HOURS = 12
 
 
 @dataclass
+class ShadowRun:
+    """One local model's go at the same mail: what it sorted, why it failed, what it took."""
+
+    model: str
+    sorted: list[Sorted] = field(default_factory=list)
+    error: str = ""
+    ms: int = 0
+
+
+@dataclass
 class MailRun:
     sorted: list[Sorted] = field(default_factory=list)
     error: str = ""
     prompt_tokens: int = 0
     output_tokens: int = 0
-    # The same mail, sorted a second time by a local model, when one is configured. It is only
-    # ever read into its own digest: nothing here changes what `sorted` says.
-    shadow: list[Sorted] = field(default_factory=list)
-    shadow_error: str = ""
-    shadow_ms: int = 0
+    # The same mail sorted again by each configured local model. Each is only ever read into
+    # its own digest: nothing here changes what `sorted` says.
+    shadows: list[ShadowRun] = field(default_factory=list)
 
     @property
     def empty(self) -> bool:
@@ -88,16 +96,16 @@ def digest(run: MailRun, buckets: list[str]) -> str:
     return "\n".join(lines)
 
 
-def shadow_digest(run: MailRun, buckets: list[str], model: str) -> str:
-    """The second digest: the same mail as the local model sorted it, headed by what it cost.
+def shadow_digest(shadow: ShadowRun, buckets: list[str]) -> str:
+    """A comparison digest: the same mail as one local model sorted it, headed by its cost.
 
-    The user compares this with the real one by reading them side by side, so it is rendered by
-    the very same code — only the header differs.
+    The user compares these with the real one by reading them side by side, so they are
+    rendered by the very same code — only the header differs.
     """
-    head = texts.MAIL_SHADOW_HEADER.format(model=model, seconds=run.shadow_ms / 1000)
-    if run.shadow_error:
-        return head + "\n" + texts.MAIL_SHADOW_FAILED.format(error=run.shadow_error)
-    body = digest(MailRun(sorted=run.shadow), buckets)
+    head = texts.MAIL_SHADOW_HEADER.format(model=shadow.model, seconds=shadow.ms / 1000)
+    if shadow.error:
+        return head + "\n" + texts.MAIL_SHADOW_FAILED.format(error=shadow.error)
+    body = digest(MailRun(sorted=shadow.sorted), buckets)
     # Its own MAIL_HEADER line would only repeat the real digest's, one message above.
     _, _, rest = body.partition("\n")
     return head + "\n" + (rest.strip() or texts.MAIL_SHADOW_EMPTY)
@@ -107,10 +115,10 @@ class MailService:
     def __init__(self, mailbox: GmailIMAP, classifier: Classifier, state: MailState,
                  *, buckets: list[str] | None = None, max_per_run: int = 40,
                  source: Callable[[], tuple[list[str], dict[str, str]]] | None = None,
-                 shadow: object | None = None) -> None:
+                 shadows: list | None = None) -> None:
         self._box = mailbox
         self._classifier = classifier
-        self._shadow = shadow
+        self._shadows = list(shadows or [])
         self._state = state
         self.buckets = buckets or classifier.buckets
         self._source = source  # the admin page's text, re-read on every run
@@ -118,8 +126,8 @@ class MailService:
 
     async def aclose(self) -> None:
         await self._classifier.aclose()
-        if self._shadow is not None:
-            await self._shadow.aclose()
+        for shadow in self._shadows:
+            await shadow.aclose()
 
     def _refresh_buckets(self) -> None:
         """Whatever the user has on the admin page right now. A change needs no restart."""
@@ -161,38 +169,34 @@ class MailService:
                  ", ".join(sorted({s.bucket for s in sorted_})))
         run = MailRun(sorted=sorted_, prompt_tokens=prompt_tokens,
                       output_tokens=output_tokens)
-        await self._run_shadow(messages, run)
+        for shadow in self._shadows:  # one at a time: each unloads before the next loads
+            run.shadows.append(await self._run_shadow(shadow, messages))
         return run
 
-    async def _run_shadow(self, messages: list[Message], run: MailRun) -> None:
-        """The same mail through the local model, for the user to compare against.
+    async def _run_shadow(self, shadow, messages: list[Message]) -> ShadowRun:
+        """The same mail through one local model, for the user to compare against.
 
         It runs after the state is written and its failures stay inside it: a model that is not
-        running, or is too slow, must cost the real digest nothing.
+        running, or is too slow, must cost the real digest — and the other models — nothing.
         """
-        if self._shadow is None:
-            return
-        self._shadow.buckets = list(self._classifier.buckets)
-        self._shadow.meanings = dict(self._classifier.meanings)
+        result = ShadowRun(model=getattr(shadow, "model", "?"))
+        shadow.buckets = list(self._classifier.buckets)
+        shadow.meanings = dict(self._classifier.meanings)
         start = time.monotonic()
         try:
-            run.shadow, _, _ = await self._shadow.sort(messages)
+            result.sorted, _, _ = await shadow.sort(messages)
         except Exception as e:  # a local model fails in ways the Claude path cannot
-            run.shadow_error = f"{type(e).__name__}: {e}"
-            log.warning("the shadow classifier failed: %s", run.shadow_error)
-        if not run.shadow and not run.shadow_error:
-            run.shadow_error = getattr(self._shadow, "last_error", "") or "no answer"
-        run.shadow_ms = int((time.monotonic() - start) * 1000)
-        log.info("mail shadow (%s): %d message(s) in %d ms%s",
-                 getattr(self._shadow, "model", "?"), len(run.shadow), run.shadow_ms,
-                 f" — {run.shadow_error}" if run.shadow_error else "")
+            result.error = f"{type(e).__name__}: {e}"
+            log.warning("the shadow classifier %s failed: %s", result.model, result.error)
+        if not result.sorted and not result.error:
+            result.error = getattr(shadow, "last_error", "") or "no answer"
+        result.ms = int((time.monotonic() - start) * 1000)
+        log.info("mail shadow (%s): %d message(s) in %d ms%s", result.model,
+                 len(result.sorted), result.ms, f" — {result.error}" if result.error else "")
+        return result
 
     async def digest(self) -> str:
         return digest(await self.run(), self.buckets)
-
-    @property
-    def shadow_model(self) -> str:
-        return getattr(self._shadow, "model", "") if self._shadow is not None else ""
 
 
 def messages_of(run: MailRun) -> list[Message]:

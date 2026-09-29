@@ -84,9 +84,10 @@ class Settings(BaseSettings):
     mail_buckets: str = ""
     mail_model: str = "claude-haiku-4-5"
     mail_max_per_run: int = Field(40, ge=1, le=200)
-    # A local Ollama model that sorts the same mail a second time, so the two digests can be
-    # read side by side. Empty is off, which is the normal state: it is a trial, not a feature,
-    # and while it runs it holds the card the transcriber wants.
+    # Local Ollama models, comma-separated, that each sort the same mail again, so their
+    # digests can be read side by side with the real one — one message each, in this order.
+    # Empty is off, which is the normal state: it is a trial, not a feature. They run one after
+    # another and each is unloaded when done, so they never share the card.
     mail_shadow_model: str = ""
     # How many emails to try in one local request. More at once sorts better (the model tells
     # buckets apart by contrast); a request that overflows the context is split and retried.
@@ -144,6 +145,10 @@ class Settings(BaseSettings):
     @cached_property
     def allowed_user_ids(self) -> frozenset[int]:
         return frozenset(int(p) for p in self.telegram_allowed_user_ids.split(",") if p.strip())
+
+    @cached_property
+    def mail_shadow_models(self) -> list[str]:
+        return [m.strip() for m in self.mail_shadow_model.split(",") if m.strip()]
 
 
 def load_settings() -> Settings:

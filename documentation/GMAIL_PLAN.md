@@ -32,11 +32,12 @@ after every comma, so one Save wrote the phantoms back, and its own hint ("one l
 bucket") described a format the parser did not read. Now: one bucket per line, and on a single
 line (the `.env` value) a comma starts a new bucket only where a `name:` follows it.
 
-**2026-09-29 — a second, local digest, for comparison.** `MAIL_SHADOW_MODEL` names an Ollama
-model; when set, the same mail is sorted again by `app/mail/local.py` (same prompt, schema and
-gate) and arrives as a second message headed with the model and its time. It never touches the
-real digest: the mailbox is read once, the state written once, and a local failure only changes
-the second message. It sends as many emails per request as fit — more at once sorts *better*,
+**2026-09-29 — local digests, for comparison.** `MAIL_SHADOW_MODEL` lists Ollama models,
+comma-separated; each sorts the same mail again through `app/mail/local.py` (same prompt, schema
+and gate), and each result arrives as its own message after the real digest, headed with the
+model and its time. They never touch the real digest or each other: the mailbox is read once,
+the state written once, the models run one at a time, and a local failure only changes that
+model's message. It sends as many emails per request as fit — more at once sorts *better*,
 since the model tells buckets apart by contrast — and splits a request in half when Ollama
 reports the context full (Ollama otherwise drops the head of the prompt silently). The model is
 unloaded as soon as its answer is in. On 16 test mails with the six default buckets, all at

@@ -287,18 +287,17 @@ def _mail_digest(settings: Settings, switches: Switches, buckets_file: Buckets, 
             and parse_times(tuning.mail_at)):
         return None, None
     buckets, meanings = buckets_file.parsed()
-    shadow = None
-    if settings.mail_shadow_model:
-        shadow = LocalClassifier(
-            settings.ollama_base_url, settings.mail_shadow_model, buckets,
-            meanings=meanings, batch=settings.mail_shadow_batch,
-            num_ctx=settings.llm_num_ctx)
-        log.info("mail: a second digest will be written by %s", settings.mail_shadow_model)
+    shadows = [LocalClassifier(settings.ollama_base_url, model, buckets, meanings=meanings,
+                               batch=settings.mail_shadow_batch, num_ctx=settings.llm_num_ctx)
+               for model in settings.mail_shadow_models]
+    if shadows:
+        log.info("mail: comparison digests will be written by %s",
+                 ", ".join(settings.mail_shadow_models))
     service = MailService(
         GmailIMAP(settings.gmail_address, password),
         Classifier(key, settings.mail_model, buckets, meanings=meanings, health=health),
         MailState(settings.db_path.with_name("mail_state.json")),
-        max_per_run=settings.mail_max_per_run, source=buckets_file.parsed, shadow=shadow,
+        max_per_run=settings.mail_max_per_run, source=buckets_file.parsed, shadows=shadows,
     )
 
     async def send() -> None:
@@ -312,10 +311,10 @@ def _mail_digest(settings: Settings, switches: Switches, buckets_file: Buckets, 
             return
         text = f"{text}\n\n{warning}".strip() if warning else text
         bodies = [text]
-        # The comparison digest goes in its own message, after the real one: it must never cost
-        # the user the digest they actually rely on, and two messages are what you compare.
-        if service.shadow_model and run.sorted:
-            bodies.append(shadow_digest(run, service.buckets, service.shadow_model))
+        # Each comparison digest goes in its own message, after the real one: none may cost the
+        # user the digest they actually rely on, and separate messages are what you compare.
+        if run.sorted:
+            bodies += [shadow_digest(shadow, service.buckets) for shadow in run.shadows]
         for chat_id in sorted(settings.allowed_user_ids):
             for body in bodies:
                 try:

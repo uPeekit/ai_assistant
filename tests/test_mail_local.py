@@ -9,7 +9,7 @@ import pytest
 
 from app.mail.classify import OTHER, Classifier
 from app.mail.local import LocalClassifier
-from app.mail.service import MailRun, MailService, MailState, shadow_digest
+from app.mail.service import MailService, MailState, ShadowRun, shadow_digest
 from tests.test_mail import BUCKETS, FakeMailbox, message
 from tests.test_vault_filer import FakeAnthropic
 
@@ -130,9 +130,13 @@ async def test_a_long_run_is_chunked_and_the_results_are_merged():
     assert {s.bucket for s in sorted_} == {"bills"}
 
 
-def svc(tmp_path, box, primary, shadow=None) -> MailService:
+def svc(tmp_path, box, primary, *shadows) -> MailService:
     return MailService(box, primary, MailState(tmp_path / "state.json"),
-                       buckets=BUCKETS, shadow=shadow)
+                       buckets=BUCKETS, shadows=list(shadows))
+
+
+def named(model: str, *answers: object) -> LocalClassifier:
+    return LocalClassifier("http://x", model, BUCKETS, transport=ollama(*answers))
 
 
 @pytest.mark.asyncio
@@ -146,27 +150,55 @@ async def test_both_models_see_the_same_mail_and_the_mailbox_is_read_once(tmp_pa
         {"id": "11", "bucket": "bills", "summary": "d"}]})).run()
     assert len(box.asked) == 1
     assert [s.bucket for s in run.sorted] == ["bills", "bills"]
-    assert [s.bucket for s in run.shadow] == [OTHER, "bills"]
+    assert [s.bucket for s in run.shadows[0].sorted] == [OTHER, "bills"]
 
 
 @pytest.mark.asyncio
-async def test_a_shadow_that_fails_never_touches_the_real_digest(tmp_path):
+async def test_every_local_model_sorts_the_same_mail_in_the_order_they_are_listed(tmp_path):
     box = FakeMailbox([([message("10")], "1")])
     primary = Classifier("", "m", BUCKETS, client=FakeAnthropic({"messages": [
         {"id": "10", "bucket": "bills", "summary": "a"}]}))
-    broken = LocalClassifier("http://x", "m", BUCKETS,
-                             transport=ollama(httpx.ConnectError("down")))
-    run = await svc(tmp_path, box, primary, broken).run()
+    run = await svc(tmp_path, box, primary,
+                    named("qwen3:8b", {"messages": [{"id": "10", "bucket": "bills",
+                                                     "summary": "b"}]}),
+                    named("gemma3:1b", {"messages": [{"id": "10", "bucket": "personal",
+                                                      "summary": "c"}]})).run()
+    assert len(box.asked) == 1
+    assert [(s.model, [x.bucket for x in s.sorted]) for s in run.shadows] == [
+        ("qwen3:8b", ["bills"]), ("gemma3:1b", ["personal"])]
+
+
+@pytest.mark.asyncio
+async def test_a_shadow_that_fails_never_touches_the_real_digest_or_the_next_shadow(tmp_path):
+    box = FakeMailbox([([message("10")], "1")])
+    primary = Classifier("", "m", BUCKETS, client=FakeAnthropic({"messages": [
+        {"id": "10", "bucket": "bills", "summary": "a"}]}))
+    run = await svc(tmp_path, box, primary,
+                    named("broken", httpx.ConnectError("down")),
+                    named("fine", {"messages": [{"id": "10", "bucket": "bills",
+                                                 "summary": "b"}]})).run()
     assert [s.bucket for s in run.sorted] == ["bills"]
-    assert run.shadow == []
-    assert run.shadow_error
+    broken, fine = run.shadows
+    assert broken.sorted == [] and broken.error
+    assert [s.bucket for s in fine.sorted] == ["bills"] and not fine.error
 
 
 def test_the_shadow_digest_names_the_model_and_what_it_cost():
-    run = MailRun(shadow_error="ollama is not running", shadow_ms=1234)
-    text = shadow_digest(run, BUCKETS, "mistral-nemo:12b")
+    text = shadow_digest(ShadowRun("mistral-nemo:12b", error="ollama is not running", ms=1234),
+                         BUCKETS)
     assert "mistral-nemo:12b" in text
     assert "ollama is not running" in text
+
+
+def test_the_setting_lists_models_separated_by_commas(env):
+    from app.config import Settings
+
+    def models(value: str) -> list[str]:
+        return Settings(_env_file=None, mail_shadow_model=value).mail_shadow_models
+
+    assert models("") == []
+    assert models("qwen3:8b") == ["qwen3:8b"]
+    assert models(" qwen3:8b, gemma3:1b ,") == ["qwen3:8b", "gemma3:1b"]
 
 
 @pytest.mark.asyncio
