@@ -1,0 +1,413 @@
+# Filer benchmark — 2026-09-29
+
+Cases: `data\eval\vault_cases.yaml` (81, human-reviewed 0), num_ctx=8192, temperature=0.
+
+How to read this:
+
+- **The expected answers were drafted by claude-haiku-4-5 and nobody has reviewed them yet.**
+  Every score is agreement with Haiku, not correctness; some disagreements will be Haiku's
+  mistakes. The cases are 81 real messages from the production audit log
+  (`tools/vault_cases.py`), each with the vault context frozen as it was for that message.
+- An earlier run the same day is void: it sent the prompt as a top-level `"system"` field, which
+  Ollama's `/api/chat` silently ignores, so no local model saw FILER_PROMPT. This run sends it
+  as a system message.
+- mistral-nemo's latency is inflated: it runs partly on CPU on the 8 GB card, and test suites
+  were running on the same machine while it was measured. Its accuracy is unaffected.
+
+What it says: model *family* matters more than size above ~4B — qwen3:4b (2.5 GB) scores about
+what qwen3:8b and mistral-nemo:12b do, and gemma3:4b is far behind. `note` is now 83–90% for
+the qwen models and nemo; `action` stays the weak field (49–58%), and its biggest single error
+is still `update` answered as `task` — a duplicate instead of a tick (10–15 of 23 `update`
+cases missed). mistral-nemo also answers `note` where Haiku falls back to `inbox` (6 times).
+
+| model | cases | valid | count | action | note | folder | tags | all | safe | wrong | p50 ms | p95 ms |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| gemma3:1b | 81 | 99% | 77% | 15% | 0% | 20% | 6% | 2% | 2% | 79 | 3625 | 5202 |
+| qwen3:1.7b | 81 | 100% | 79% | 39% | 43% | 62% | 24% | 12% | 12% | 71 | 2593 | 12093 |
+| gemma3:4b | 81 | 100% | 84% | 36% | 43% | 33% | 24% | 11% | 11% | 72 | 4890 | 12530 |
+| qwen3:4b | 81 | 100% | 84% | 49% | 83% | 76% | 53% | 38% | 40% | 49 | 5905 | 9561 |
+| qwen3:8b | 81 | 100% | 86% | 56% | 90% | 71% | 76% | 41% | 41% | 48 | 7686 | 22125 |
+| mistral-nemo:12b | 81 | 99% | 84% | 58% | 83% | 55% | 53% | 37% | 37% | 51 | 11110 | 36766 |
+
+## gemma3:1b — 79 miss(es)
+- `e1`: {'action': 'task', 'note': 'Забрать посылки из кауп #personal', 'folder': 'кауп', 'tags': []}
+- `e3`: {'action': 'task', 'note': 'Покупка слона - задача', 'folder': 'Заметки', 'tags': []}
+- `e5`: {'action': 'task', 'note': 'В гнезде надо поменять лезвие на аппарате.', 'folder': 'gnezdo', 'tags': ['123']}
+- `e6`: {'action': 'task', 'note': 'Поиск рецепта борща из копченой курицы.', 'folder': 'Домашняя', 'tags': ['borksh']}
+- `e7`: {'action': 'grocery', 'note': 'Добавить картинки для референса к странице с борщом, чтобы красиво на странице.', 'folder': 'Борщ', 'tags': ['борщ', 'картинки', 'референс']}
+- `e8`: {'action': 'grocery', 'note': 'покупать', 'folder': 'Заметки', 'tags': []}
+- `e9`: {'action': 'task', 'note': 'Поиск изображений для каждого шага приготовления борща.', 'folder': 'Заметки', 'tags': ['заметки']}
+- `e10`: {'action': 'task', 'note': 'Поиск информации о японских воротах Тории.', 'folder': 'заметки', 'tags': []}
+- `e11`: {'action': 'task', 'note': 'Почистить, разложить инструменты, убрать мусор', 'folder': 'Мастерская', 'tags': ['мастерская']}
+- `e12`: not JSON
+- `e13`: {'action': 'task', 'note': 'Задание: Понять, что нужно сделать. Посмотреть, что нужно сделать.', 'folder': 'трум трум', 'tags': []}
+- `e14`: {'action': 'task', 'note': 'hj', 'folder': 'Заметки', 'tags': []}
+- `e15`: {'action': 'task', 'note': 'Привет!', 'folder': 'Заметки', 'tags': []}
+- `e16`: {'action': 'search', 'note': 'Поиск романов Пелевина', 'folder': 'романы', 'tags': []}
+- `e18`: {'action': 'task', 'note': 'Прочитать все романы Пелевина', 'folder': 'романы Пелевина', 'tags': []}
+- `e20`: {'action': 'task', 'note': 'Прочитать все романы Пелевина, начиная с жизни насекомых и Омон Ра и заканчивая Возвращение синей бороды', 'folder': 'Романы', 'tags': ['добавить', 'почитать']}
+- `e21`: {'action': 'grocery', 'note': 'Октябрь - это время, когда можно купить продукты, чтобы не пришлось готовить. Подумайте о том, что нужно для ребенка, и что можно купить в магазине.', 'folder': 'Продукты', 'tags': ['отсчёт', 'поездки']}
+- `e22`: {'action': 'task', 'note': 'Запланировать активность для ребёнка 1.5 года в вторая половина октября. Сравнить план.', 'folder': 'Заметки', 'tags': ['plan', 'task']}
+- `e23`: {'action': 'task', 'note': 'Посмотреть фильм Uncharted', 'folder': 'Заметки', 'tags': []}
+- `e24`: {'action': 'task', 'note': 'Не знаю, где посмотреть, но нужно посмотреть фильм Uncharted', 'folder': 'фильмы', 'tags': []}
+- `e26`: {'action': 'task', 'note': 'Не знаю, когда смотреть, но нужно посмотреть фильм Uncharted', 'folder': 'Uncharted', 'tags': ['не знаю, когда смотреть, но нужно посмотреть фильм uncharted']}
+- `e27`: {'action': 'task', 'note': 'Прочитать романы Достоевского', 'folder': 'Книги', 'tags': ['достоевский', 'книга']}
+- `e29`: {'action': 'task', 'note': 'Задание: Прочитать книгу', 'folder': 'Заметки', 'tags': ['прочитать']}
+- `e31`: {'action': 'search', 'note': 'Поиск в интернете', 'folder': 'Книги', 'tags': ['достоевский', 'романы']}
+- `e32`: {'action': 'task', 'note': 'посмотреть фильм Uncharted', 'folder': 'фильмы', 'tags': []}
+- `e35`: {'action': 'task', 'note': 'посмотреть фильм Uncharted', 'folder': 'Заметки', 'tags': ['не знаю, где смотреть']}
+- `e37`: {'action': 'task', 'note': 'Рик и морти', 'folder': 'Заметки', 'tags': []}
+- `e38`: {'action': 'task', 'note': 'Посмотреть Джорджа Бизара Adventures', 'folder': 'Заметки', 'tags': ['джордж бизард', 'приключения']}
+- `e42`: {'action': 'task', 'note': 'Создать страницу в подпроектах, чтобы было удобно перечислять виды ворот тории.', 'folder': 'подпроекты', 'tags': ['виды', 'ворот тории', 'картинки', 'миниатюры', 'подпроекты']}
+- `e43`: {'action': 'task', 'note': 'Запись на массаж', 'folder': 'Области', 'tags': []}
+- `e45`: {'action': 'task', 'note': 'Создать страницу под мастерской для этого', 'folder': 'Дом', 'tags': ['мастерская', 'ребёнок', 'шведская стенка']}
+- `e46`: {'action': 'task', 'note': 'Задачи: Купить шампунь и бальзам для волос', 'folder': 'Заметки', 'tags': []}
+- `e47`: {'action': 'update', 'note': 'задачи', 'folder': 'Заметки', 'tags': []}
+- `e49`: {'action': 'task', 'note': 'Надо составить квиз на сегодняшнюю встречу книжного клуба', 'folder': 'knub', 'tags': ['встреча', 'книжный клуб']}
+- `e50`: {'action': 'task', 'note': 'задание: составить квиз на встречу книжного клуба #knub 📅 2026-09-21', 'folder': 'Книги', 'tags': ['knub', 'квиз']}
+- `e51`: {'action': 'task', 'note': 'Посылка от [название компании] - [номер посылки]', 'folder': 'Кауп', 'tags': ['посылка']}
+- `e53`: {'action': 'task', 'note': 'Посылка, нужно доставить', 'folder': 'посылка', 'tags': []}
+- `e54`: {'action': 'task', 'note': 'Подобрать Джеффа для Бота', 'folder': 'Области', 'tags': []}
+- `e55`: {'action': 'task', 'note': 'заметка', 'folder': 'Заметки', 'tags': []}
+- `e56`: {'action': 'task', 'note': 'Добавить Obsidian. Какие дубликации информации?', 'folder': 'Заметки', 'tags': []}
+- `e58`: {'action': 'task', 'note': 'Создать квиз на встречу книжного клуба #knub 📅 2026-09-21', 'folder': 'Книги', 'tags': ['2026-09-21']}
+- `e59`: {'action': 'task', 'note': 'запись в базе встреч', 'folder': 'База встреч', 'tags': []}
+- `e60`: {'action': 'task', 'note': 'Поиск книги Глуховского регистрация', 'folder': 'Заметки', 'tags': []}
+- `e61`: {'action': 'task', 'note': 'Запись о регистрации в программе', 'folder': 'Заметки', 'tags': []}
+- `e63`: {'action': 'task', 'note': 'Задачи: Встреча по следующей книге Глуховского регистрации', 'folder': 'Заметки', 'tags': []}
+- `e65`: {'action': 'grocery', 'note': 'поиск', 'folder': 'Продукты', 'tags': []}
+- `e66`: {'action': 'task', 'note': 'Измерить кольцо.  Пока не знаю, как это сделать.  Пока не знаю, как это сделать.', 'folder': 'Книги', 'tags': ['пока не знаю, как это сделать.']}
+- `e69`: {'action': 'task', 'note': 'Поиск информации об обсидиане в Obsidian.  Уточнить, какие дубликации информации нужно добавить.', 'folder': 'Области', 'tags': []}
+- `e70`: {'action': 'task', 'note': 'задача', 'folder': 'Заметки', 'tags': []}
+- `e71`: {'action': 'task', 'note': 'заплатить за расходники в садик', 'folder': 'Сад', 'tags': ['за расходники', 'заплатить']}
+- `e72`: {'action': 'task', 'note': 'Подожди, пока я его выберу.', 'folder': 'Продукты', 'tags': []}
+- `e74`: {'action': 'task', 'note': 'Закупка Качельки', 'folder': 'personal', 'tags': ['1']}
+- `e76`: {'action': 'task', 'note': 'Заказать кольцо', 'folder': 'Заметки', 'tags': []}
+- `e77`: {'action': 'search', 'note': 'Поиск кнопки с клавиатуры', 'folder': 'заметки', 'tags': []}
+- `e80`: {'action': 'task', 'note': 'Покупка бритвы', 'folder': 'Области', 'tags': []}
+- `e81`: {'action': 'task', 'note': 'Внести траты, нужно отследить расходы', 'folder': 'Заметки', 'tags': ['траты']}
+- `e83`: {'action': 'task', 'note': 'закупка продуктов', 'folder': 'home', 'tags': ['покупка продуктов']}
+- `e84`: {'action': 'task', 'note': 'Добавить стрик меню, пуп стрик, месячный календарь, настройки временных статов, сумма статов. Сделай всё одной записью.', 'folder': 'задачи', 'tags': []}
+- `e85`: {'action': 'task', 'note': 'Проект расширитель стола - это идея, чтобы сделать стол более удобным. Нужно подумать, как это можно сделать. Нужно продумать, как это будет выглядеть, и как это будет работать.', 'folder': 'Области', 'tags': ['расширитель стола']}
+- `e86`: {'action': 'task', 'note': 'Подождать уточнения от саньки, чтобы прикрутить почту', 'folder': 'personal', 'tags': []}
+- `e88`: {'action': 'search', 'note': 'Поиск задач на сегодня', 'folder': 'Дневник', 'tags': []}
+- `e89`: {'action': 'task', 'note': 'Поиск страницы про шведскую стенку', 'folder': 'Заметки', 'tags': []}
+- `e90`: {'action': 'grocery', 'note': 'поиск вариантов', 'folder': 'Области', 'tags': ['поиск']}
+- `e91`: {'action': 'task', 'note': 'Убрать лишний текст, сделать консистентный подход, переработать.', 'folder': 'Заметки', 'tags': []}
+- `e92`: {'action': 'task', 'note': 'Поиск страницы с информацией о шведской стенке в Obsidian.', 'folder': 'Заметки', 'tags': []}
+- `e93`: {'action': 'task', 'note': 'Поиск страницы проворота тории', 'folder': 'Заметки', 'tags': []}
+- `e94`: {'action': 'task', 'note': 'просмотр квартиры Kalevipoja põik 3-120', 'folder': 'Книги', 'tags': ['просмотр квартиры kalevipoja põik 3-120']}
+- `e96`: {'action': 'move', 'note': 'Создать раздел pehmevara', 'folder': 'Области', 'tags': []}
+- `e97`: {'action': 'move', 'note': 'перемести все секции с гитхаб проектами из пройектов в pehmevara', 'folder': 'пройекты', 'tags': []}
+- `e100`: {'action': 'task', 'note': 'Покупка книги', 'folder': 'Заметки', 'tags': []}
+- `e101`: {'action': 'task', 'note': 'Постирать вещи', 'folder': 'Заметки', 'tags': []}
+- `e102`: {'action': 'task', 'note': 'В список покупок', 'folder': 'Заметки', 'tags': []}
+- `e106`: {'action': 'task', 'note': 'заказать новые очки', 'folder': 'Области', 'tags': []}
+- `e107`: {'action': 'task', 'note': 'Запланированная конференция в Тарту Digit 2026-10-09', 'folder': 'Конференция', 'tags': ['digit', 'конференция', 'тарту']}
+- `e108`: {'action': 'task', 'note': 'Просмотр квартиры', 'folder': 'Заметки', 'tags': []}
+- `e109`: {'action': 'update', 'note': 'Продукты на главную', 'folder': 'Главная', 'tags': []}
+- `e110`: {'action': 'task', 'note': 'Посмотреть квартиру Virbi 2', 'folder': 'Квартира Virbi 2', 'tags': []}
+- `e111`: {'action': 'task', 'note': 'Добавить область таймлапсы в заметку.', 'folder': 'Заметки', 'tags': []}
+- `e112`: {'action': 'move', 'note': 'в папку "Проекты"', 'folder': 'Проекты', 'tags': []}
+
+## qwen3:1.7b — 71 miss(es)
+- `e1`: {'action': 'task', 'note': 'Задачи', 'folder': 'Задачи', 'tags': ['personal']}
+- `e3`: {'action': 'grocery', 'note': 'Заметка в папке Продукты', 'folder': 'Продукты', 'tags': ['babki']}
+- `e5`: {'action': 'move', 'note': 'Задачи', 'folder': 'gnezdo', 'tags': ['gnezdo']}
+- `e6`: {'action': 'note', 'note': '2026-09-19 Дом', 'folder': 'Заметки', 'tags': ['babki', 'gnezdo']}
+- `e7`: {'action': 'rewrite', 'note': '2026-09-19 Книга', 'folder': 'Книги', 'tags': ['babki']}
+- `e10`: {'action': 'search', 'note': 'Виды ворот тории', 'folder': 'projects', 'tags': ['gnezdo', 'knub', 'personal']}
+- `e11`: {'action': 'move', 'note': 'gnezdo', 'folder': 'Заметки', 'tags': ['gnezdo']}
+- `e12`: {'action': 'note', 'note': 'Вьетнамская поездка', 'folder': 'Моя херня', 'tags': ['babki', 'gnezdo', 'knub']}
+- `e13`: {'action': 'task', 'note': 'Задача', 'folder': 'Заметки', 'tags': ['timelapse']}
+- `e15`: {'action': 'log', 'note': 'Заметка в дневник', 'folder': 'Дневник', 'tags': ['справка']}
+- `e16`: {'action': 'note', 'note': 'Заметки', 'folder': 'Книги', 'tags': ['babki', 'gnezdo', 'home', 'knub', 'personal', 'timelapse', 'отсчёт', 'справка']}
+- `e18`: {'action': 'note', 'note': 'Заметки', 'folder': 'Книги', 'tags': ['babki', 'gnezdo', 'home', 'knub', 'personal', 'timelapse', 'отсчёт', 'справка']}
+- `e20`: {'action': 'note', 'note': '2026-06-22 Вглядываясь в солнце. Жизнь без страха смерти', 'folder': 'Книги', 'tags': ['babki', 'gnezdo', 'home', 'knub', 'personal', 'timelapse', 'отсчёт', 'справка']}
+- `e21`: {'action': 'task', 'note': 'Задача на сегодня', 'folder': 'Задачи', 'tags': ['gnezdo', 'timelapse', 'отсчёт']}
+- `e22`: {'action': 'task', 'note': 'Задача', 'folder': 'Заметки', 'tags': ['gnezdo']}
+- `e23`: {'action': 'task', 'note': 'Заметки', 'folder': 'Заметки', 'tags': ['gnezdo', 'home', 'knub']}
+- `e24`: {'action': 'search', 'note': 'Заметки', 'folder': 'Книги', 'tags': ['knub']}
+- `e26`: {'action': 'note', 'note': 'Заметки', 'folder': 'Кнуб', 'tags': ['babki', 'knub']}
+- `e27`: {'action': 'note', 'note': 'Заметки', 'folder': 'Книги', 'tags': ['home', 'knub', 'personal', 'reading', 'timelapse', 'братя карамазовы', 'достоевский', 'отсчёт', 'справка']}
+- `e28`: {'action': 'task', 'note': 'Задачи', 'folder': 'Заметки', 'tags': ['отсчёт']}
+- `e29`: {'action': 'note', 'note': 'Заметки', 'folder': 'Заметки', 'tags': ['babki']}
+- `e31`: {'action': 'search', 'note': 'Идиот', 'folder': 'Книги', 'tags': ['babki', 'knub']}
+- `e32`: {'action': 'search', 'note': 'Заметки', 'folder': 'Книги', 'tags': ['knub']}
+- `e35`: {'action': 'search', 'note': 'Заметки', 'folder': 'Кнуб', 'tags': ['knub']}
+- `e37`: {'action': 'note', 'note': 'Заметки', 'folder': 'Книги', 'tags': ['babki', 'knub']}
+- `e38`: {'action': 'search', 'note': 'Заметка', 'folder': 'Книги', 'tags': ['babki', 'knub']}
+- `e42`: {'action': 'note', 'note': 'Подпроекты', 'folder': 'Области', 'tags': ['babki', 'gnezdo', 'home', 'knub', 'personal', 'timelapse', 'отсчёт', 'справка']}
+- `e43`: {'action': 'task', 'note': 'Задача в гнезде', 'folder': 'Гнездо', 'tags': ['gnezdo']}
+- `e45`: {'action': 'note', 'note': 'Шведская стенка', 'folder': 'Заметки', 'tags': ['gnezdo', 'personal']}
+- `e46`: {'action': 'grocery', 'note': 'Запись о покупке шампуня', 'folder': 'Продукты', 'tags': ['babki']}
+- `e47`: {'action': 'move', 'note': 'пройекты', 'folder': 'Области', 'tags': []}
+- `e49`: {'action': 'task', 'note': '2026-09-21 Книга', 'folder': 'Кнуб', 'tags': ['knub', 'отсчёт']}
+- `e50`: {'action': 'task', 'note': 'Задачи', 'folder': 'Задачи', 'tags': ['knub']}
+- `e51`: {'action': 'task', 'note': 'Задача', 'folder': 'Задачи', 'tags': ['personal']}
+- `e53`: {'action': 'task', 'note': 'Задачи', 'folder': 'Задачи', 'tags': ['personal']}
+- `e55`: {'action': 'note', 'note': 'Заметка в туду', 'folder': 'Заметки', 'tags': ['tudu']}
+- `e56`: {'action': 'task', 'note': 'Заметки', 'folder': 'Заметки', 'tags': ['personal']}
+- `e58`: {'action': 'note', 'note': 'Кнуб', 'folder': 'Кнуб', 'tags': ['knub']}
+- `e59`: {'action': 'move', 'note': '2026-07-10 Встреча с Дианой Конде', 'folder': 'Кнуб', 'tags': ['knub']}
+- `e60`: {'action': 'task', 'note': 'Задача', 'folder': 'Области', 'tags': ['отсчёт']}
+- `e61`: {'action': 'task', 'note': 'Задачи', 'folder': 'Области', 'tags': ['отсчёт']}
+- `e63`: {'action': 'task', 'note': 'Задачи — архив', 'folder': 'Задачи', 'tags': ['knub', 'отсчёт']}
+- `e65`: {'action': 'task', 'note': 'Задача', 'folder': 'Области', 'tags': ['personal', 'отсчёт']}
+- `e66`: {'action': 'task', 'note': 'Задачи', 'folder': 'Задачи', 'tags': ['personal']}
+- `e69`: {'action': 'task', 'note': 'Задачи', 'folder': 'Заметки', 'tags': ['отсчёт']}
+- `e70`: {'action': 'task', 'note': 'Задачи', 'folder': 'Заметки', 'tags': []}
+- `e71`: {'action': 'task', 'note': 'Задачи', 'folder': 'Задачи', 'tags': ['home', 'отсчёт']}
+- `e72`: {'action': 'task', 'note': 'Задачи', 'folder': 'Задачи', 'tags': ['personal']}
+- `e74`: {'action': 'grocery', 'note': 'Продукты', 'folder': 'Продукты', 'tags': ['babki']}
+- `e76`: {'action': 'task', 'note': 'Заказ кольца', 'folder': 'Заметки', 'tags': ['personal']}
+- `e77`: {'action': 'search', 'note': 'Заметка', 'folder': 'Заметки', 'tags': ['personal']}
+- `e79`: {'action': 'task', 'note': 'Задачи — архив', 'folder': 'Кнуб', 'tags': ['knub', 'отсчёт']}
+- `e80`: {'action': 'grocery', 'note': 'Заметка в папке «Заметки»', 'folder': 'Продукты', 'tags': ['babki']}
+- `e81`: {'action': 'grocery', 'note': 'Продукты', 'folder': 'Продукты', 'tags': ['babki']}
+- `e83`: {'action': 'grocery', 'note': 'Заметки', 'folder': 'Продукты', 'tags': ['babki']}
+- `e84`: {'action': 'note', 'note': 'Задачи — архив', 'folder': 'Заметки', 'tags': ['timelapse', 'отсчёт']}
+- `e85`: {'action': 'task', 'note': 'Задача', 'folder': 'Области', 'tags': ['personal']}
+- `e86`: {'action': 'task', 'note': 'Задачи', 'folder': 'Задачи', 'tags': ['personal']}
+- `e88`: {'action': 'task', 'note': 'Задачи — архив', 'folder': 'Области', 'tags': ['отсчёт']}
+- `e90`: {'action': 'search', 'note': 'Шведская стенка', 'folder': 'Книги', 'tags': ['babki', 'knub']}
+- `e91`: {'action': 'rewrite', 'note': 'Шведская стенка', 'folder': 'Заметки', 'tags': ['план', 'шведская стенка']}
+- `e93`: {'action': 'search', 'note': 'Виды ворот тории', 'folder': 'Области', 'tags': ['babki', 'gnezdo', 'home', 'knub', 'personal', 'timelapse', 'отсчёт', 'справка']}
+- `e94`: {'action': 'task', 'note': 'Сделать шведскую стенку ребёнку', 'folder': 'gnezdo', 'tags': ['gnezdo', 'personal']}
+- `e96`: {'action': 'note', 'note': 'pehmevara', 'folder': 'Заметки', 'tags': ['personal']}
+- `e100`: {'action': 'task', 'note': 'Священная книга оборотня', 'folder': 'Заметки', 'tags': ['home', 'personal']}
+- `e101`: {'action': 'task', 'note': 'Задачи', 'folder': 'Задачи', 'tags': []}
+- `e102`: {'action': 'grocery', 'note': 'Продукты', 'folder': 'Продукты', 'tags': ['babki']}
+- `e106`: {'action': 'task', 'note': 'Заметки', 'folder': 'Заметки', 'tags': ['personal']}
+- `e107`: {'action': 'task', 'note': 'Задачи', 'folder': 'Задачи', 'tags': ['отсчёт']}
+- `e108`: {'action': 'move', 'note': 'Заметки', 'folder': 'Заметки', 'tags': ['home', 'personal']}
+- `e109`: {'action': 'grocery', 'note': 'Продукты', 'folder': 'Продукты', 'tags': ['babki']}
+
+## gemma3:4b — 72 miss(es)
+- `e1`: {'action': 'task', 'note': 'Задачи', 'folder': 'Задачи', 'tags': ['personal']}
+- `e3`: {'action': 'task', 'note': 'Купить слона', 'folder': 'Пройекты', 'tags': []}
+- `e5`: {'action': 'task', 'note': 'В гнезде надо поменять лезвие на аппарате', 'folder': 'Задачи', 'tags': []}
+- `e6`: {'action': 'note', 'note': 'рецепт борща из копченой курицы', 'folder': 'дом', 'tags': ['home']}
+- `e7`: {'action': 'note', 'note': 'референс борщ', 'folder': 'Заметки', 'tags': []}
+- `e8`: {'action': 'task', 'note': 'приготовление борща', 'folder': 'пройекты', 'tags': []}
+- `e9`: {'action': 'task', 'note': 'приготовление борща', 'folder': 'пройекты', 'tags': []}
+- `e10`: {'action': 'note', 'note': 'Виды ворот тории', 'folder': 'пройекты', 'tags': ['отсчёт']}
+- `e11`: {'action': 'task', 'note': 'Гнездо', 'folder': 'Гнездо', 'tags': ['gnezdo', 'home']}
+- `e12`: {'action': 'note', 'note': 'Моя херня', 'folder': 'Моя херня', 'tags': ['travel']}
+- `e16`: {'action': 'note', 'note': 'роман план', 'folder': 'Кнуб', 'tags': ['knub']}
+- `e18`: {'action': 'note', 'note': 'Книги', 'folder': 'Книги', 'tags': []}
+- `e20`: {'action': 'note', 'note': 'Возвращение синей бороды', 'folder': 'Книги', 'tags': []}
+- `e21`: {'action': 'task', 'note': 'план поездки на паром в Хельсинки или Стокгольм в октябре с ребёнком', 'folder': 'Задачи', 'tags': ['family', 'travel', 'trip']}
+- `e22`: {'action': 'task', 'note': 'сравнительный план', 'folder': 'пройекты', 'tags': ['сравнительный план']}
+- `e23`: {'action': 'task', 'note': 'Uncharted', 'folder': 'Задачи', 'tags': []}
+- `e24`: {'action': 'task', 'note': 'Uncharted', 'folder': 'медиа', 'tags': []}
+- `e26`: {'action': 'note', 'note': 'Uncharted', 'folder': 'медиа', 'tags': []}
+- `e27`: {'action': 'note', 'note': 'Братья Карамазовы', 'folder': 'Кнуб', 'tags': ['knub']}
+- `e28`: {'action': 'note', 'note': 'Достоевский', 'folder': 'Книги', 'tags': []}
+- `e31`: {'action': 'note', 'note': 'Братья Карамазовы', 'folder': 'Книги', 'tags': []}
+- `e32`: {'action': 'task', 'note': 'Uncharted', 'folder': 'пройекты', 'tags': ['uncharted']}
+- `e35`: {'action': 'note', 'note': 'Uncharted', 'folder': 'media', 'tags': []}
+- `e37`: {'action': 'task', 'note': 'пацаны сериал', 'folder': 'пройекты', 'tags': ['сериал']}
+- `e38`: {'action': 'note', 'note': 'Adventures', 'folder': 'Книги', 'tags': []}
+- `e42`: {'action': 'note', 'note': 'Виды японских ворот тории', 'folder': 'пройекты', 'tags': []}
+- `e43`: {'action': 'task', 'note': 'На массаж записаться', 'folder': 'Области', 'tags': []}
+- `e45`: {'action': 'task', 'note': 'Шведская стенка ребенку', 'folder': 'Области', 'tags': ['gnezdo']}
+- `e46`: {'action': 'grocery', 'note': 'шампунь', 'folder': 'Продукты', 'tags': []}
+- `e47`: {'action': 'update', 'note': 'отсчёт', 'folder': 'отсчёт', 'tags': []}
+- `e49`: {'action': 'task', 'note': 'Квиз на встречу книжного клуба', 'folder': 'Задачи', 'tags': ['knub', 'отсчёт']}
+- `e50`: {'action': 'task', 'note': 'Задачи', 'folder': 'Задачи', 'tags': ['knub']}
+- `e53`: {'action': 'task', 'note': 'Задачи', 'folder': 'Задачи', 'tags': []}
+- `e54`: {'action': 'task', 'note': 'Джефф в Боте', 'folder': 'Области', 'tags': []}
+- `e55`: {'action': 'note', 'note': 'туду', 'folder': 'Заметки', 'tags': []}
+- `e56`: {'action': 'note', 'note': 'Приколюхи Санька', 'folder': 'Области', 'tags': []}
+- `e58`: {'action': 'note', 'note': 'Кнуб', 'folder': 'Кнуб', 'tags': ['knub']}
+- `e59`: {'action': 'task', 'note': 'Задачи', 'folder': 'Задачи', 'tags': []}
+- `e60`: {'action': 'task', 'note': 'Задачи', 'folder': 'Задачи', 'tags': []}
+- `e61`: {'action': 'task', 'note': 'встречу по следующей книге Глуховского регистрация', 'folder': 'Задачи', 'tags': []}
+- `e65`: {'action': 'note', 'note': 'торговый бот', 'folder': 'пройекты', 'tags': ['пройекты']}
+- `e66`: {'action': 'task', 'note': 'Задачи', 'folder': 'Задачи', 'tags': []}
+- `e69`: {'action': 'task', 'note': 'Задачи', 'folder': 'Задачи', 'tags': ['obsidian', 'дубликации']}
+- `e70`: {'action': 'task', 'note': 'Задачи', 'folder': '', 'tags': []}
+- `e71`: {'action': 'task', 'note': 'Задачи', 'folder': 'Задачи', 'tags': ['home']}
+- `e72`: {'action': 'update', 'note': 'кольцо 49/15.5', 'folder': '', 'tags': []}
+- `e74`: {'action': 'grocery', 'note': 'Продукты', 'folder': 'Продукты', 'tags': []}
+- `e76`: {'action': 'task', 'note': 'Задачи', 'folder': 'Задачи', 'tags': ['personal']}
+- `e77`: {'action': 'task', 'note': 'Поискать кнопку с клавиатуры которая потерялась', 'folder': 'Задачи', 'tags': ['personal']}
+- `e80`: {'action': 'grocery', 'note': 'Купить бритву', 'folder': 'Продукты', 'tags': []}
+- `e81`: {'action': 'task', 'note': 'Задачи', 'folder': '', 'tags': []}
+- `e83`: {'action': 'grocery', 'note': 'Продукты', 'folder': 'Продукты', 'tags': []}
+- `e84`: {'action': 'task', 'note': 'nodogwalk', 'folder': 'пройекты', 'tags': ['nodogwalk']}
+- `e85`: {'action': 'task', 'note': 'рассмотреть идею проекта расширитель стола', 'folder': 'пройекты', 'tags': []}
+- `e86`: {'action': 'task', 'note': 'Приколюхи Санька', 'folder': 'Области', 'tags': []}
+- `e88`: {'action': 'search', 'note': '', 'folder': '', 'tags': []}
+- `e89`: {'action': 'note', 'note': 'Шведская стенка', 'folder': 'Области', 'tags': []}
+- `e90`: {'action': 'note', 'note': 'Шведская стенка', 'folder': 'Области', 'tags': ['gnezdo']}
+- `e92`: {'action': 'task', 'note': 'Шведская стенка ребенку', 'folder': 'пройекты', 'tags': ['отсчёт']}
+- `e93`: {'action': 'note', 'note': 'Виды ворот тории', 'folder': 'Заметки', 'tags': ['home']}
+- `e94`: {'action': 'note', 'note': 'ноут договор гвард', 'folder': 'Заметки', 'tags': []}
+- `e96`: {'action': 'note', 'note': 'pehmevara', 'folder': 'пройекты', 'tags': []}
+- `e100`: {'action': 'task', 'note': 'Задачи', 'folder': 'Задачи', 'tags': []}
+- `e101`: {'action': 'task', 'note': 'Задачи', 'folder': 'Задачи', 'tags': []}
+- `e102`: {'action': 'grocery', 'note': 'Продукты', 'folder': 'Продукты', 'tags': []}
+- `e106`: {'action': 'task', 'note': 'заказать новые очки', 'folder': 'Области', 'tags': ['personal']}
+- `e107`: {'action': 'task', 'note': 'Конференция в Тарту Digit', 'folder': 'Задачи', 'tags': []}
+- `e108`: {'action': 'task', 'note': 'просмотр квартиры Kalevipoja põik 3-120', 'folder': 'Области', 'tags': ['personal']}
+- `e109`: {'action': 'note', 'note': 'feedback_bot', 'folder': 'Заметки', 'tags': []}
+- `e110`: {'action': 'task', 'note': 'Смотритель', 'folder': 'Задачи', 'tags': []}
+- `e111`: {'action': 'note', 'note': 'таймлапсы', 'folder': 'пройекты', 'tags': ['timelapse']}
+- `e112`: {'action': 'note', 'note': 'проекты', 'folder': 'проекты', 'tags': []}
+
+## qwen3:4b — 50 miss(es)
+- `e3`: {'action': 'grocery', 'note': 'слон', 'folder': 'Заметки', 'tags': ['home']}
+- `e5`: {'action': 'update', 'note': 'Задачи', 'folder': 'Заметки', 'tags': ['gnezdo']}
+- `e6`: {'action': 'search', 'note': 'рецепт борща из копченой курицы', 'folder': 'Заметки', 'tags': ['home']}
+- `e7`: {'action': 'append', 'note': '2026-06-22 Вглядываясь в солнце. Жизнь без страха смерти', 'folder': 'Заметки', 'tags': ['home']}
+- `e10`: {'action': 'search', 'note': 'Виды ворот тории', 'folder': 'Пройекты', 'tags': ['torii']}
+- `e12`: {'action': 'note', 'note': 'моя херня', 'folder': 'Заметки', 'tags': ['personal']}
+- `e18`: {'action': 'search', 'note': 'Священная книга оборотня', 'folder': 'Книги', 'tags': ['read']}
+- `e20`: {'action': 'rewrite', 'note': 'Жизнь насекомых', 'folder': 'Книги', 'tags': ['read']}
+- `e21`: {'action': 'move', 'note': 'Заметки', 'folder': 'Заметки', 'tags': ['plan']}
+- `e22`: {'action': 'agenda', 'note': 'Задачи', 'folder': 'Заметки', 'tags': ['agenda']}
+- `e23`: {'action': 'agenda', 'note': 'Смотритель', 'folder': 'Заметки', 'tags': ['cinema']}
+- `e24`: {'action': 'agenda', 'note': 'Заметка для фильма Uncharted', 'folder': 'Заметки', 'tags': ['film']}
+- `e26`: {'action': 'task', 'note': 'Задачи', 'folder': 'Заметки', 'tags': ['фильмы']}
+- `e27`: {'action': 'rewrite', 'note': 'Книги', 'folder': 'Книги', 'tags': ['home']}
+- `e28`: {'action': 'search', 'note': 'Задачи', 'folder': 'Книги', 'tags': ['knub']}
+- `e29`: {'action': 'search', 'note': 'Задачи', 'folder': 'Книги', 'tags': ['knub']}
+- `e31`: {'action': 'search', 'note': 'Братья Карамазовы', 'folder': 'Книги', 'tags': ['достоевский']}
+- `e32`: {'action': 'search', 'note': 'Книги', 'folder': 'Книги', 'tags': []}
+- `e35`: {'action': 'agenda', 'note': 'Хочу посмотреть фильм Uncharted и сериал Джентльмены сезон 2', 'folder': 'Заметки', 'tags': ['watch']}
+- `e37`: {'action': 'note', 'note': 'Заметки', 'folder': 'Заметки', 'tags': ['medi']}
+- `e38`: {'action': 'search', 'note': 'Джорджу бизара Adventures', 'folder': 'Заметки', 'tags': []}
+- `e42`: {'action': 'note', 'note': 'Виды ворот тории', 'folder': 'пройекты', 'tags': ['gnezdo']}
+- `e43`: {'action': 'update', 'note': 'Задачи', 'folder': 'Заметки', 'tags': ['gnezdo']}
+- `e45`: {'action': 'rewrite', 'note': 'Шведская стенка', 'folder': 'Заметки', 'tags': ['gnezdo']}
+- `e46`: {'action': 'grocery', 'note': 'Продукты', 'folder': 'Заметки', 'tags': ['home']}
+- `e49`: {'action': 'task', 'note': 'Задачи', 'folder': 'Заметки', 'tags': ['knub']}
+- `e54`: {'action': 'update', 'note': 'Задачи', 'folder': 'Заметки', 'tags': ['personal']}
+- `e55`: {'action': 'note', 'note': 'Заметки', 'folder': 'Заметки', 'tags': ['todo']}
+- `e56`: {'action': 'task', 'note': 'Задачи', 'folder': 'Заметки', 'tags': ['personal']}
+- `e58`: {'action': 'move', 'note': '2026-07-10 Встреча с Дианой Конде', 'folder': 'Кнуб', 'tags': ['knub']}
+- `e59`: {'action': 'inbox', 'note': 'Это задание в туду ли есть не надо сейчас мне создавать встречу в базе встреч', 'folder': 'inbox', 'tags': []}
+- `e60`: {'action': 'rewrite', 'note': 'Задачи', 'folder': 'Заметки', 'tags': ['knub']}
+- `e61`: {'action': 'rewrite', 'note': 'Задачи', 'folder': 'Заметки', 'tags': ['knub']}
+- `e65`: {'action': 'rewrite', 'note': 'Задачи', 'folder': 'Заметки', 'tags': ['personal']}
+- `e70`: {'action': 'task', 'note': 'Задачи', 'folder': 'Заметки', 'tags': ['todo']}
+- `e74`: {'action': 'grocery', 'note': 'Качельки', 'folder': 'Заметки', 'tags': ['home']}
+- `e76`: {'action': 'task', 'note': 'Задачи', 'folder': 'Заметки', 'tags': ['personal']}
+- `e80`: {'action': 'grocery', 'note': 'бритва', 'folder': 'Заметки', 'tags': ['home']}
+- `e81`: {'action': 'task', 'note': 'Задачи', 'folder': 'Заметки', 'tags': ['babki']}
+- `e83`: {'action': 'grocery', 'note': 'Продукты', 'folder': 'Заметки', 'tags': ['home']}
+- `e84`: {'action': 'rewrite', 'note': 'Задачи', 'folder': 'Заметки', 'tags': ['personal']}
+- `e90`: {'action': 'search', 'note': 'Шведская стенка', 'folder': 'Заметки', 'tags': ['home']}
+- `e94`: {'action': 'rewrite', 'note': 'ноут договор гвард', 'folder': 'Заметки', 'tags': ['home']}
+- `e100`: {'action': 'task', 'note': 'Задачи', 'folder': 'Заметки', 'tags': ['home']}
+- `e106`: {'action': 'task', 'note': 'Задачи', 'folder': 'Заметки', 'tags': ['personal']}
+- `e107`: {'action': 'task', 'note': 'Задачи', 'folder': 'Заметки', 'tags': ['timelapse']}
+- `e108`: {'action': 'task', 'note': 'Задачи', 'folder': 'Заметки', 'tags': ['personal']}
+- `e109`: {'action': 'rewrite', 'note': 'Главная', 'folder': 'Заметки', 'tags': ['feedback']}
+- `e111`: {'action': 'note', 'note': 'Таймлапсы', 'folder': 'Заметки', 'tags': ['timelapse']}
+- `e112`: {'action': 'note', 'note': 'проекты', 'folder': 'проекты', 'tags': ['проекты']}
+
+## qwen3:8b — 48 miss(es)
+- `e5`: {'action': 'update', 'note': 'Задачи', 'folder': 'Области', 'tags': ['gnezdo']}
+- `e6`: {'action': 'search', 'note': 'Заметки', 'folder': 'Заметки', 'tags': ['еда', 'рецепты']}
+- `e7`: {'action': 'note', 'note': 'Заметки/картинки_для_борща', 'folder': 'Заметки', 'tags': ['справка']}
+- `e10`: {'action': 'note', 'note': 'Виды ворот тории', 'folder': 'Пройекты', 'tags': ['personal', 'timelapse']}
+- `e11`: {'action': 'task', 'note': 'Задачи', 'folder': 'Области', 'tags': ['gnezdo']}
+- `e12`: {'action': 'note', 'note': 'моя херня', 'folder': 'моя херня', 'tags': ['personal']}
+- `e18`: {'action': 'note', 'note': 'Книги', 'folder': 'Книги', 'tags': ['personal']}
+- `e20`: {'action': 'note', 'note': 'Книги', 'folder': 'Книги', 'tags': ['babki', 'gnezdo', 'home', 'knub', 'personal', 'timelapse', 'справка']}
+- `e22`: {'action': 'task', 'note': 'Области', 'folder': 'моя херня', 'tags': ['personal']}
+- `e23`: {'action': 'append', 'note': 'Смотритель', 'folder': 'Заметки', 'tags': ['timelapse']}
+- `e24`: {'action': 'append', 'note': 'медиа', 'folder': 'Заметки', 'tags': ['timelapse']}
+- `e26`: {'action': 'task', 'note': 'медиа', 'folder': 'медиа', 'tags': ['timelapse']}
+- `e27`: {'action': 'note', 'note': 'Книги', 'folder': 'Книги', 'tags': ['babki', 'gnezdo', 'home', 'knub', 'personal', 'timelapse', 'справка']}
+- `e28`: {'action': 'search', 'note': 'Книги', 'folder': 'Книги', 'tags': ['books']}
+- `e29`: {'action': 'search', 'note': 'Книги', 'folder': 'Книги', 'tags': ['books', 'literature']}
+- `e32`: {'action': 'append', 'note': 'медиа', 'folder': 'Заметки', 'tags': ['timelapse']}
+- `e35`: {'action': 'task', 'note': 'медиа', 'folder': 'медиа', 'tags': ['timelapse']}
+- `e38`: {'action': 'search', 'note': 'Книги', 'folder': 'Книги', 'tags': ['babki', 'gnezdo', 'home', 'knub', 'personal', 'timelapse', 'справка']}
+- `e42`: {'action': 'note', 'note': 'Подпроекты', 'folder': 'Области', 'tags': ['gnezdo', 'home']}
+- `e43`: {'action': 'update', 'note': 'Задачи', 'folder': 'Области', 'tags': ['personal']}
+- `e45`: {'action': 'task', 'note': 'Задачи', 'folder': 'Области', 'tags': ['gnezdo']}
+- `e46`: {'action': 'grocery', 'note': 'Продукты', 'folder': 'Заметки', 'tags': ['home']}
+- `e49`: {'action': 'task', 'note': 'Задачи', 'folder': 'Области', 'tags': ['knub']}
+- `e55`: {'action': 'note', 'note': 'Заметки/Заметка', 'folder': 'Заметки', 'tags': ['справка']}
+- `e56`: {'action': 'task', 'note': 'Задачи', 'folder': 'Области', 'tags': ['home']}
+- `e58`: {'action': 'task', 'note': 'Задачи', 'folder': 'Кнуб', 'tags': ['knub']}
+- `e59`: {'action': 'update', 'note': 'Задачи', 'folder': 'Кнуб', 'tags': ['knub']}
+- `e60`: {'action': 'task', 'note': 'Задачи', 'folder': 'Кнуб', 'tags': ['knub']}
+- `e61`: {'action': 'task', 'note': 'Задачи', 'folder': 'Кнуб', 'tags': ['knub']}
+- `e65`: {'action': 'note', 'note': 'Идеи для торгового бота', 'folder': 'Заметки', 'tags': ['personal']}
+- `e69`: {'action': 'task', 'note': 'Задачи', 'folder': 'Области', 'tags': ['personal']}
+- `e70`: {'action': 'task', 'note': 'Задачи', 'folder': 'Области', 'tags': ['personal']}
+- `e76`: {'action': 'task', 'note': 'Задачи', 'folder': 'Области', 'tags': ['personal']}
+- `e77`: {'action': 'task', 'note': 'Задачи', 'folder': 'Области', 'tags': ['personal']}
+- `e79`: {'action': 'task', 'note': 'Задачи', 'folder': 'Области', 'tags': ['knub', 'timelapse']}
+- `e80`: {'action': 'task', 'note': 'Задачи', 'folder': 'Области', 'tags': ['personal']}
+- `e81`: {'action': 'note', 'note': 'бабосы', 'folder': 'бабосы', 'tags': ['babki']}
+- `e83`: {'action': 'grocery', 'note': 'Продукты', 'folder': 'Заметки', 'tags': []}
+- `e84`: {'action': 'task', 'note': 'Задачи', 'folder': 'моя херня', 'tags': ['personal']}
+- `e85`: {'action': 'task', 'note': 'Задачи', 'folder': 'Области', 'tags': ['personal']}
+- `e90`: {'action': 'search', 'note': 'Шведская стенка', 'folder': 'Заметки', 'tags': ['gnezdo', 'home', 'personal']}
+- `e92`: {'action': 'rewrite', 'note': 'Шведская стенка', 'folder': 'Заметки', 'tags': ['gnezdo', 'home']}
+- `e94`: {'action': 'note', 'note': 'ноут договор гвард', 'folder': 'Заметки', 'tags': ['personal']}
+- `e100`: {'action': 'task', 'note': 'Задачи', 'folder': 'Области', 'tags': ['home']}
+- `e106`: {'action': 'task', 'note': 'Задачи', 'folder': 'Области', 'tags': ['personal']}
+- `e107`: {'action': 'task', 'note': 'Задачи', 'folder': 'Области', 'tags': ['knub']}
+- `e108`: {'action': 'task', 'note': 'Задачи', 'folder': 'Области', 'tags': ['personal']}
+- `e111`: {'action': 'note', 'note': 'таймлапсы', 'folder': 'Заметки', 'tags': ['timelapse']}
+
+## mistral-nemo:12b — 51 miss(es)
+- `e3`: {'action': 'task', 'note': 'Задачи', 'folder': 'Задачи', 'tags': []}
+- `e5`: {'action': 'update', 'note': 'Задачи', 'folder': 'Задачи', 'tags': []}
+- `e6`: {'action': 'search', 'note': 'Дом', 'folder': 'Дом', 'tags': []}
+- `e7`: {'action': 'append', 'note': 'Заметки', 'folder': 'Заметки', 'tags': []}
+- `e11`: {'action': 'task', 'note': 'Задачи', 'folder': 'Задачи', 'tags': ['gnezdo']}
+- `e12`: {'action': 'note', 'note': 'моя херня', 'folder': 'моя херня', 'tags': []}
+- `e13`: {'action': 'note', 'note': 'трум трум', 'folder': 'Заметки', 'tags': []}
+- `e14`: {'action': 'note', 'note': 'Заметки', 'folder': 'Заметки', 'tags': []}
+- `e15`: {'action': 'note', 'note': 'Заметки', 'folder': 'Заметки', 'tags': []}
+- `e16`: {'action': 'search', 'note': 'Книги', 'folder': 'Книги', 'tags': []}
+- `e18`: ollama: 
+- `e20`: {'action': 'note', 'note': 'Книги', 'folder': 'Книги', 'tags': []}
+- `e21`: {'action': 'agenda', 'note': 'План выходных', 'folder': 'Заметки', 'tags': []}
+- `e22`: {'action': 'agenda', 'note': 'Задачи', 'folder': 'Задачи', 'tags': ['knub', 'справка']}
+- `e23`: {'action': 'task', 'note': 'Задачи', 'folder': 'Задачи', 'tags': []}
+- `e24`: {'action': 'search', 'note': 'Медиа', 'folder': 'Медиа', 'tags': []}
+- `e26`: {'action': 'search', 'note': 'Медиа', 'folder': 'Медиа', 'tags': []}
+- `e27`: {'action': 'note', 'note': 'Братья Карамазовы', 'folder': 'Книги', 'tags': []}
+- `e28`: {'action': 'note', 'note': 'Достоевский', 'folder': 'Книги', 'tags': ['knub']}
+- `e31`: {'action': 'note', 'note': 'Заметки', 'folder': 'Книги', 'tags': ['knub']}
+- `e32`: {'action': 'search', 'note': 'Медиа', 'folder': 'Фильмы', 'tags': []}
+- `e35`: {'action': 'search', 'note': 'Медиа', 'folder': 'Медиа', 'tags': []}
+- `e37`: {'action': 'note', 'note': 'Заметки', 'folder': 'Заметки', 'tags': []}
+- `e42`: {'action': 'note', 'note': 'Ворота тории', 'folder': 'Подпроекты', 'tags': ['babki', 'gnezdo', 'home', 'knub', 'personal', 'timelapse', 'отсчёт', 'справка']}
+- `e43`: {'action': 'update', 'note': 'Задачи', 'folder': 'Задачи', 'tags': ['personal']}
+- `e45`: {'action': 'note', 'note': 'Шведская стенка', 'folder': 'Задачи', 'tags': ['gnezdo']}
+- `e54`: {'action': 'update', 'note': 'Задачи', 'folder': 'Задачи', 'tags': ['personal']}
+- `e55`: {'action': 'note', 'note': 'туду', 'folder': 'Заметки', 'tags': []}
+- `e56`: {'action': 'task', 'note': 'Задачи', 'folder': 'Задачи', 'tags': []}
+- `e58`: {'action': 'note', 'note': 'ГГГГ-ММ-Книга', 'folder': 'Кнуб', 'tags': ['knub']}
+- `e59`: {'action': 'update', 'note': 'Задачи', 'folder': 'Задачи', 'tags': []}
+- `e60`: {'action': 'note', 'note': 'Глуховский регистрации', 'folder': 'Кнуб', 'tags': ['knub']}
+- `e61`: {'action': 'update', 'note': 'Задачи', 'folder': 'Задачи', 'tags': []}
+- `e65`: {'action': 'note', 'note': 'Заметки', 'folder': 'Заметки', 'tags': []}
+- `e66`: {'action': 'task', 'note': 'Задачи', 'folder': 'Задачи', 'tags': []}
+- `e70`: {'action': 'task', 'note': 'Задачи', 'folder': 'Задачи', 'tags': []}
+- `e76`: {'action': 'task', 'note': 'Задачи', 'folder': 'Задачи', 'tags': ['personal']}
+- `e80`: {'action': 'task', 'note': 'Задачи', 'folder': 'Задачи', 'tags': ['personal']}
+- `e81`: {'action': 'note', 'note': 'Траты', 'folder': 'Заметки', 'tags': []}
+- `e83`: {'action': 'grocery', 'note': 'Продукты', 'folder': 'Продукты', 'tags': []}
+- `e84`: {'action': 'task', 'note': 'Задачи', 'folder': 'моя херня', 'tags': ['personal']}
+- `e90`: {'action': 'search', 'note': 'Шведская стенка', 'folder': 'Заметки', 'tags': []}
+- `e93`: {'action': 'search', 'note': 'Виды ворот тории', 'folder': 'Заметки', 'tags': []}
+- `e94`: {'action': 'update', 'note': 'ноут договор гвард', 'folder': 'Заметки', 'tags': []}
+- `e96`: {'action': 'note', 'note': 'pehmevara', 'folder': 'Области', 'tags': []}
+- `e100`: {'action': 'task', 'note': 'Задачи', 'folder': 'Книги', 'tags': []}
+- `e102`: {'action': 'grocery', 'note': 'Продукты', 'folder': 'Продукты', 'tags': []}
+- `e106`: {'action': 'task', 'note': 'Задачи', 'folder': 'Задачи', 'tags': ['personal']}
+- `e107`: {'action': 'note', 'note': '9 октября конференция в тарту digit', 'folder': 'Кнуб', 'tags': []}
+- `e109`: {'action': 'note', 'note': 'Фидбек по боту', 'folder': 'Заметки', 'tags': []}
+- `e112`: {'action': 'note', 'note': 'новая страница в проектах', 'folder': 'Заметки', 'tags': []}
