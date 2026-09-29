@@ -310,17 +310,19 @@ def _mail_digest(settings: Settings, switches: Switches, buckets_file: Buckets, 
             log.info("mail digest: nothing new, nothing sent")
             return
         text = f"{text}\n\n{warning}".strip() if warning else text
-        bodies = [text]
-        # Each comparison digest goes in its own message, after the real one: none may cost the
-        # user the digest they actually rely on, and separate messages are what you compare.
-        if run.sorted:
-            bodies += [shadow_digest(shadow, service.buckets) for shadow in run.shadows]
-        for chat_id in sorted(settings.allowed_user_ids):
-            for body in bodies:
+
+        async def to_everyone(body: str) -> None:
+            for chat_id in sorted(settings.allowed_user_ids):
                 try:
                     await application().bot.send_message(chat_id, body)
                 except Exception:
                     log.exception("could not send the mail digest to a chat")
+
+        await to_everyone(text)
+        # The local models only start once the real digest is out — a slow or hung one must not
+        # hold up the digest the user relies on — and each sends its own message as it finishes.
+        async for shadow in service.compare(run):
+            await to_everyone(shadow_digest(shadow, service.buckets))
 
     return service, DailyMessage(send, lambda: parse_times(tuning.mail_at), settings.timezone)
 

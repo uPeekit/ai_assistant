@@ -10,7 +10,7 @@ import json
 import logging
 import time
 from collections import OrderedDict
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -40,9 +40,6 @@ class MailRun:
     error: str = ""
     prompt_tokens: int = 0
     output_tokens: int = 0
-    # The same mail sorted again by each configured local model. Each is only ever read into
-    # its own digest: nothing here changes what `sorted` says.
-    shadows: list[ShadowRun] = field(default_factory=list)
 
     @property
     def empty(self) -> bool:
@@ -169,9 +166,21 @@ class MailService:
                  ", ".join(sorted({s.bucket for s in sorted_})))
         run = MailRun(sorted=sorted_, prompt_tokens=prompt_tokens,
                       output_tokens=output_tokens)
-        for shadow in self._shadows:  # one at a time: each unloads before the next loads
-            run.shadows.append(await self._run_shadow(shadow, messages))
         return run
+
+    async def compare(self, run: MailRun) -> AsyncIterator[ShadowRun]:
+        """The same mail through each local model, yielded as each one finishes.
+
+        Called only after the real digest has gone out, so that digest never waits for an
+        experiment: a local model that hangs would otherwise hold it for the whole request
+        timeout. One model at a time — each unloads before the next loads. The messages are the
+        ones the real run sorted, in its order: `gate` never drops one.
+        """
+        if not run.sorted:
+            return
+        messages = messages_of(run)
+        for shadow in self._shadows:
+            yield await self._run_shadow(shadow, messages)
 
     async def _run_shadow(self, shadow, messages: list[Message]) -> ShadowRun:
         """The same mail through one local model, for the user to compare against.

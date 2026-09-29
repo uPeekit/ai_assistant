@@ -135,6 +135,12 @@ def svc(tmp_path, box, primary, *shadows) -> MailService:
                        buckets=BUCKETS, shadows=list(shadows))
 
 
+async def everything(service: MailService):
+    """The real run, then every comparison, the way the digest sender consumes them."""
+    run = await service.run()
+    return run, [shadow async for shadow in service.compare(run)]
+
+
 def named(model: str, *answers: object) -> LocalClassifier:
     return LocalClassifier("http://x", model, BUCKETS, transport=ollama(*answers))
 
@@ -145,12 +151,12 @@ async def test_both_models_see_the_same_mail_and_the_mailbox_is_read_once(tmp_pa
     primary = Classifier("", "m", BUCKETS, client=FakeAnthropic({"messages": [
         {"id": "10", "bucket": "bills", "summary": "a"},
         {"id": "11", "bucket": "bills", "summary": "b"}]}))
-    run = await svc(tmp_path, box, primary, local({"messages": [
+    run, shadows = await everything(svc(tmp_path, box, primary, local({"messages": [
         {"id": "10", "bucket": OTHER, "summary": "c"},
-        {"id": "11", "bucket": "bills", "summary": "d"}]})).run()
+        {"id": "11", "bucket": "bills", "summary": "d"}]})))
     assert len(box.asked) == 1
     assert [s.bucket for s in run.sorted] == ["bills", "bills"]
-    assert [s.bucket for s in run.shadows[0].sorted] == [OTHER, "bills"]
+    assert [s.bucket for s in shadows[0].sorted] == [OTHER, "bills"]
 
 
 @pytest.mark.asyncio
@@ -158,13 +164,13 @@ async def test_every_local_model_sorts_the_same_mail_in_the_order_they_are_liste
     box = FakeMailbox([([message("10")], "1")])
     primary = Classifier("", "m", BUCKETS, client=FakeAnthropic({"messages": [
         {"id": "10", "bucket": "bills", "summary": "a"}]}))
-    run = await svc(tmp_path, box, primary,
+    run, shadows = await everything(svc(tmp_path, box, primary,
                     named("qwen3:8b", {"messages": [{"id": "10", "bucket": "bills",
                                                      "summary": "b"}]}),
                     named("gemma3:1b", {"messages": [{"id": "10", "bucket": "personal",
-                                                      "summary": "c"}]})).run()
+                                                      "summary": "c"}]})))
     assert len(box.asked) == 1
-    assert [(s.model, [x.bucket for x in s.sorted]) for s in run.shadows] == [
+    assert [(s.model, [x.bucket for x in s.sorted]) for s in shadows] == [
         ("qwen3:8b", ["bills"]), ("gemma3:1b", ["personal"])]
 
 
@@ -173,12 +179,12 @@ async def test_a_shadow_that_fails_never_touches_the_real_digest_or_the_next_sha
     box = FakeMailbox([([message("10")], "1")])
     primary = Classifier("", "m", BUCKETS, client=FakeAnthropic({"messages": [
         {"id": "10", "bucket": "bills", "summary": "a"}]}))
-    run = await svc(tmp_path, box, primary,
+    run, shadows = await everything(svc(tmp_path, box, primary,
                     named("broken", httpx.ConnectError("down")),
                     named("fine", {"messages": [{"id": "10", "bucket": "bills",
-                                                 "summary": "b"}]})).run()
+                                                 "summary": "b"}]})))
     assert [s.bucket for s in run.sorted] == ["bills"]
-    broken, fine = run.shadows
+    broken, fine = shadows
     assert broken.sorted == [] and broken.error
     assert [s.bucket for s in fine.sorted] == ["bills"] and not fine.error
 
@@ -217,3 +223,82 @@ async def test_the_model_is_unloaded_as_soon_as_the_digest_is_sorted():
     await classifier.sort([message("1")])
     path, body = requests[-1]
     assert path == "/api/generate" and body == {"model": "m", "keep_alive": 0}
+
+
+@pytest.mark.asyncio
+async def test_the_real_digest_is_ready_before_any_local_model_has_run(tmp_path):
+    """The digest the user relies on must never wait for an experiment: a local model that
+    hangs would otherwise hold it for the whole request timeout."""
+    box = FakeMailbox([([message("10")], "1")])
+    primary = Classifier("", "m", BUCKETS, client=FakeAnthropic({"messages": [
+        {"id": "10", "bucket": "bills", "summary": "a"}]}))
+    seen: list = []
+    service = svc(tmp_path, box, primary, local({"messages": []}, seen=seen))
+    run = await service.run()
+    assert [s.bucket for s in run.sorted] == ["bills"]
+    assert seen == []  # no local request yet
+    assert [s.model async for s in service.compare(run)] == ["m"]
+    assert len(seen) == 1
+
+
+@pytest.mark.asyncio
+async def test_nothing_to_compare_when_the_real_run_had_no_mail(tmp_path):
+    seen: list = []
+    service = svc(tmp_path, FakeMailbox([([], "1")]),
+                  Classifier("", "m", BUCKETS, client=FakeAnthropic()),
+                  local({"messages": []}, seen=seen))
+    run = await service.run()
+    assert [s async for s in service.compare(run)] == []
+    assert seen == []
+
+
+@pytest.mark.asyncio
+async def test_the_digest_sender_sends_the_real_digest_before_any_local_model_runs(
+        env, tmp_path, monkeypatch):
+    """The whole send path as main.py wires it: real digest out first, then each local model
+    runs and its own message goes out before the next model starts."""
+    from types import SimpleNamespace
+
+    from app import main
+    from app.config import Settings
+    from app.llm.health import Health
+    from app.mail.buckets import Buckets
+    from app.mail.classify import Sorted
+
+    env.setenv("GMAIL_ADDRESS", "me@example.com")
+    env.setenv("GMAIL_APP_PASSWORD", "pw")
+    env.setenv("ANTHROPIC_API_KEY", "key")
+    env.setenv("MAIL_SHADOW_MODEL", "first,second")
+    events: list[str] = []
+
+    class FakeLocal:
+        def __init__(self, base_url, model, buckets, **kw) -> None:
+            self.model, self.buckets, self.meanings = model, buckets, {}
+
+        async def sort(self, messages):
+            events.append(f"sort:{self.model}")
+            return [Sorted(m, "bills", "x") for m in messages], 0, 0
+
+        async def aclose(self) -> None:
+            pass
+
+    async def send_message(chat_id, body):
+        label = next((m for m in ("first", "second") if f"({m}," in body), "real")
+        events.append(f"send:{label}")
+
+    monkeypatch.setattr(main, "GmailIMAP", lambda *a: FakeMailbox([([message("10")], "1")]))
+    monkeypatch.setattr(main, "Classifier", lambda key, model, buckets, **kw: Classifier(
+        "", model, buckets, client=FakeAnthropic(
+            {"messages": [{"id": "10", "bucket": "bills", "summary": "a"}]})))
+    monkeypatch.setattr(main, "LocalClassifier", FakeLocal)
+    settings = Settings(_env_file=None)
+    _, daily = main._mail_digest(
+        settings, SimpleNamespace(get=lambda name: True),
+        Buckets(tmp_path / "b.txt", "bills: pay\nother: rest"),
+        SimpleNamespace(mail_at="12:00"), Health(),
+        lambda: SimpleNamespace(bot=SimpleNamespace(send_message=send_message)))
+    await daily._send()
+    # TELEGRAM_ALLOWED_USER_IDS is "1,2" in the test environment: every message goes twice.
+    assert events == ["send:real", "send:real",
+                      "sort:first", "send:first", "send:first",
+                      "sort:second", "send:second", "send:second"]

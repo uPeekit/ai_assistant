@@ -36,7 +36,8 @@ line (the `.env` value) a comma starts a new bucket only where a `name:` follows
 comma-separated; each sorts the same mail again through `app/mail/local.py` (same prompt, schema
 and gate), and each result arrives as its own message after the real digest, headed with the
 model and its time. They never touch the real digest or each other: the mailbox is read once,
-the state written once, the models run one at a time, and a local failure only changes that
+the state written once, the real digest is *sent* before the first model starts (so a slow or
+hung model cannot delay it), the models run one at a time, and a local failure only changes that
 model's message. It sends as many emails per request as fit — more at once sorts *better*,
 since the model tells buckets apart by contrast — and splits a request in half when Ollama
 reports the context full (Ollama otherwise drops the head of the prompt silently). The model is
