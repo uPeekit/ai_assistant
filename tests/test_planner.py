@@ -98,3 +98,27 @@ async def test_a_cut_off_plan_is_reported_as_such():
 
     with pytest.raises(PlanError, match="cut off"):
         await planner(handler).plan("x", "w")
+
+
+async def test_the_planner_is_told_what_day_it_is():
+    """«Список дел на сегодня: …» became seven tasks with no date in either store: the planner
+    was never told the date, so it could neither fill a due field nor say "today" in a step
+    in a way the step's own reader could turn back into one."""
+    from datetime import datetime
+
+    from app.llm.context import build_calendar
+
+    bodies = []
+
+    def handler(req):
+        bodies.append(json.loads(req.content))
+        return message({"goal": "g", "steps": [{"text": "шаг", "action": "free"}]})
+
+    calendar = build_calendar(datetime(2026, 9, 28, 12, 0))
+    await planner(handler).plan("дела на сегодня: покушать", "w", calendar=calendar)
+    content = bodies[0]["messages"][0]["content"]
+    assert "2026-09-28" in content and "2026-09-29" in content
+
+    state = PlanState(goal="g", steps=[StepSpec(text="шаг", action="free")])
+    await planner(handler).next(state, "w", calendar=calendar)
+    assert "2026-09-28" in bodies[1]["messages"][0]["content"]

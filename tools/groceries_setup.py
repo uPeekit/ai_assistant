@@ -26,7 +26,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import texts  # noqa: E402
-from app.vault import groceries  # noqa: E402
+from app.vault import frontmatter, groceries  # noqa: E402
 
 # What moves, unless --products says otherwise: the consumables in this vault's task file.
 DEFAULT_PRODUCTS = ("бальзам для волос", "шампунь", "яйца", "бекон", "мусорные пакеты", "тортик")
@@ -34,11 +34,14 @@ DEFAULT_PRODUCTS = ("бальзам для волос", "шампунь", "яй�
 _PURCHASE = re.compile("|".join(texts.VAULT_BUY_WORDS), re.IGNORECASE)
 _TASK = re.compile(r"^\s*[-*+]\s+\[[^\]]\]\s*(.*)$")
 
-HOME_BLOCK = f"""## {texts.VAULT_GROCERIES_NOTE}
-
-```tasks
+# No markdown heading: it would stay on the page over an empty list. The title is a group
+# header, which Tasks draws only when the group has tasks, and `hide task count` drops the
+# "0 tasks" line — so with nothing to buy the block takes no room at all.
+HOME_BLOCK = f"""```tasks
 not done
 filename includes {texts.VAULT_GROCERIES_NOTE}
+group by function '{texts.VAULT_GROCERIES_TITLE}'
+hide task count
 hide backlink
 hide edit button
 hide postpone button
@@ -83,13 +86,12 @@ def home(text: str) -> str:
     """The home page with the grocery block added and the undated query narrowed."""
     out = text
     if f"filename includes {texts.VAULT_GROCERIES_NOTE}" not in out:
-        # After the task queries and before the first embedded view — but at the *heading* that
-        # owns that view, never between the heading and the embed, which would orphan it.
-        embed = out.find("\n![[")
-        at = out.rfind("\n## ", 0, embed) + 1 if embed != -1 else -1
-        if at <= 0:
-            at = len(out)
-        out = f"{out[:at].rstrip()}\n\n{HOME_BLOCK}\n{out[at:].lstrip()}"
+        # At the very top, above the first heading. With no heading of its own, anywhere else it
+        # reads as part of the section above it; at the top it takes no room when empty and is
+        # the first thing on the screen in the shop.
+        props, body = frontmatter.split(out)
+        out = frontmatter.render(props, f"{HOME_BLOCK}\n{body.lstrip()}") if props else (
+            f"{HOME_BLOCK}\n{body.lstrip()}")
     if EXCLUDE not in out:
         out = re.sub(r"(\nno due date\n)", f"\\1{EXCLUDE}\n", out, count=1)
     return out

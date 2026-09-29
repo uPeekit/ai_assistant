@@ -31,9 +31,10 @@ class VaultAction(BaseModel):
     index before they reach the writer (app/vault/filer.py)."""
 
     model_config = ConfigDict(extra="forbid")
-    action: str  # task | note | append | update | rewrite | log | grocery | inbox
+    action: str  # task | note | append | update | rewrite | move | log | grocery | inbox
     text: str = ""  # the task's, log line's or inbox line's words
     note: str = ""  # which note to add to or change
+    to: str = ""  # move only: the note the lines go to (made next to `note` when it is new)
     folder: str = ""
     title: str = ""
     heading: str = ""
@@ -185,8 +186,12 @@ class VaultWriter:
         name = unique(safe_name(action.title or action.text), taken)
         rel = f"{folder}/{name}.md" if folder else f"{name}.md"
         props = {k: v for k, v in action.props.items() if v != ""}
-        if action.tags:
-            props["tags"] = [t.lstrip("#") for t in action.tags]
+        # Tags arrive as a list, or as a property holding "#a, #b" — which Obsidian would keep
+        # as one string that is no tag at all. Both end as one list of bare names.
+        tags = [*action.tags, *str(props.pop("tags", "")).replace(",", " ").split()]
+        tags = list(dict.fromkeys(t.lstrip("#") for t in tags if t.lstrip("#")))
+        if tags:
+            props["tags"] = tags
         undo = self._write(rel, render(props, "\n".join(action.body)), None)
         return VaultWrite(kind="note", path=rel, note=name, undo=undo)
 

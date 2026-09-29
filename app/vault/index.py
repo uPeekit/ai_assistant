@@ -22,7 +22,7 @@ log = logging.getLogger(__name__)
 # week-old copy of a note as a note, and a search answers with three stale versions of the
 # same page. `.trash` is our own undo bin, `.stfolder`/`.sync` are sync markers.
 SKIP_DIRS = {".obsidian", ".trash", ".git", ".stfolder", ".stversions", ".sync",
-             ".stversions-conflicts"}
+             ".stversions-conflicts", texts.VAULT_TEMPLATES_DIR}
 GUIDE_NOTE = "_bot"
 # A word of this length or more may carry a link on its own (see `words`); shorter ones only
 # count inside a longer name.

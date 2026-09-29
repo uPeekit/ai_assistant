@@ -241,9 +241,12 @@ def use(bot, answers: dict[str, object], default: object = None) -> ByMessage:
     return client
 
 
-async def test_every_step_of_a_plan_reaches_the_vault_and_one_button_undoes_both(bot):
-    """The failure this exists for: a plan enriched a Notion page and Obsidian got nothing,
-    because the vault side read the whole goal once and took it for a question."""
+async def test_a_plan_reaches_the_vault_once_from_the_message_and_one_button_undoes_both(bot):
+    """The vault reads the message itself, once — not the planner's steps one by one.
+
+    Steps are written for Notion («Добавь в TODO задачу «покушать»») and lose whatever the
+    message said around them: «список дел на сегодня» became seven undated tasks. The filer
+    already turns one message into several actions, with the dates it says."""
     from tests.test_orchestrator import FakePlanner, collect
 
     bot.orch._planner = FakePlanner(["добавь в покупки хлеб", "добавь в покупки молоко"])
@@ -251,24 +254,22 @@ async def test_every_step_of_a_plan_reaches_the_vault_and_one_button_undoes_both
     for title in ("Хлеб", "Молоко"):
         bot.llm.queue(make_interp("create", cand(bot.ctx, "t2", 0.95,
                                                  fields={"t2.f1": val(title, 1.0)})))
-    use(bot, {
-        "хлеб": {"actions": [{"action": "task", "text": "хлеб", "heading": "дом"}]},
-        "молоко": {"actions": [{"action": "task", "text": "молоко", "heading": "дом"}]},
-    })
-    sent: list = []
+    client = use(bot, {"на сегодня": {"actions": [
+        {"action": "task", "text": "хлеб", "heading": "дом", "due": "2026-09-22"},
+        {"action": "task", "text": "молоко", "heading": "дом", "due": "2026-09-22"}]}})
 
-    reply = await bot.orch.handle_text(CHAT, USER, "купи хлеб и молоко", progress=collect(sent))
+    reply = await bot.orch.handle_text(CHAT, USER, "на сегодня купи хлеб и молоко",
+                                       progress=collect([]))
 
+    assert len(client.seen) == 1  # one filer call for the message, none per step
     tasks = bot.index.read(f"{texts.VAULT_TASKS_NOTE}.md")
-    assert "- [ ] хлеб" in tasks and "- [ ] молоко" in tasks
-    assert "Obsidian —" in sent[1].text and "Obsidian —" in sent[2].text
+    assert "- [ ] хлеб 📅 2026-09-22" in tasks and "- [ ] молоко 📅 2026-09-22" in tasks
+    assert "Obsidian —" in reply.text  # reported once, under the plan's closing line
 
-    # Each step keeps its own row; the plan adds one batch row over them, which is what the
-    # "Отменить всё" button points at.
+    # The vault's undo sits on the plan's own batch row: "Отменить всё" reverts both stores.
     batch_row = executions(bot)[-1]
     undo = json.loads(batch_row["undo"])
-    assert undo["kind"] == "batch" and len(undo["batch"]) == 2
-    assert all(part["vault"] for part in undo["batch"])  # both stores in the plan's own undo
+    assert undo["kind"] == "batch" and len(undo["batch"]) == 2 and undo["vault"]
 
     await bot.orch.handle_callback(CHAT, USER, reply.buttons[0][0].id)
 
@@ -276,48 +277,47 @@ async def test_every_step_of_a_plan_reaches_the_vault_and_one_button_undoes_both
     assert "хлеб" not in after and "молоко" not in after
 
 
-async def test_the_goal_itself_is_not_written_to_the_vault_when_it_turns_out_to_be_a_plan(bot):
-    """The vault starts on the message before anyone knows it is a plan. It must not write the
-    goal as well as every step — and it must not be cancelled mid-write either, which is why it
-    is held at a gate rather than killed."""
+async def test_an_answer_that_becomes_a_plan_does_not_write_the_vault_a_second_time(bot):
+    """«добавь область таймлапсы» → Notion asked where; the vault had already written its
+    note. The answer «новая страница в проектах» was read as a one-step plan, and the step
+    wrote the vault again: «таймлапсы» and «Таймлапсы 2»."""
     from tests.test_orchestrator import FakePlanner, collect
 
-    bot.orch._planner = FakePlanner(["добавь в покупки хлеб"])
+    bot.llm.queue(make_interp("create", cand(bot.ctx, "t3", 0.95,
+                                              fields={"t3.f1": val("таймлапсы", 1.0)})))
+    client = use(bot, {"таймлапсы": {"actions": [{
+        "action": "note", "folder": texts.VAULT_AREAS_DIR, "title": "таймлапсы"}]}})
+    question = await bot.orch.handle_text(CHAT, USER, "добавь область таймлапсы")
+    assert question.buttons
+
+    bot.orch._planner = FakePlanner(["создай в проектах страницу Таймлапсы"])
     bot.llm.queue(make_interp("plan", cand(bot.ctx, "t3", 0.9)))
     bot.llm.queue(make_interp("create", cand(bot.ctx, "t2", 0.95,
-                                             fields={"t2.f1": val("Хлеб", 1.0)})))
-    # The goal's own vault call is answered too, and must still write nothing.
-    use(bot, {
-        "купи хлеб и молоко": {"actions": [{"action": "task",
-            "text": "купи хлеб и молоко"}]},
-        "в покупки хлеб": {"actions": [{"action": "task",
-            "text": "хлеб", "heading": "дом"}]},
-    })
+                                             fields={"t2.f1": val("Таймлапсы", 1.0)})))
+    await bot.orch.handle_text(CHAT, USER, "новая страница в проектах", progress=collect([]))
 
-    await bot.orch.handle_text(CHAT, USER, "купи хлеб и молоко", progress=collect([]))
-
-    tasks = bot.index.read(f"{texts.VAULT_TASKS_NOTE}.md")
-    assert "купи хлеб и молоко" not in tasks
-    assert "- [ ] хлеб" in tasks
+    assert len(client.seen) == 1
+    notes = sorted(p.name for p in (bot.dir / texts.VAULT_AREAS_DIR).glob("*.md"))
+    assert notes == ["дом.md", "таймлапсы.md"]
 
 
 async def test_text_a_step_already_found_is_written_to_the_vault_without_searching_again(bot):
     """The research is paid for once: the words the Notion side wrote are handed to the vault,
-    which only decides where they go."""
+    which only decides where they go — in one write at the end of the plan."""
     from tests.test_orchestrator import FakePlanner, collect
 
     found = "Шведская стенка\nВысота 220 см\nШирина 80 см"
     bot.orch._planner = FakePlanner(["допиши на страницу Идеи что нашёл"])
     bot.llm.queue(make_interp("plan", cand(bot.ctx, "t3", 0.9)))
     bot.llm.queue(make_interp("append", cand(bot.ctx, "t5", 0.95, content=found)))
-    client = use(bot, {
-        "допиши на страницу": {"actions": [{
-            "action": "note", "folder": texts.VAULT_NOTES_DIR,
-            "title": "Шведская стенка", "body": ["что-то своё"]}]},
-    })
+    client = use(bot, {"про стенку": {"actions": [{
+        "action": "note", "folder": texts.VAULT_NOTES_DIR,
+        "title": "Шведская стенка", "body": ["что-то своё"]}]}})
 
     await bot.orch.handle_text(CHAT, USER, "найди про стенку и допиши", progress=collect([]))
 
+    notes = sorted(p.name for p in (bot.dir / texts.VAULT_NOTES_DIR).glob("*.md"))
+    assert notes == ["Шведская стенка.md"]  # one note, not one per call
     note = (bot.dir / texts.VAULT_NOTES_DIR / "Шведская стенка.md").read_text(encoding="utf-8")
     assert "Высота 220 см" in note and "Ширина 80 см" in note
     assert "что-то своё" not in note  # the filer picked the place, not the words
@@ -333,18 +333,12 @@ async def test_a_vault_failure_inside_a_plan_never_stops_the_plan(bot):
     for title in ("Хлеб", "Молоко"):
         bot.llm.queue(make_interp("create", cand(bot.ctx, "t2", 0.95,
                                                  fields={"t2.f1": val(title, 1.0)})))
-    use(bot, {
-        "в покупки хлеб": RuntimeError("vault on fire"),
-        "молоко": {"actions": [{"action": "task",
-            "text": "молоко", "heading": "дом"}]},
-    })
-    sent: list = []
+    use(bot, {}, default=RuntimeError("vault on fire"))
 
-    reply = await bot.orch.handle_text(CHAT, USER, "купи хлеб и молоко", progress=collect(sent))
+    reply = await bot.orch.handle_text(CHAT, USER, "купи хлеб и молоко", progress=collect([]))
 
     assert reply.text.startswith("🏁")  # the plan finished
     assert len(notion_calls_create(bot)) == 2  # both Notion steps ran
-    assert "- [ ] молоко" in bot.index.read(f"{texts.VAULT_TASKS_NOTE}.md")
 
 
 def notion_calls_create(bot) -> list:

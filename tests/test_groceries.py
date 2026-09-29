@@ -334,16 +334,27 @@ def test_setup_collapses_two_lines_for_one_product(setup_vault):
     assert [ln.name for ln in groceries.read(text)] == ["шампунь", "яйца"]
 
 
-def test_setup_keeps_an_embedded_view_with_its_own_heading(setup_vault):
-    """The block goes after the task queries and before «## Читаю» — never between that heading
-    and the embed underneath it, which would leave the heading orphaned."""
+def test_the_grocery_block_goes_above_every_heading(setup_vault):
+    """With no heading of its own it would read as part of whatever section it followed."""
     from tools import groceries_setup
 
     out = groceries_setup.home(HOME)
 
-    assert out.index("## Продукты") < out.index("## Читаю")
-    assert out.index("## Читаю") < out.index("![[Книги.base")
-    assert f"filename includes {texts.VAULT_GROCERIES_NOTE}" in out
+    assert out.startswith("```tasks\nnot done\nfilename includes " + texts.VAULT_GROCERIES_NOTE)
+    assert out.index("## Читаю") < out.index("![[Книги.base")  # the rest untouched
+    with_props = groceries_setup.home("---\ncssclasses: wide\n---\n" + HOME)
+    assert with_props.startswith("---\ncssclasses:")
+    assert "```tasks\nnot done\nfilename" in with_props
+
+
+def test_the_grocery_block_shows_only_when_something_has_to_be_bought(setup_vault):
+    """A markdown heading is always there, over an empty list or a "0 tasks" line. The title
+    lives in a group header instead, which Tasks draws only when the group has tasks."""
+    from tools import groceries_setup
+
+    block = groceries_setup.HOME_BLOCK
+    assert not block.lstrip().startswith("#")
+    assert "group by function '" in block and "hide task count" in block
 
 
 def test_setup_narrows_the_undated_query_so_groceries_do_not_show_up_twice(setup_vault):

@@ -7,7 +7,7 @@ from datetime import datetime
 import pytest
 
 from app import texts
-from app.vault import mdedit
+from app.vault import frontmatter, mdedit
 from app.vault.index import VaultIndex, parse
 from app.vault.writer import VaultAction, VaultUndo, VaultWriter
 
@@ -104,6 +104,22 @@ def test_numbered_lists_keep_counting():
     assert out == "1. раз\n2. два\n3. три\n"
 
 
+def test_a_new_task_keeps_its_own_tick_whatever_the_line_above_says():
+    """The new line takes the list's *style* from its last item — and it used to take that
+    item's tick too. The last task under «дом» was one the user had done, so every task filed
+    there afterwards was written done: a conference on the 9th and a flat viewing on the 1st,
+    missing from «Скоро» on the home page."""
+    done_last = "- [ ] счета\n- [x] постирать ✅ 2026-09-28\n"
+    out = mdedit.append_to(done_last, ["- [ ] Конференция 📅 2026-10-09"])
+    assert out.endswith("- [x] постирать ✅ 2026-09-28\n- [ ] Конференция 📅 2026-10-09\n")
+    # Plain words joining a task list become an open task, never a done one.
+    assert mdedit.append_to(done_last, ["позвонить"]).endswith("\n- [ ] позвонить\n")
+    # An update that ticks something keeps its tick.
+    assert mdedit.append_to("- [ ] a\n", ["- [x] b"]).endswith("- [x] b\n")
+    # A tick box never leaks into a plain list either.
+    assert mdedit.append_to("- раз\n", ["- [ ] два"]).endswith("- [ ] два\n")
+
+
 def test_find_task_refuses_to_guess_between_two():
     text = "- [ ] купить молоко\n- [ ] купить хлеб\n"
     assert mdedit.find_task(text, "купить молоко") == 0
@@ -152,6 +168,16 @@ def test_note_is_created_with_properties_and_never_overwrites(writer, index):
                            body=["другая книга"]))
     assert index.by_name("Чапаев и Пустота 2") is not None
     assert "заметки о книге" in index.read(f"{texts.VAULT_BOOKS_DIR}/Чапаев и Пустота.md")
+
+
+def test_tags_given_as_a_property_are_written_as_obsidian_tags(writer, index):
+    """«добавь область таймлапсы» made a note with `tags: '#timelapse'` — one string with a
+    hash, which Obsidian does not read as a tag at all."""
+    write = writer.run(VaultAction(action="note", folder=texts.VAULT_NOTES_DIR,
+                                   title="таймлапсы", props={"tags": "#timelapse, #video"},
+                                   tags=["timelapse"]))
+    props, _ = frontmatter.split(index.read(write.path))
+    assert props["tags"] == ["timelapse", "video"]
 
 
 def test_update_sets_properties_and_ticks_a_task(writer, index):
@@ -214,6 +240,25 @@ def test_syncthings_archive_is_not_a_note(tmp_path):
     index.refresh()
 
     assert [n.name for n in index.notes] == ["Главная"]
+
+
+def test_templates_are_not_notes(tmp_path):
+    """A Templater template is full of `<% %>` and empty properties: offered to the filer as a
+    place to write, or returned by a search, it is noise at best — and a write into it breaks
+    every note made from it afterwards."""
+    from app.vault.index import VaultIndex
+    from app.vault.writer import VaultWriter
+
+    (tmp_path / texts.VAULT_TEMPLATES_DIR).mkdir()
+    (tmp_path / f"{texts.VAULT_TEMPLATES_DIR}/Встреча Кнуба.md").write_text(
+        "<%* const book = await tp.system.prompt('Книга'); -%>", encoding="utf-8")
+    (tmp_path / "Главная.md").write_text("текст", encoding="utf-8")
+    index = VaultIndex(tmp_path)
+    index.refresh()
+
+    assert [n.name for n in index.notes] == ["Главная"]
+    with pytest.raises(ValueError):
+        VaultWriter(index)._path(f"{texts.VAULT_TEMPLATES_DIR}/новая.md")
 
 
 def test_the_writer_refuses_to_write_into_a_sync_folder(tmp_path):

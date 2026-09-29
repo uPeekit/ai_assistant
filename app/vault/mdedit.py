@@ -13,6 +13,7 @@ from app.vault import frontmatter
 
 _HEADING = re.compile(r"^(#{1,6})\s+(.*\S)\s*$")
 _ITEM = re.compile(r"^(\s*)(- \[[^\]]\]\s+|[-*+]\s+|\d+[.)]\s+)(.*)$")
+_BOX = re.compile(r"^- \[[^\]]\]\s+$")
 _FENCE = re.compile(r"^\s*(```|~~~)")
 _TASK = re.compile(r"^(\s*)([-*+]\s+)\[([^\]])\]\s+(.*)$")
 _DUE = re.compile(r"📅\s*\d{4}-\d{2}-\d{2}")
@@ -86,6 +87,13 @@ def _restyle(line: str, marker: str) -> str:
     in. A numbered list numbers the new item itself."""
     body = _ITEM.match(line)
     text = body.group(3) if body else line.strip()
+    own = body.group(2) if body else ""
+    # A tick box is state, not style. Copying the last item's marker used to copy its tick:
+    # the last task under a heading was done, so every task added there was written done.
+    if _BOX.match(own):
+        return f"{own.rstrip()} {text}"
+    if _BOX.match(marker):
+        return f"- [{OPEN}] {text}"
     number = re.match(r"^(\d+)([.)]\s+)$", marker)
     if number:
         return f"{int(number.group(1)) + 1}{number.group(2)}{text}"

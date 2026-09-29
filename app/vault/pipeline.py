@@ -15,9 +15,11 @@ import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from pathlib import PurePosixPath
 
 from app import texts
 from app.llm.edits import EditError, Editor, NothingToChange
+from app.llm.prompts import MOVE_INSTRUCTION
 from app.llm.rewrite import RewriteError, Rewriter
 from app.vault import agenda as agenda_mod
 from app.vault import frontmatter, mdedit
@@ -56,6 +58,17 @@ def with_content(actions: list[VaultAction], content: str,
         out.append(VaultAction(action="note", folder=texts.VAULT_NOTES_DIR,
                                title=title, body=lines))
     return out
+
+
+def _trimmed(lines: list[str]) -> list[str]:
+    """Moved lines without the blank ones at either end: the gap between sections belongs to
+    neither of them."""
+    start, end = 0, len(lines)
+    while start < end and not lines[start].strip():
+        start += 1
+    while end > start and not lines[end - 1].strip():
+        end -= 1
+    return lines[start:end]
 
 
 def _day(value: str) -> date | None:
@@ -168,7 +181,7 @@ class VaultPipeline:
             log.warning("vault unreadable: %s", e)
             return VaultTurn(error=type(e).__name__)
         if go is not None and not await go():
-            log.info("vault: the message turned out to be a plan; its steps write instead")
+            log.info("vault: held back; the text the Notion side produced is written instead")
             return VaultTurn(model=self._filer.model, prompt_tokens=prompt_tokens,
                              output_tokens=output_tokens)
         actions = check(raw, self._index, message)
@@ -187,12 +200,19 @@ class VaultPipeline:
         for _ in shopping[:1]:  # one answer however many times it was asked for
             answer = await asyncio.to_thread(self._grocery_answer)
             turn.answer = f"{turn.answer}\n{answer}".strip() if turn.answer else answer
-        # A rewrite is the one action the filer cannot finish on its own: it needs the
-        # note's current text, which the filer never saw. Each one becomes an action
-        # carrying the finished text, or is dropped with a line in the reply.
-        prepared = [await self._rewritten(a, turn) if a.action == "rewrite" else a
-                    for a in actions]
-        actions = [a for a in prepared if a is not None]
+        # A rewrite and a move are the actions the filer cannot finish on its own: they need
+        # the note's current text, which the filer never saw. Each becomes actions carrying
+        # the finished text, or is dropped with a line in the reply.
+        prepared: list[VaultAction] = []
+        for action in actions:
+            if action.action == "rewrite":
+                rewritten = await self._rewritten(action, turn)
+                prepared += [rewritten] if rewritten is not None else []
+            elif action.action == "move":
+                prepared += await self._moved(action, turn, prepared)
+            else:
+                prepared.append(action)
+        actions = prepared
         for question in dated:
             answer = await asyncio.to_thread(self._agenda_answer, question)
             turn.answer = f"{turn.answer}\n{answer}".strip() if turn.answer else answer
@@ -290,6 +310,69 @@ class VaultPipeline:
         turn.prompt_tokens += prompt_tokens
         turn.output_tokens += output_tokens
         return new_text.splitlines()
+
+    async def _moved(self, action: VaultAction, turn: VaultTurn,
+                     earlier: list[VaultAction]) -> list[VaultAction]:
+        """Part of one note taken, word for word, to another: the writes that do it, the
+        destination first — so a failure halfway leaves a copy, never a loss.
+
+        The model only points at lines; it never writes the moved text. Its answer counts only
+        when every operation is a delete: those are the lines that move, copied by this code as
+        they stand. Anything else — a rewrite, an insertion, nothing at all — moves nothing and
+        cuts nothing."""
+        note = self._index.by_name(action.note)
+        if note is None:
+            return []
+        if self._editor is None:
+            turn.error = turn.error or texts.VAULT_REWRITE_OFF
+            return []
+        try:
+            text = await asyncio.to_thread(self._index.read, note.path)
+        except OSError as e:
+            log.warning("could not read %s to move from it: %s", note.path, e)
+            return []
+        # Numbered without the frontmatter, as for a rewrite: the writer keeps the properties.
+        _, body = frontmatter.split(text)
+        lines = body.split("\n")
+        try:
+            plan, prompt_tokens, output_tokens = await self._editor.plan(
+                mdedit.numbered(lines), MOVE_INSTRUCTION.format(to=action.to, what=action.text))
+        except NothingToChange:
+            turn.error = turn.error or texts.VAULT_NOTHING_TO_MOVE
+            return []
+        except EditError as e:
+            self._failed(note.name, e, turn)
+            return []
+        turn.prompt_tokens += prompt_tokens
+        turn.output_tokens += output_tokens
+        taken = sorted({n for e in plan.edits if e.op == "delete"
+                        for n in e.span if 1 <= n <= len(lines)})
+        moved = _trimmed([lines[n - 1] for n in taken])
+        if plan.full.strip() or any(e.op != "delete" for e in plan.edits) or not moved:
+            log.info("move from %s refused: %s", note.name,
+                     "whole text" if plan.full.strip() else
+                     "not only deletes" if plan.edits else "nothing marked")
+            turn.error = turn.error or texts.VAULT_MOVE_UNCLEAR
+            return []
+        gone = set(taken)
+        rest = [line for n, line in enumerate(lines, start=1) if n not in gone]
+        cut = VaultAction(action="rewrite", note=note.name, text=action.text,
+                          body=rest or [""])
+        wanted = action.to.casefold()
+        made = next((a for a in earlier if a.action == "note"
+                     and (a.title or a.text).strip().casefold() == wanted), None)
+        if made is not None:
+            # "create X and move … there": the note is being written in this same message.
+            made.body = [*made.body, *moved]
+            return [cut]
+        target = self._index.by_name(action.to)
+        if target is not None:
+            put = VaultAction(action="append", note=target.name, body=moved)
+        else:
+            folder = str(PurePosixPath(note.path).parent)
+            put = VaultAction(action="note", folder="" if folder == "." else folder,
+                              title=action.to, body=moved)
+        return [put, cut]
 
     @staticmethod
     def _failed(name: str, error: Exception, turn: VaultTurn) -> None:

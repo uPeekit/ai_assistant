@@ -10,7 +10,7 @@ import anthropic
 import pytest
 
 from app import texts
-from app.vault.filer import Filer, FilerError, check, context
+from app.vault.filer import MAX_ACTIONS, Filer, FilerError, check, context
 from app.vault.index import VaultIndex
 from app.vault.linker import Linker, apply_links, obvious_links
 from app.vault.pipeline import VaultPipeline
@@ -108,10 +108,19 @@ def test_check_puts_a_note_with_an_unknown_folder_into_the_notes_folder(index):
     assert action.folder == texts.VAULT_BOOKS_DIR and action.props == {"status": "To read"}
 
 
+def test_a_new_task_is_never_written_already_ticked(index):
+    """The schema makes every field required, so the model fills `done` on a new task too.
+    A new task written ticked is hidden from every "not done" query on the home page."""
+    actions = check([{"action": "task", "text": "покушать", "due": "2026-09-28", "done": True}],
+                    index, "дела на сегодня: покушать")
+    assert [(a.action, a.done) for a in actions] == [("task", None)]
+
+
 def test_check_refuses_nonsense_and_caps_the_list(index):
     assert check([{"action": "task", "text": "   "}], index, "x") == []
     assert check([{"action": "выдумка", "text": "что-то"}], index, "x")[0].action == "inbox"
-    assert len(check([{"action": "task", "text": f"t{i}"} for i in range(50)], index, "x")) == 10
+    many = [{"action": "task", "text": f"t{i}"} for i in range(50)]
+    assert len(check(many, index, "x")) == MAX_ACTIONS == 25
 
 
 # ---- the model call ----------------------------------------------------------------------

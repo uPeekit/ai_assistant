@@ -27,10 +27,12 @@ from app.vault.writer import VaultAction
 
 log = logging.getLogger(__name__)
 
-ACTIONS = ("task", "note", "append", "update", "rewrite", "log", "grocery", "search",
+ACTIONS = ("task", "note", "append", "update", "rewrite", "move", "log", "grocery", "search",
            "agenda", "inbox")
-MAX_ACTIONS = 10
-MAX_TOKENS = 4000
+# A list of the day's errands is one message and one action per errand: at 10, a list of a
+# dozen lost its tail. The same cap as a plan's steps.
+MAX_ACTIONS = 25
+MAX_TOKENS = 6000
 MAX_BODY_LINES = 200
 MAX_TEXT = 4000
 MAX_CANDIDATES = 40
@@ -53,6 +55,7 @@ ACTION_SCHEMA = _obj({
     "action": {"enum": list(ACTIONS)},
     "text": _STRING,
     "note": _STRING,
+    "to": _STRING,
     "folder": _STRING,
     "title": _STRING,
     "heading": _STRING,
@@ -216,6 +219,7 @@ def check(raw_actions: list[dict], index: VaultIndex, message: str) -> list[Vaul
                 action=str(raw.get("action", "")).strip().lower(),
                 text=str(raw.get("text", ""))[:MAX_TEXT],
                 note=str(raw.get("note", "")).strip(),
+                to=str(raw.get("to", "")).strip(),
                 folder=str(raw.get("folder", "")).strip().strip("/"),
                 title=str(raw.get("title", "")).strip(),
                 heading=str(raw.get("heading", "")).strip(),
@@ -243,10 +247,17 @@ def check(raw_actions: list[dict], index: VaultIndex, message: str) -> list[Vaul
             action.scope = ""
         if action.repeat and not action.repeat.lower().startswith("every"):
             action.repeat = ""
-        if (action.action in ("append", "update", "rewrite")
+        if (action.action in ("append", "update", "rewrite", "move")
                 and index.by_name(action.note) is None):
             action = VaultAction(action="inbox",
                                  text=action.text or " ".join(action.body) or message)
+        if action.action == "move" and (
+                not action.to or action.to.casefold() == action.note.casefold()):
+            # Nowhere to put the lines. Cutting them out anyway is how three sections vanished
+            # from a note while the note they were meant for stayed empty.
+            action = VaultAction(action="inbox", text=message)
+        elif action.action == "move" and not action.text.strip():
+            action.text = message  # what to move, in the user's own words
         if action.action == "note":
             if action.folder not in folders:
                 action.folder = texts.VAULT_NOTES_DIR
@@ -254,6 +265,11 @@ def check(raw_actions: list[dict], index: VaultIndex, message: str) -> list[Vaul
                 continue
         if action.action in ("task", "log", "inbox") and not action.text.strip():
             continue
+        if action.action == "task":
+            # Every field is required by the schema, so `done` comes filled in on a new task
+            # too. Something already done is an update of a line that exists, never a new
+            # one: a new task written ticked is hidden from every "not done" query at once.
+            action.done = None
         instead = _as_grocery(action, pantry)
         if instead is not None:
             action = instead

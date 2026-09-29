@@ -301,6 +301,8 @@ VAULT_TASKS_NOTE = "Задачи"
 VAULT_ARCHIVE_NOTE = "Задачи — архив"
 VAULT_AREAS_DIR = "Области"
 VAULT_NOTES_DIR = "Заметки"
+# Templater's templates. Not notes: the index skips them and the writer never writes there.
+VAULT_TEMPLATES_DIR = "Шаблоны"
 VAULT_BOOKS_DIR = "Книги"
 VAULT_CLUB_DIR = "Кнуб"
 VAULT_FILES_DIR = "Вложения"
@@ -359,6 +361,8 @@ VAULT_BUY_WORDS = ("купить", "купи", "куплю", "купили", "к
                    "закупился", "закупить", "заказать", "закажи", "заказали", "заказала",
                    "заказал", "взять", "возьми", "взяли", "взяла", "взял", "есть")
 VAULT_GROCERIES_NOTE = "Продукты"
+# The grocery block's title on the home page: a Tasks group header (tools/groceries_setup.py).
+VAULT_GROCERIES_TITLE = "🛒 Купить"
 VAULT_GROCERIES_INTRO = ("Отмеченные — есть дома. Снимите галочку с того, что нужно "
                          "купить — оно появится на Главной. Сроков и повторов здесь не бывает.")
 # The answer to "что надо купить?"
@@ -389,6 +393,9 @@ VAULT_FAILED = "⚠️ Obsidian — не записано: {error}"
 # so it must not read like one.
 VAULT_NOTHING_TO_CHANGE = "не нашёл, что именно поправить"
 VAULT_REWRITE_OFF = "некому переписать — нужен Claude"
+# A move the editor could not pin down to lines: nothing is cut, nothing is copied.
+VAULT_NOTHING_TO_MOVE = "не нашёл, что переносить — ничего не тронул"
+VAULT_MOVE_UNCLEAR = "не понял, какие строки переносить — ничего не тронул"
 VAULT_WHAT = {
     "task": "задача в «{note}»",
     "note": "заметка «{note}»",

@@ -79,11 +79,14 @@ class Planner:
     async def aclose(self) -> None:
         await self._client.close()
 
-    async def plan(self, request: str, workspace: str,
-                   hint: str = "") -> tuple[str, list[StepSpec]]:
-        """The goal and its steps. `hint` is what the interpreter already made of the message.
-        Raises PlanError when no usable plan came back."""
-        data = await self._ask(PLAN_PROMPT, PLAN_SCHEMA, plan_message(request, workspace, hint))
+    async def plan(self, request: str, workspace: str, hint: str = "",
+                   calendar: dict | None = None) -> tuple[str, list[StepSpec]]:
+        """The goal and its steps. `hint` is what the interpreter already made of the message;
+        `calendar` is today and the days around it (app/llm/context.py: build_calendar), so
+        "today" in the message can become a date in the steps. Raises PlanError when no
+        usable plan came back."""
+        data = await self._ask(PLAN_PROMPT, PLAN_SCHEMA,
+                               plan_message(request, workspace, hint, calendar))
         goal = str(data.get("goal", "")).strip()
         steps = []
         for raw in data.get("steps", []):
@@ -97,11 +100,12 @@ class Planner:
             raise PlanError("empty plan")
         return goal, steps[:MAX_STEPS]
 
-    async def next(self, state: PlanState, workspace: str) -> Verdict:
+    async def next(self, state: PlanState, workspace: str,
+                   calendar: dict | None = None) -> Verdict:
         """Done, or the next step. A failed check ends the plan rather than guessing on."""
         try:
             data = await self._ask(PLAN_NEXT_PROMPT, NEXT_SCHEMA,
-                                   progress_message(state, workspace))
+                                   progress_message(state, workspace, calendar))
         except PlanError as e:
             log.warning("plan check failed (%s); stopping the plan", e)
             return Verdict(done=True, summary="", next_step="")

@@ -550,15 +550,29 @@ and how many blocks were left alone, says so when the text shrank by more than f
 fifths, and offers Undo; in the vault the previous version also goes to `.trash`, where it
 outlives the undo window.
 
-**A plan reaches both stores.** The planner is unchanged, but every step is offered to
-Notion and then to the vault. Text a step has already produced (a web search's result) is
-handed over as `content`, so the same material is written twice over with one search, one
-wait and one bill — and it never enters a prompt, because what the web returned is
-data. The filer still chooses the note from its own index, so this stays a second pipeline
-rather than a mirror. The goal's own vault call starts before anyone knows the message is a
-plan, and is held at a gate rather than cancelled: its writes run in a thread, where
-cancelling could leave a half-written file. Each step's vault undo joins that step's
-record, so the plan's «Отменить всё» reverts both stores.
+**The vault writes once per message** (since 0.6.3). It reads the user's own message —
+never a plan's steps, never an answer to a Notion question — and writes when the turn ends.
+Plan steps are phrased for Notion («Добавь в TODO задачу «покушать»») and lose what the
+message said around them, so feeding them to the vault one by one lost dates, and an answer
+that the interpreter turned into a plan wrote the same note a second time. The filer already
+turns one message into up to 25 actions, with the dates it names.
+
+The vault task starts in parallel with the interpreter and waits at a gate (`vault_go`)
+before writing. The gate opens exactly once, in `_hand_over` at the end of the turn — never
+halfway: opening it after interpretation is how a message that then searched the web got two
+notes. Text the Notion side produced that the vault could not have — what a search found,
+what a plan step composed (`_written_text`) — is collected on the turn; if there is any, the
+held task is told not to write and one new call writes the same message with that text as
+`content`. The text never enters a prompt, because what the web returned is data, and the
+filer still chooses the note, so this stays a second pipeline rather than a mirror. The
+vault's undo joins the turn's record (the plan's batch row, for a plan), so one «Отменить
+всё» reverts both stores.
+
+**Moving between notes** (`move`, vault only): the filer names the source, the destination
+and what to move; the editor marks lines with `delete` ops, and only a plan made of nothing
+but deletes counts. The code copies exactly those lines to the destination (appended, or a
+new note next to the source), then cuts them from the source — destination first, so a
+failure halfway leaves a copy, never a loss. The model points; it never writes the moved text.
 
 **When Claude cannot be used** (`app/llm/health.py`): one `Health` instance is shared by
 every component that calls Anthropic. It names the reason behind a failure — no credit,

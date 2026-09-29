@@ -39,7 +39,7 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from difflib import SequenceMatcher
@@ -79,7 +79,7 @@ from app.llm.base import (
     LLMTrace,
     LLMUnavailable,
 )
-from app.llm.context import Context, ContextBuilder
+from app.llm.context import Context, ContextBuilder, build_calendar
 from app.llm.health import Health
 from app.llm.output_schema import build_schema
 from app.llm.planner import PlanError, Planner, Verdict
@@ -320,14 +320,16 @@ class _Turn:
     # The Obsidian side of this message, running next to everything above, and the execution
     # row this turn wrote (the two meet in _finish_vault).
     vault: asyncio.Task | None = None
-    # Resolved once this message's kind is known: False when it turned out to be a plan,
-    # whose steps write to the vault one by one, True for everything else. The vault task
-    # starts before the interpreter has answered, so this is what holds its writes back
-    # without cancelling a write already running in a thread.
+    # The vault task starts on the message before anything else has run, and waits at this
+    # gate before it writes. The gate opens once, when the turn ends (_hand_over), never
+    # halfway: opening it after the interpreter answered is how a message that then searched
+    # the web got two notes, one from the bare message and one with what the search found.
     vault_go: asyncio.Future[bool] | None = None
-    # The vault was held back because this message is going to search the web: what the
-    # search finds is what the vault should be given, and it costs minutes to get.
-    vault_after_research: bool = False
+    # The message the vault read, and text this turn's Notion side produced that the vault
+    # could not have: what a web search found, what a plan step wrote. Handed over whole at
+    # the end, so the vault writes once per message — never once per step.
+    vault_text: str = ""
+    vault_content: list[str] = field(default_factory=list)
     execution_id: int | None = None
 
     def let_vault_write(self, allowed: bool) -> None:
@@ -518,7 +520,9 @@ class Orchestrator:
         session = None if expired is not None else self._sessions.get(turn.chat_id, turn.now)
         if self._vault_on() and session is None:
             # A fresh thought goes to both stores at once. An answer to a question does not:
-            # it answers Notion, and the vault has already had the message it belongs to.
+            # it answers Notion, and the vault has already had the message it belongs to —
+            # even when the answer turns into a plan, which used to write a second copy.
+            turn.vault_text = text
             turn.vault_go = asyncio.get_running_loop().create_future()
             turn.vault = asyncio.create_task(
                 self._vault.handle(text, go=lambda: turn.vault_go))
@@ -554,8 +558,6 @@ class Orchestrator:
             return _prefixed(await self._inbox_or_error(turn, prompt, code), prefix)
 
         self._audit_llm(turn, interp, trace)
-        # The vault started on the whole message; a plan's steps write instead, one by one.
-        turn.let_vault_write(interp.intent.value != "plan" or turn.plan is not None)
         if interp.intent.value == "plan" and turn.plan is None:
             # Even with a clarifying question attached: a plan's side question ("which dates?")
             # is not worth stopping for, and each step can still ask what it really needs.
@@ -654,47 +656,15 @@ class Orchestrator:
         if isinstance(command, Search):
             return Reply(format_search(executed))
         text_reply = format_execution(executed, target_url=candidate.target.url)
-        if turn.plan is not None:
-            line = await self._vault_step(turn, text, command)
-            text_reply = f"{text_reply}\n{line}" if line else text_reply
-        elif turn.vault_after_research and self._vault_on():
-            # Replacing the held turn rather than calling the vault inline: _finish_vault
-            # then reports it and files its undo in this execution's own record, exactly as
-            # it does for a message that needed no search.
-            turn.vault = asyncio.create_task(
-                self._vault.handle(text, content=_written_text(command)))
+        if turn.vault is not None and (turn.plan is not None or candidate.web_query):
+            # Words the user never wrote — what a search found, what a plan step composed —
+            # are the one thing the vault cannot get from the message itself. Anything else
+            # it reads on its own, from the message, once.
+            written = _written_text(command)
+            if written:
+                turn.vault_content.append(written)
         execution_id = self._record_execution(turn, executed)
         return Reply(text_reply, _undo_buttons(execution_id), undo_id=execution_id)
-
-    async def _vault_step(self, turn: _Turn, text: str, command: Command) -> str:
-        """The Obsidian half of one plan step, run after the Notion half so the text a
-        search already paid for is written to both stores — one search, one wait, one
-        bill. The filer still chooses the note: this is a second pipeline, not a mirror.
-
-        A failure here never stops the plan; the step keeps its Notion result and the
-        reply is one line shorter."""
-        if not self._vault_on():
-            return ""
-        try:
-            result = await self._vault.handle(text, content=_written_text(command))
-        except Exception:
-            log.exception("the obsidian side of a plan step failed")
-            return ""
-        if result.model and (result.writes or result.error):
-            turn.call(result.model, "vault", writes=len(result.writes) or None,
-                      error=result.error or None,
-                      prompt_tokens=result.prompt_tokens,
-                      output_tokens=result.output_tokens)
-        undos = result.undos
-        if undos:
-            # Into this step's own undo, so the plan's batch reverts both stores at once.
-            if turn.last_undo is not None:
-                record = UndoRecord.model_validate_json(turn.last_undo)
-                record.vault = undos
-            else:
-                record = UndoRecord(kind="vault", vault=undos)
-            turn.last_undo = record.model_dump_json()
-        return result.reply_line()
 
     async def _research(
         self, turn: _Turn, decision: Decision, result: ValidationResult, text: str
@@ -716,12 +686,6 @@ class Orchestrator:
             return replace(decision, candidate=replace(candidate, web_query=None)), None
         if self._researcher is None:
             return decision, await self._inbox_or_error(turn, text, "WEB_UNAVAILABLE")
-        # The vault started on the bare message and would write a note about wanting
-        # pictures rather than a note with pictures in it. Hold it — as a plan's steps do —
-        # and run it again below with what the search actually found.
-        if self._vault_on():
-            turn.vault_after_research = True
-            turn.let_vault_write(False)
         await self._progress(turn, Reply(texts.SEARCHING_THE_WEB))
         try:
             found = await self._researcher.research(text, candidate.web_query,
@@ -820,7 +784,8 @@ class Orchestrator:
             return self._plain(turn, "PLAN_UNAVAILABLE")
         try:
             goal, steps = await self._planner.plan(text, self._workspace(snapshot),
-                                                   hint=_hint(interp))
+                                                   hint=_hint(interp),
+                                                   calendar=build_calendar(turn.now))
         except PlanError as e:
             log.warning("planning failed: %s", e)
             return await self._inbox_or_error(turn, text, "PLAN_FAILED")
@@ -913,7 +878,8 @@ class Orchestrator:
         except Exception as e:
             log.warning("discovery failed: %s", e)
             return None
-        verdict = await self._planner.next(state, self._workspace(snapshot))
+        verdict = await self._planner.next(state, self._workspace(snapshot),
+                                           calendar=build_calendar(turn.now))
         turn.call(self._planner.model, "check", done=verdict.done, next_step=verdict.next_step)
         log.info("llm %s checked the plan: %s", self._planner.model,
                  "done" if verdict.done else _short(verdict.next_step))
@@ -1239,6 +1205,10 @@ class Orchestrator:
                 log.exception("unhandled failure in event %s", turn.event_id)
                 reply = self._plain(turn, "INTERNAL")
             # Whatever happened above, the vault must not be left waiting for permission.
+            try:
+                self._hand_over(turn)
+            except Exception:
+                log.exception("could not hand the vault its text in event %s", turn.event_id)
             turn.let_vault_write(True)
             try:
                 reply = await self._finish_vault(turn, reply)
@@ -1328,6 +1298,27 @@ class Orchestrator:
     def _plain(self, turn: _Turn, code: str, **fmt: Any) -> Reply:
         turn.audit(error=code, decision=json.dumps({"kind": "ERROR", "code": code}))
         return Reply(_error(code, **fmt))
+
+    def _hand_over(self, turn: _Turn) -> None:
+        """Open the vault's gate, the one time it opens.
+
+        Usually the held turn simply writes what it made of the message. When the Notion side
+        produced text the vault could not have — a search's findings, a plan step's page — the
+        held turn is told not to write, and one new turn writes the same message with that text
+        as its content. Either way the vault writes once per message."""
+        if not turn.vault_content or turn.vault is None or not self._vault_on():
+            return
+        held, content = turn.vault, "\n\n".join(turn.vault_content)
+        turn.let_vault_write(False)
+
+        async def with_content() -> VaultTurn:
+            # The held turn finishes first (it returns at its gate, writing nothing), so its
+            # failure is never left unretrieved and the two can never both write.
+            with suppress(Exception):
+                await held
+            return await self._vault.handle(turn.vault_text, content=content)
+
+        turn.vault = asyncio.create_task(with_content())
 
     async def _finish_vault(self, turn: _Turn, reply: Reply) -> Reply:
         """Wait for the Obsidian side of this message, say in one line what it did, and put its

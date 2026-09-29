@@ -1406,7 +1406,7 @@ class FakePlanner:
         self.fail, self.then = fail, list(then or [])
         self.checks: list[list[str]] = []
 
-    async def plan(self, request, workspace, hint=""):
+    async def plan(self, request, workspace, hint="", calendar=None):
         from app.llm.planner import PlanError
 
         self.hints.append(hint)
@@ -1415,7 +1415,7 @@ class FakePlanner:
         assert "Места в Notion" in workspace
         return "Всё разложено", list(self.steps)
 
-    async def next(self, state, workspace):
+    async def next(self, state, workspace, calendar=None):
         from app.llm.planner import Verdict
 
         self.checks.append([s.status for s in state.history])
