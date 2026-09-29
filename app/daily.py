@@ -20,6 +20,9 @@ log = logging.getLogger(__name__)
 # restarted at 09:04). Later than this, the digest waits for tomorrow — nobody wants yesterday's
 # agenda at six in the evening.
 GRACE = timedelta(hours=2)
+# The shortest wait worth handing to asyncio: anything below a clock tick may return at once,
+# which would spin the loop until the tick passes. Sending 50 ms late costs nothing.
+MIN_SLEEP_S = 0.05
 
 
 def parse_at(value: str) -> time | None:
@@ -47,8 +50,10 @@ class DailyMessage:
 
     def __init__(self, send: Callable[[], Awaitable[object]],
                  at: time | tuple[time, ...] | Callable[[], tuple[time, ...]],
-                 tz: str, *, now: Callable[[], datetime] | None = None) -> None:
+                 tz: str, *, now: Callable[[], datetime] | None = None,
+                 sleep: Callable[[float], Awaitable[object]] = asyncio.sleep) -> None:
         self._send = send
+        self._sleep = sleep
         # A callable is re-read before every wait, so changing the times on the admin page
         # takes effect without a restart.
         if callable(at):
@@ -99,10 +104,17 @@ class DailyMessage:
         if now - previous < GRACE:
             await self._fire()
         while True:
-            now = self._now()
-            wait = (self.next_run(now) - now).total_seconds()
-            await asyncio.sleep(max(wait, 1.0))
+            await self._until(self.next_run(self._now()))
             await self._fire()
+
+    async def _until(self, due: datetime) -> None:
+        """Sleep until the wall clock has really reached `due`.
+
+        asyncio's timers run on the monotonic clock and may fire up to a clock tick early —
+        about 16 ms on Windows. Waking at 08:59:59.985 and then asking for the next run gave
+        09:00 *today* again, and the morning digest went out twice, a second apart."""
+        while (left := (due - self._now()).total_seconds()) > 0:
+            await self._sleep(max(left, MIN_SLEEP_S))
 
     async def _fire(self) -> None:
         try:

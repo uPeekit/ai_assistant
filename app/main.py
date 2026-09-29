@@ -269,6 +269,8 @@ def _daily_digest(settings: Settings, vault: VaultPipeline | None, switches: Swi
                 await application().bot.send_message(chat_id, text)
             except Exception:  # one blocked chat must not stop the others
                 log.exception("could not send the daily digest to a chat")
+        # Without this line a digest sent twice left no trace in the log at all.
+        log.info("daily digest sent: %d lines", len(text.splitlines()))
 
     return DailyMessage(send, lambda: parse_times(tuning.agenda_at), settings.timezone)
 

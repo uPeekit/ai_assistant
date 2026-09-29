@@ -238,3 +238,30 @@ async def test_a_failing_send_does_not_kill_the_schedule():
 
 async def _record(sent: list[int]) -> None:
     sent.append(1)
+
+
+async def test_a_timer_that_wakes_a_little_early_still_sends_once():
+    """The morning digest arrived twice, a second apart. asyncio's timers run on the monotonic
+    clock and may fire up to a clock tick early (about 16 ms on Windows); the schedule is wall
+    clock. Waking at 08:59:59.985 and then asking for the next run gave 09:00 *today* again —
+    so it fired, slept one more second and fired again."""
+    from zoneinfo import ZoneInfo
+
+    tallinn = ZoneInfo("Europe/Tallinn")
+    clock = [datetime(2026, 9, 25, 12, 0, tzinfo=tallinn)]  # past the grace: no startup send
+    sent: list[int] = []
+    parked = asyncio.Event()
+
+    async def sleep(seconds: float) -> None:
+        if clock[0] >= datetime(2026, 9, 26, 9, 30, tzinfo=tallinn):
+            parked.set()
+            await asyncio.Event().wait()  # far enough: park here until the test stops us
+        early = timedelta(milliseconds=15) if seconds > 1 else timedelta(0)
+        clock[0] += timedelta(seconds=seconds) - early
+
+    daily = DailyMessage(lambda: _record(sent), time(9, 0), "Europe/Tallinn",
+                         now=lambda: clock[0], sleep=sleep)
+    daily.start()
+    await asyncio.wait_for(parked.wait(), 5)
+    await daily.stop()
+    assert sent == [1]
