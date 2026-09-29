@@ -24,6 +24,25 @@ page, and the **buckets themselves live on that page too** (`data/mail_buckets.t
 code, and tuning it must never need a release. Sections 1–9 below describe the fuller design,
 including the actions of phase 2.
 
+**2026-09-29 — bucket parsing fixed.** `parse_buckets` split on every comma, so the built-in
+list, whose descriptions contain commas, became twelve buckets: phantoms named after words in
+the descriptions (доставка, акции, рассылки…) and real buckets missing half their meaning.
+Mail was sorted into the phantoms. The admin page also re-displayed the list with a line break
+after every comma, so one Save wrote the phantoms back, and its own hint ("one line — one
+bucket") described a format the parser did not read. Now: one bucket per line, and on a single
+line (the `.env` value) a comma starts a new bucket only where a `name:` follows it.
+
+**2026-09-29 — a second, local digest, for comparison.** `MAIL_SHADOW_MODEL` names an Ollama
+model; when set, the same mail is sorted again by `app/mail/local.py` (same prompt, schema and
+gate) and arrives as a second message headed with the model and its time. It never touches the
+real digest: the mailbox is read once, the state written once, and a local failure only changes
+the second message. It sends as many emails per request as fit — more at once sorts *better*,
+since the model tells buckets apart by contrast — and splits a request in half when Ollama
+reports the context full (Ollama otherwise drops the head of the prompt silently). The model is
+unloaded as soon as its answer is in. On 16 test mails with the six default buckets, all at
+once: gemma3:4b, qwen3:8b and mistral-nemo:12b matched Haiku 16/16; qwen3:1.7b 14/16;
+gemma3:1b 3/16.
+
 ## 1. Access
 
 - **Gmail API directly** (`google-api-python-client`), not the Gmail MCP server. The MCP server

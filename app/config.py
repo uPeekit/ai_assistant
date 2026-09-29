@@ -77,11 +77,20 @@ class Settings(BaseSettings):
     gmail_app_password: SecretStr = SecretStr("")
     # When to send the digest, comma-separated wall-clock times in TIMEZONE.
     mail_digest_at: str = "12:00,19:00"
-    # "name:what belongs in it", comma-separated. The description is what the classifier
-    # follows — a bare name leaves it guessing. Empty falls back to texts.MAIL_BUCKETS_DEFAULT.
+    # "name: what belongs in it", comma-separated on this one line; a description may contain
+    # commas, since a new bucket starts only where a "name:" follows one. The description is
+    # what the classifier follows — a bare name leaves it guessing. Empty falls back to
+    # texts.MAIL_BUCKETS_DEFAULT.
     mail_buckets: str = ""
     mail_model: str = "claude-haiku-4-5"
     mail_max_per_run: int = Field(40, ge=1, le=200)
+    # A local Ollama model that sorts the same mail a second time, so the two digests can be
+    # read side by side. Empty is off, which is the normal state: it is a trial, not a feature,
+    # and while it runs it holds the card the transcriber wants.
+    mail_shadow_model: str = ""
+    # How many emails to try in one local request. More at once sorts better (the model tells
+    # buckets apart by contrast); a request that overflows the context is split and retried.
+    mail_shadow_batch: int = Field(20, ge=1, le=200)
 
     whisper_model: str = "large-v3-turbo"
     whisper_device: str = "auto"

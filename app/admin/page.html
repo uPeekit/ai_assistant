@@ -404,8 +404,10 @@ function load() {
       document.getElementById("vault-note").textContent = data.obsidian_vault
         ? "Хранилище: " + data.obsidian_vault
         : "Хранилище не настроено: укажите OBSIDIAN_VAULT в .env.";
+      // One bucket per line. An old single-line list is broken only where a "name:" follows a
+      // comma — the parser's own rule — because a description may contain commas of its own.
       document.getElementById("mail-buckets").value =
-        (data.mail_buckets || "").split(",").join(",\n");
+        (data.mail_buckets || "").split(/,\s*(?=[^\s,:]+\s*:)/).join("\n");
       var switches = data.switches || {};
       ["notion", "obsidian", "linker", "mail"].forEach(function (name) {
         var el = document.getElementById("switch-" + name);

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 
 import anthropic
@@ -25,20 +26,42 @@ MAX_SUMMARY = 200
 OTHER = "other"
 
 
+_NAMED = re.compile(r"^\s*([^\s,:]+)\s*:(.*)$", re.DOTALL)
+
+
 def parse_buckets(raw: str) -> tuple[list[str], dict[str, str]]:
-    """"name:what belongs in it, name:..." -> the bucket names, and what each one means. A
-    bucket without a description is still a bucket, but then the model has only its name to go
-    on — which is how a payment receipt ended up in "bills" instead of "financial"."""
+    """"name:what belongs in it" -> the bucket names, and what each one means.
+
+    One bucket per line is the plain form. On a single line (the .env value), buckets are
+    separated by commas — but a description may hold commas of its own, so a comma starts a new
+    bucket only where a `name:` follows it, or where the bucket before it has no description.
+    Splitting on every comma turned the built-in list into twelve buckets — phantoms named
+    after words from the descriptions — and mail was sorted into those.
+
+    A bucket without a description is still a bucket, but then the model has only its name to
+    go on — which is how a payment receipt ended up in "bills" instead of "financial".
+    """
     names: list[str] = []
     meanings: dict[str, str] = {}
-    for part in raw.split(","):
-        name, _, description = part.partition(":")
-        name = name.strip()
-        if not name:
-            continue
-        names.append(name)
-        if description.strip():
-            meanings[name] = description.strip()
+    for line in raw.splitlines():
+        current = ""
+        for part in line.split(","):
+            named = _NAMED.match(part)
+            if named is None and current and current in meanings:
+                meanings[current] += "," + part  # a comma inside this bucket's description
+                continue
+            name, description = (named.group(1), named.group(2)) if named else (part, "")
+            name = name.strip()
+            if not name:
+                continue
+            if name not in names:
+                names.append(name)
+            current = name
+            if description.strip():
+                meanings[name] = description
+        for name in names:
+            if name in meanings:
+                meanings[name] = meanings[name].strip()
     return names, meanings
 
 

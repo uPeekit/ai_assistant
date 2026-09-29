@@ -290,3 +290,43 @@ def test_mail_already_read_is_left_out_of_the_digest(monkeypatch):
     messages, newest, validity = imap.fetch_since("10")
     assert [m.subject for m in messages] == ["still unread"]
     assert newest == "13" and validity == "7"
+
+
+def test_the_built_in_buckets_are_the_six_they_look_like():
+    """The default's descriptions contain commas, and a plain split on commas turned them into
+    twelve buckets: phantom ones like "доставка" with no description, and real ones that had
+    lost half of theirs. Mail went into the phantoms."""
+    from app.mail.classify import parse_buckets
+
+    names, meanings = parse_buckets(texts.MAIL_BUCKETS_DEFAULT)
+    assert names == ["bills", "shopping", "financial", "notifications", "personal", "other"]
+    assert all(meanings[n] for n in names)
+    assert "доставка" in meanings["shopping"] and "новости" in meanings["notifications"]
+
+
+def test_one_bucket_per_line_keeps_every_comma_in_its_description():
+    from app.mail.classify import parse_buckets
+
+    names, meanings = parse_buckets(
+        "shopping: заказы, доставка, акции\n\n  personal:письма от людей, лично мне  \n")
+    assert names == ["shopping", "personal"]
+    assert meanings == {"shopping": "заказы, доставка, акции",
+                        "personal": "письма от людей, лично мне"}
+
+
+def test_on_one_line_a_comma_starts_a_bucket_only_where_a_name_follows():
+    """The .env value is a single line; it must read the same way the file does."""
+    from app.mail.classify import parse_buckets
+
+    names, meanings = parse_buckets("bills:оплатить, срочно,financial:чеки, выписки")
+    assert names == ["bills", "financial"]
+    assert meanings == {"bills": "оплатить, срочно", "financial": "чеки, выписки"}
+
+
+def test_bare_names_are_still_buckets():
+    from app.mail.classify import parse_buckets
+
+    assert parse_buckets("bills, shopping, other")[0] == ["bills", "shopping", "other"]
+    names, meanings = parse_buckets("bills, shopping:заказы, доставка")
+    assert names == ["bills", "shopping"]
+    assert meanings == {"shopping": "заказы, доставка"}

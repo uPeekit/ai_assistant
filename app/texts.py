@@ -444,16 +444,22 @@ MAIL_BUCKET = "\n{bucket} ({n}):"
 MAIL_ITEM = "• {sender} — {summary}"
 MAIL_MORE = "  …и ещё {n}"
 MAIL_FAILED = "📬 Почту прочитать не удалось ({error})."
+
+# The second digest: the same mail sorted by the local model, for comparison. Temporary — it
+# goes away once the user has decided whether the local model is good enough.
+MAIL_SHADOW_HEADER = "🧪 Тот же разбор локальной моделью ({model}, {seconds:.0f} с):"
+MAIL_SHADOW_FAILED = "не получилось — {error}"
+MAIL_SHADOW_EMPTY = "ничего не вернула."
 # How a reply quotes what came before it ("25.09.2026 Иван написал:"): everything from there
 # down is the previous message again, so the classifier never sees it.
 MAIL_QUOTE_MARKERS = ("написал", "wrote", "schrieb", "kirjutas")
 # The buckets a digest is sorted into, and what belongs in each. The user's own MAIL_BUCKETS
 # replaces this wholesale; the descriptions are what the classifier follows, not the names.
 MAIL_BUCKETS_DEFAULT = (
-    "bills:счёт или требование оплаты — что-то нужно оплатить,"
-    "shopping:магазины и заказы — статус заказа, доставка, акции, отзывы,"
-    "financial:банк и платежи — чеки об оплате, уведомления и напоминания банка,"
-    "notifications:автоматические уведомления сервисов, рассылки, новости,"
-    "personal:письмо от живого человека лично тебе,"
-    "other:всё остальное"
+    "bills: счёт или требование оплаты — что-то нужно оплатить\n"
+    "shopping: магазины и заказы — статус заказа, доставка, акции, отзывы\n"
+    "financial: банк и платежи — чеки об оплате, уведомления и напоминания банка\n"
+    "notifications: автоматические уведомления сервисов, рассылки, новости\n"
+    "personal: письмо от живого человека лично тебе\n"
+    "other: всё остальное"
 )
