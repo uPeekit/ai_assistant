@@ -192,8 +192,30 @@ class VaultWriter:
         tags = list(dict.fromkeys(t.lstrip("#") for t in tags if t.lstrip("#")))
         if tags:
             props["tags"] = tags
+        props = self._shaped(folder, props)
         undo = self._write(rel, render(props, "\n".join(action.body)), None)
         return VaultWrite(kind="note", path=rel, note=name, undo=undo)
+
+    def _shaped(self, folder: str, props: dict) -> dict:
+        """`props` with the tick boxes every note already in `folder` has.
+
+        A folder of meetings or books is a table: its notes share properties, and a base over
+        it shows a tick box only for a real boolean. The model sends every value as text and
+        leaves out what the message did not mention, so this is read from the folder instead:
+        a property that is a boolean in every sibling is one here too — "false" becomes False,
+        and a missing one starts unticked."""
+        siblings = [n for n in self._index.notes if n.folder == folder]
+        if len(siblings) < 2:
+            return props
+        out = dict(props)
+        shared = set.intersection(*(set(n.props) for n in siblings))
+        for key in sorted(shared):
+            if not all(isinstance(n.props[key], bool) for n in siblings):
+                continue
+            given = out.get(key)
+            out[key] = (given if isinstance(given, bool)
+                        else str(given).strip().casefold() in ("true", "yes"))
+        return out
 
     def _append(self, action: VaultAction) -> VaultWrite:
         note = self._index.by_name(action.note)

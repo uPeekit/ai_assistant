@@ -568,6 +568,16 @@ filer still chooses the note, so this stays a second pipeline rather than a mirr
 vault's undo joins the turn's record (the plan's batch row, for a plan), so one «Отменить
 всё» reverts both stores.
 
+**A second reading** (`filer.doubtful`, since 0.6.7): when the light filer's answer has a
+defect code can see - a note with nothing in it, or an inbox line - the same question goes
+once to `FILER_STRONG_MODEL` and that answer is checked and written instead. Measured on a
+dictated message that named a list as its destination with the preposition swallowed: Haiku
+0 of 6 right even with a prompt rule written for that sentence, Sonnet 3 of 3, the two
+together 4 of 5. It runs before the write gate, so it hides inside the turn's own wait, and
+never when the caller supplies the text (an empty note is then about to be filled). A new
+note also takes the tick boxes every note in its folder has (`VaultWriter._shaped`): read
+from the folder, not asked of a model, so a base shows real check boxes.
+
 **Moving between notes** (`move`, vault only): the filer names the source, the destination
 and what to move; the editor marks lines with `delete` ops, and only a plan made of nothing
 but deletes counts. The code copies exactly those lines to the destination (appended, or a

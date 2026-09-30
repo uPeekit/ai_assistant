@@ -67,6 +67,9 @@ class Settings(BaseSettings):
     # The vault's own interpreter ("which note is this?") and the linker. Both are small jobs
     # on a small context: Haiku.
     filer_model: str = "claude-haiku-4-5"
+    # Asked the same question when the light filer's answer is visibly off (an empty note, an
+    # inbox line). "" turns the second reading off.
+    filer_strong_model: str = "claude-sonnet-5"
     linker_model: str = "claude-haiku-4-5"
     linker_enabled: bool = True
 

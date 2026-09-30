@@ -312,6 +312,23 @@ def check(raw_actions: list[dict], index: VaultIndex, message: str) -> list[Vaul
     return out
 
 
+def doubtful(actions: list[VaultAction]) -> str:
+    """Why this answer deserves a second reading by a stronger model, or "".
+
+    Only things code can see, never a judgement of the words. A note with nothing in it is the
+    light model's signature misreading: it takes the *place* a message names ("to the list of
+    upcoming club meetings") for a thing to create, and files an empty note called that. And an
+    inbox line is the model saying it did not understand — worth one more try before the user
+    has to sort it out by hand."""
+    for action in actions:
+        if action.action == "inbox":
+            return "inbox"
+        if (action.action == "note" and not any(line.strip() for line in action.body)
+                and not any(str(v).strip() for v in action.props.values())):
+            return "empty note"
+    return ""
+
+
 class Filer:
     def __init__(self, api_key: str, model: str, *, timeout_s: float = 30.0,
                  client: anthropic.AsyncAnthropic | None = None,

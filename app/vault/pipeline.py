@@ -23,7 +23,7 @@ from app.llm.prompts import MOVE_INSTRUCTION
 from app.llm.rewrite import RewriteError, Rewriter
 from app.vault import agenda as agenda_mod
 from app.vault import frontmatter, mdedit
-from app.vault.filer import GROCERY_LIST, Filer, FilerError, check, context
+from app.vault.filer import GROCERY_LIST, Filer, FilerError, check, context, doubtful
 from app.vault.index import VaultIndex
 from app.vault.linker import Linker
 from app.vault.search import Hit, search, vault_name
@@ -139,10 +139,14 @@ class VaultPipeline:
                  linker: Linker | None = None, *, now=datetime.now,
                  linking: Callable[[], bool] = lambda: True,
                  rewriter: Rewriter | None = None,
-                 editor: Editor | None = None) -> None:
+                 editor: Editor | None = None,
+                 strong: Filer | None = None) -> None:
         self._index = index
         self._writer = writer
         self._filer = filer
+        # The same question put to a stronger model, for an answer the light one visibly
+        # got wrong (see filer.doubtful). None: the first answer always stands.
+        self._strong = strong
         self._linker = linker
         self._rewriter = rewriter
         self._editor = editor
@@ -154,6 +158,8 @@ class VaultPipeline:
         for task in list(self._tasks):
             task.cancel()
         await self._filer.aclose()
+        if self._strong is not None:
+            await self._strong.aclose()
         if self._linker is not None:
             await self._linker.aclose()
         if self._rewriter is not None:
@@ -180,16 +186,32 @@ class VaultPipeline:
         except OSError as e:
             log.warning("vault unreadable: %s", e)
             return VaultTurn(error=type(e).__name__)
+        model = self._filer.model
+        actions = check(raw, self._index, message)
+        # Before the gate, not after it: the gate opens when the whole turn is over, and a
+        # second model call there would be added to the wait instead of hidden inside it.
+        # Text the caller already has fills an empty note, so there is nothing to doubt.
+        why = doubtful(actions) if self._strong is not None and not content else ""
+        if why:
+            try:
+                again, more_in, more_out = await self._strong.file(message, ctx)
+            except FilerError as e:  # the first answer stands
+                log.warning("second reading failed: %s", e)
+            else:
+                log.info("vault: %s from %s; read again by %s", why, model,
+                         self._strong.model)
+                actions, model = check(again, self._index, message), self._strong.model
+                prompt_tokens += more_in
+                output_tokens += more_out
         if go is not None and not await go():
             log.info("vault: held back; the text the Notion side produced is written instead")
-            return VaultTurn(model=self._filer.model, prompt_tokens=prompt_tokens,
+            return VaultTurn(model=model, prompt_tokens=prompt_tokens,
                              output_tokens=output_tokens)
-        actions = check(raw, self._index, message)
         if not actions:  # the model answered nothing usable: keep the words rather than drop them
             actions = [VaultAction(action="inbox", text=message)]
         if content:
             actions = with_content(actions, content, message)
-        turn = VaultTurn(model=self._filer.model, prompt_tokens=prompt_tokens,
+        turn = VaultTurn(model=model, prompt_tokens=prompt_tokens,
                          output_tokens=output_tokens, vault=vault_name(self._index.root))
         dated = [a for a in actions if a.action == "agenda"]
         questions = [a for a in actions if a.action == "search"]
@@ -227,7 +249,7 @@ class VaultPipeline:
             log.warning("vault write failed: %s", e)
             turn.error = type(e).__name__
             return turn
-        log.info("vault %s: %s", self._filer.model,
+        log.info("vault %s: %s", model,
                  ", ".join([*(f"{w.kind}:{w.note}" for w in turn.writes),
                             *([f"search:{len(turn.hits)} hits"] if turn.asked else []),
                             # Without this an answered question looked exactly like a turn

@@ -180,6 +180,34 @@ def test_tags_given_as_a_property_are_written_as_obsidian_tags(writer, index):
     assert props["tags"] == ["timelapse", "video"]
 
 
+def test_a_new_note_gets_the_tick_boxes_every_note_in_its_folder_has(tmp_path):
+    """A meeting the bot filed had `event_posted: 'false'` — text, which a base shows as a
+    word rather than a tick box — or no such property at all when the model left it out. What
+    every note in a folder has as a tick box, a new note there gets too, unticked; that is read
+    from the folder, not asked of a model."""
+    from app.vault.index import VaultIndex
+    from app.vault.writer import VaultWriter
+
+    club = tmp_path / "Кнуб"
+    club.mkdir()
+    for name in ("2026-08-31 Сатанинское танго", "2026-09-21 Чёрные кувшинки"):
+        (club / f"{name}.md").write_text(
+            "---\nbook: x\nauthor: y\ndate: '2026-09-21'\nevent_posted: true\n"
+            "vyvody_posted: false\n---\n", encoding="utf-8")
+    index = VaultIndex(tmp_path)
+    index.refresh()
+    writer = VaultWriter(index)
+
+    write = writer.run(VaultAction(action="note", folder="Кнуб", title="Доктор Живаго",
+                                   props={"book": "Доктор Живаго", "event_posted": "false"}))
+    props, _ = frontmatter.split(index.read(write.path))
+    assert props == {"book": "Доктор Живаго", "event_posted": False, "vyvody_posted": False}
+
+    # A folder whose notes share no tick box adds nothing.
+    other = writer.run(VaultAction(action="note", folder="Заметки", title="идея"))
+    assert frontmatter.split(index.read(other.path))[0] == {}
+
+
 def test_update_sets_properties_and_ticks_a_task(writer, index):
     write = writer.run(VaultAction(action="update", note="Чапаев",
                                     props={"status": "Read", "author": ""}))

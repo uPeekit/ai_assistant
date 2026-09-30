@@ -242,9 +242,13 @@ def _vault_pipeline(settings: Settings, switches: Switches, tuning: Tuning,
     writer = VaultWriter(index, tag_source=lambda: tuning.countdown_tag)
     linker = Linker(index, writer, api_key=key, model=settings.linker_model,
                     extra=lambda: tuning.linker_note, health=health)
+    strong = settings.filer_strong_model.strip()
     return VaultPipeline(index, writer, Filer(key, settings.filer_model, health=health),
                          linker, linking=lambda: switches.get("linker"), rewriter=rewriter,
-                         editor=editor)
+                         editor=editor,
+                         # A longer timeout than the light filer's: Sonnet thinks first.
+                         strong=(Filer(key, strong, timeout_s=90.0, health=health)
+                                 if strong and strong != settings.filer_model else None))
 
 
 def _daily_digest(settings: Settings, vault: VaultPipeline | None, switches: Switches,
