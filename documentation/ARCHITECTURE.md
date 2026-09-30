@@ -578,6 +578,33 @@ never when the caller supplies the text (an empty note is then about to be fille
 note also takes the tick boxes every note in its folder has (`VaultWriter._shaped`): read
 from the folder, not asked of a model, so a base shows real check boxes.
 
+**The staged reader** (`app/vault/staged.py`, `FILER_MODE=staged`; the single reader stays
+the default until the comparison in `documentation/STAGED_REVIEW.md` is judged). The single
+reader asks one question about everything — what is this, where does it go, what does it say
+— and the light model answers that unreliably. The staged one asks three narrow ones:
+
+1. *intent* — add / done / change / move / ask / unclear;
+2. *target* — exactly one key from a list the code builds: the task file, the grocery page,
+   the diary, every folder (with the properties its notes share), the pages the user's guide
+   links to, and any other note the message names word for word;
+3. *details* — a small schema that belongs to that target (tasks; products; notes of that
+   folder; lines to append), so a question about meetings cannot be answered with a book.
+
+It returns the same raw actions, so `filer.check`, the writer and the undo are untouched.
+Every value is then checked against the message (`_Gate`): a date counts only when the message
+names a time, a property value or a title only when its words are in the message or in the
+guide, a task-file heading only when the guide knows it. A task whose words equal an open
+line points at that line instead of adding a twin.
+
+One target per message is a rule, not a simplification. Three ways of letting a message reach
+several places were measured — a target per item, a "several" key, a leftover handed back by
+the details stage — and each was used on plain messages far more often than on mixed ones (a
+list of chores scattered over three places). A message that really is two notes for two
+places lands in the first.
+
+Measured on the dictated message that started this, against the live vault: single reader 0
+of 6, staged 8 of 8, on the same model and about a fifth fewer tokens.
+
 **Moving between notes** (`move`, vault only): the filer names the source, the destination
 and what to move; the editor marks lines with `delete` ops, and only a plan made of nothing
 but deletes counts. The code copies exactly those lines to the destination (appended, or a

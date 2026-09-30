@@ -94,6 +94,7 @@ from app.vault.filer import Filer
 from app.vault.index import VaultIndex
 from app.vault.linker import Linker
 from app.vault.pipeline import VaultPipeline
+from app.vault.staged import StagedFiler
 from app.vault.writer import VaultWriter
 
 log = logging.getLogger(__name__)
@@ -243,7 +244,11 @@ def _vault_pipeline(settings: Settings, switches: Switches, tuning: Tuning,
     linker = Linker(index, writer, api_key=key, model=settings.linker_model,
                     extra=lambda: tuning.linker_note, health=health)
     strong = settings.filer_strong_model.strip()
-    return VaultPipeline(index, writer, Filer(key, settings.filer_model, health=health),
+    staged = settings.filer_mode.strip().lower() == "staged"
+    log.info("vault reader: %s on %s", "staged" if staged else "single", settings.filer_model)
+    filer = (StagedFiler.claude(key, settings.filer_model, health=health) if staged
+             else Filer(key, settings.filer_model, health=health))
+    return VaultPipeline(index, writer, filer,
                          linker, linking=lambda: switches.get("linker"), rewriter=rewriter,
                          editor=editor,
                          # A longer timeout than the light filer's: Sonnet thinks first.

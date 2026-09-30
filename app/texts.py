@@ -352,6 +352,15 @@ VAULT_GUIDE = """# Как бот раскладывает записи
 # grocery page: ё sits after я, so a product starting with it would land at the bottom
 # of an otherwise alphabetical list.
 VAULT_SORT_FOLD = {"ё": "е"}
+# Word beginnings that mean a message names a time. A date the model returns counts only when
+# the message has a digit or one of these: a model asked for a date tends to supply one.
+VAULT_DATE_CUES = (
+    "сегодн", "завтр", "послезавтр", "вчера", "понедельник", "вторник", "сред", "четверг",
+    "пятниц", "суббот", "воскресен", "недел", "месяц", "выходн", "через", "январ", "феврал",
+    "март", "апрел", "мая", "май", "июн", "июл", "август", "сентябр", "октябр", "ноябр",
+    "декабр", "утр", "вечер", "ноч", "числ", "каждый", "каждую", "каждое", "ежедневн",
+    "today", "tomorrow",
+)
 VAULT_GROCERY_UNITS = ("л", "мл", "кг", "г", "гр", "шт", "уп")
 # Containers, which are unambiguous enough to strip on their own ("пачка соли").
 VAULT_GROCERY_PACKS = ("пачк", "банк", "бутыл", "пара", "пары")

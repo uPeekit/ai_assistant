@@ -67,6 +67,9 @@ class Settings(BaseSettings):
     # The vault's own interpreter ("which note is this?") and the linker. Both are small jobs
     # on a small context: Haiku.
     filer_model: str = "claude-haiku-4-5"
+    # How the vault reads a message: "single" asks one question about everything at once;
+    # "staged" asks intent, then one target, then that target's details (app/vault/staged.py).
+    filer_mode: str = "single"
     # Asked the same question when the light filer's answer is visibly off (an empty note, an
     # inbox line). "" turns the second reading off.
     filer_strong_model: str = "claude-sonnet-5"

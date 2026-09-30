@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
 import anthropic
@@ -22,7 +22,7 @@ from app.llm.health import Health, describe
 from app.llm.prompts import FILER_PROMPT, filer_message, filer_vault
 from app.vault import groceries as groceries_mod
 from app.vault import mdedit
-from app.vault.index import VaultIndex
+from app.vault.index import GUIDE_NOTE, VaultIndex
 from app.vault.writer import VaultAction
 
 log = logging.getLogger(__name__)
@@ -42,6 +42,9 @@ MAX_GUIDE = 4000
 MAX_GROCERIES = 60
 # `scope` on a grocery action: answer with what still has to be bought, write nothing.
 GROCERY_LIST = "list"
+# Properties that describe the file, not the thing it is about: never offered to a model.
+SYSTEM_PROPS = frozenset({"notion", "aliases", "tags", "cssclasses", "created"})
+GUIDE_LINK = re.compile(r"\[\[([^\]|#]+)")
 _DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _STRING = {"type": "string"}
 
@@ -100,6 +103,12 @@ class VaultContext:
     daily_folder: str
     today: str
     weekday: str
+    # For the staged reader (app/vault/staged.py), which asks about one place at a time and so
+    # can afford to say what that place looks like: the properties the notes of a folder
+    # have in common, and the properties and headings of each note in `known_notes`.
+    folder_props: dict[str, list[str]] = field(default_factory=dict)
+    note_props: dict[str, list[str]] = field(default_factory=dict)
+    note_headings: dict[str, list[str]] = field(default_factory=dict)
 
     def json(self) -> str:
         return filer_vault(guide=self.guide, today=self.today, weekday=self.weekday,
@@ -112,11 +121,21 @@ class VaultContext:
 def context(index: VaultIndex, message: str, now: datetime) -> VaultContext:
     from app.llm.context import RU_WEEKDAYS  # weekday names live with the other prompts
 
+    known = index.candidates(message, MAX_CANDIDATES)
+    guide = index.guide()[:MAX_GUIDE]
+    # The pages the guide links to are the user's hubs ("films go in a list on the media
+    # page"): their shape is shown whether or not the message shares a word with their name.
+    hubs = [n for n in (index.by_name(name) for name in GUIDE_LINK.findall(guide))
+            if n is not None]
+    shaped = {n.name: n for n in [*hubs, *known]}.values()
     return VaultContext(
-        guide=index.guide()[:MAX_GUIDE],
+        guide=guide,
         folders=index.folders(),
         tags=index.tags(),
-        known_notes=[n.name for n in index.candidates(message, MAX_CANDIDATES)],
+        known_notes=[n.name for n in known],
+        folder_props=folder_props(index),
+        note_props={n.name: sorted(n.props) for n in shaped if n.props},
+        note_headings={n.name: list(n.headings) for n in shaped if n.headings},
         open_tasks=index.open_tasks(message),
         groceries=[ln.name for ln in groceries_mod.read(index.groceries())][:MAX_GROCERIES],
         tasks_note=texts.VAULT_TASKS_NOTE,
@@ -124,6 +143,26 @@ def context(index: VaultIndex, message: str, now: datetime) -> VaultContext:
         today=now.strftime("%Y-%m-%d"),
         weekday=RU_WEEKDAYS[now.weekday()],
     )
+
+
+def folder_props(index: VaultIndex) -> dict[str, list[str]]:
+    """For every folder, the properties most of its notes carry — what makes a folder of
+    meetings or books a table. Read from the notes, so it follows the vault as it changes."""
+    by_folder: dict[str, list] = {}
+    for note in index.notes:
+        if note.folder and note.name != GUIDE_NOTE:
+            by_folder.setdefault(note.folder, []).append(note)
+    out: dict[str, list[str]] = {}
+    for folder, notes in by_folder.items():
+        counts: dict[str, int] = {}
+        for note in notes:
+            for key in note.props:
+                counts[key] = counts.get(key, 0) + 1
+        shared = sorted(k for k, n in counts.items()
+                        if n * 2 > len(notes) and k not in SYSTEM_PROPS)
+        if shared:
+            out[folder] = shared
+    return out
 
 
 def _props(raw: object) -> dict[str, str]:
@@ -240,9 +279,9 @@ def check(raw_actions: list[dict], index: VaultIndex, message: str) -> list[Vaul
             continue
         if action.action not in ACTIONS:
             action = VaultAction(action="inbox", text=action.text or message)
-        for field in ("due", "due_from", "due_to"):
-            if not _DATE.match(getattr(action, field)):
-                setattr(action, field, "")
+        for name in ("due", "due_from", "due_to"):
+            if not _DATE.match(getattr(action, name)):
+                setattr(action, name, "")
         if action.scope not in ("day", "now", "overdue", "any", GROCERY_LIST):
             action.scope = ""
         if action.repeat and not action.repeat.lower().startswith("every"):

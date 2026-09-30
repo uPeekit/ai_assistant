@@ -46,8 +46,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from app.llm.ollama import wants_think_flag
 from app.llm.prompts import FILER_PROMPT, filer_message
 from app.vault.filer import FILER_SCHEMA, Filer, FilerError, VaultContext
+from app.vault.staged import StagedFiler
 
 DEFAULT_CASES = Path("data/eval/vault_cases.yaml")
+# "staged:claude-haiku-4-5" or "staged:qwen3:8b": that model behind the staged reader.
+STAGED = "staged:"
 SCORED = ("action", "note", "folder", "tags")
 
 
@@ -118,6 +121,7 @@ class Result:
     valid: bool = False
     error: str = ""
     got: dict = field(default_factory=dict)
+    actions: list = field(default_factory=list)
     n_ok: bool = False
     fields: dict[str, bool] = field(default_factory=dict)
     scored: set[str] = field(default_factory=set)
@@ -151,6 +155,7 @@ def score(case: dict, actions: list[dict], ms: int, error: str = "") -> Result:
     if error:
         return r
     r.valid = bool(actions)
+    r.actions = actions
     first = _first(actions)
     r.got = {"action": str(first.get("action", "")), "note": str(first.get("note", "")),
              "folder": str(first.get("folder", "")), "tags": sorted(_tags(first.get("tags")))}
@@ -174,6 +179,56 @@ def score(case: dict, actions: list[dict], ms: int, error: str = "") -> Result:
         recall = hit / len(want_tags)
         r.fields["tags"] = precision == 1.0 and recall == 1.0
     return r
+
+
+_SHOWN = ("note", "to", "folder", "title", "heading", "text", "task", "due", "repeat",
+          "due_from", "due_to", "scope", "body", "props", "tags", "done", "countdown")
+
+
+def brief(action: dict) -> str:
+    """One action as a person reads it: its kind and only the fields that say something."""
+    parts = [str(action.get("action", "?"))]
+    for name in _SHOWN:
+        value = action.get(name)
+        if name == "props" and isinstance(value, list):
+            value = {str(x.get("name")): x.get("value") for x in value
+                     if isinstance(x, dict) and str(x.get("value", "")).strip()}
+        if value in (None, "", [], {}, False, "any"):
+            continue
+        parts.append(f"{name}={json.dumps(value, ensure_ascii=False)}")
+    return " ".join(parts)
+
+
+def same(one: list[dict], two: list[dict]) -> bool:
+    """Do two answers do the same thing? Compared on what is written where, not on wording:
+    the kind of each action, the note or folder it goes to, whether it carries a date and
+    whether it ticks something off."""
+    def key(action: dict) -> tuple:
+        return (str(action.get("action", "")), str(action.get("note", "")).casefold(),
+                str(action.get("folder", "")).casefold(), bool(action.get("due")),
+                action.get("done") is True)
+    return sorted(map(key, one)) == sorted(map(key, two))
+
+
+def disagreements(cases: list[dict], answers: dict[str, dict[str, Result]]) -> str:
+    """Every case where a model's answer differs from the expected one, both shown."""
+    lines = ["# Where the readers disagree", "",
+             "`expected` is the answer in the case file; judge each pair on its own.", ""]
+    for model, by_id in answers.items():
+        differing = [c for c in cases if c["id"] in by_id and not same(
+            (c.get("expect") or {}).get("actions") or [], by_id[c["id"]].actions)]
+        lines += [f"## {model} — {len(differing)} of {len(by_id)} differ", ""]
+        for case in differing:
+            got = by_id[case["id"]]
+            text = " ".join(str(case["text"]).split())
+            lines.append(f"### {case['id']} — «{text}»")
+            lines.append("- expected:")
+            lines += [f"  - {brief(x)}"
+                      for x in (case.get("expect") or {}).get("actions") or []]
+            lines.append(f"- {model}:" + (f" {got.error}" if got.error else ""))
+            lines += [f"  - {brief(x)}" for x in got.actions]
+            lines.append("")
+    return "\n".join(lines)
 
 
 @dataclass
@@ -227,7 +282,52 @@ def render(summaries: list[Summary]) -> str:
     return "\n".join(lines)
 
 
-def _filer(a: argparse.Namespace, model: str) -> Filer | OllamaFiler:
+def ollama_ask(base_url: str, model: str, *, num_ctx: int, timeout_s: float):
+    """The staged reader's question, put to a local model. Returns (ask, close)."""
+    client = httpx.AsyncClient(base_url=base_url.rstrip("/"), timeout=timeout_s)
+
+    async def ask(system: str, schema: dict, content: str) -> tuple[dict, int, int]:
+        body = {"model": model, "stream": False, "format": schema, "keep_alive": "30m",
+                "messages": [{"role": "system", "content": system},
+                             {"role": "user", "content": content}],
+                "options": {"temperature": 0.0, "num_ctx": num_ctx}}
+        if wants_think_flag(model):
+            body["think"] = False
+        try:
+            resp = await client.post("/api/chat", json=body)
+            resp.raise_for_status()
+            data = resp.json()
+            answer = json.loads((data.get("message") or {}).get("content", ""))
+        except (httpx.HTTPError, json.JSONDecodeError) as e:
+            raise FilerError(f"ollama: {type(e).__name__}") from None
+        if not isinstance(answer, dict):
+            raise FilerError("not an object")
+        return (answer, data.get("prompt_eval_count", 0) or 0,
+                data.get("eval_count", 0) or 0)
+
+    async def close() -> None:
+        try:
+            await client.post("/api/generate", json={"model": model, "keep_alive": 0})
+        except httpx.HTTPError:
+            pass
+        await client.aclose()
+
+    return ask, close
+
+
+def _filer(a: argparse.Namespace, model: str) -> Filer | OllamaFiler | StagedFiler:
+    if model.startswith(STAGED):
+        inner = model[len(STAGED):]
+        if inner.startswith("claude-"):
+            key = _Keys(_env_file=a.env).anthropic_api_key.get_secret_value()
+            if not key:
+                raise SystemExit(f"ANTHROPIC_API_KEY is not set ({a.env})")
+            staged = StagedFiler.claude(key, inner, timeout_s=a.timeout)
+        else:
+            ask, close = ollama_ask(a.ollama, inner, num_ctx=a.num_ctx, timeout_s=a.timeout)
+            staged = StagedFiler(ask, inner, close)
+        staged.model = model  # the table names the reader, not only the model under it
+        return staged
     if model.startswith("claude-"):
         key = _Keys(_env_file=a.env).anthropic_api_key.get_secret_value()
         if not key:
@@ -236,7 +336,7 @@ def _filer(a: argparse.Namespace, model: str) -> Filer | OllamaFiler:
     return OllamaFiler(a.ollama, model, num_ctx=a.num_ctx, timeout_s=a.timeout)
 
 
-async def run_model(client: Filer | OllamaFiler, cases: list[dict],
+async def run_model(client: Filer | OllamaFiler | StagedFiler, cases: list[dict],
                     limit: int = 0) -> list[Result]:
     out: list[Result] = []
     for i, case in enumerate(cases[:limit] if limit else cases, 1):
@@ -295,6 +395,7 @@ async def main_async(a: argparse.Namespace) -> int:
     reviewed = sum(1 for c in cases if (c.get("expect") or {}).get("reviewed"))
     summaries: list[Summary] = []
     misses: dict[str, list[Result]] = {}
+    answers: dict[str, dict[str, Result]] = {}
     for model in a.models.split(","):
         model = model.strip()
         if not model:
@@ -306,11 +407,15 @@ async def main_async(a: argparse.Namespace) -> int:
         finally:
             await client.aclose()
         summaries.append(summarize(model, results))
+        answers[model] = {r.id: r for r in results}
         misses[model] = [r for r in results if r.labelled and not r.all_ok]
 
     table = render(summaries)
     print("\n" + table)
     print(f"\ncases {len(cases)}, human-reviewed {reviewed}")
+    if a.disagree:
+        a.disagree.write_text(disagreements(cases, answers), encoding="utf-8")
+        print(f"wrote {a.disagree}")
     if a.write:
         lines = [f"# Filer benchmark — {datetime.now(UTC).date().isoformat()}", "",
                  f"Cases: `{a.cases}` ({len(cases)}, human-reviewed {reviewed}), "
@@ -336,6 +441,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--timeout", type=float, default=300.0)
     p.add_argument("--limit", type=int, default=0)
     p.add_argument("--write", type=Path)
+    p.add_argument("--disagree", type=Path,
+                   help="write the cases where a model's whole answer differs from the "
+                        "expected one, side by side, for a person to judge")
     a = p.parse_args(argv)
     return asyncio.run(main_async(a))
 

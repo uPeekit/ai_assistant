@@ -21,6 +21,7 @@ TOKEN = "1a2b3c4d"
 # the user via the conversation layer.
 ALLOWED_CYRILLIC_FILES = {
     Path("app/texts.py"), Path("app/llm/prompts.py"), Path("app/llm/context.py"),
+    Path("app/llm/staged_prompts.py"),
 }
 CYRILLIC = re.compile(r"[а-яА-ЯёЁ]")
 
