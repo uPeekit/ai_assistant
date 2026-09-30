@@ -578,8 +578,10 @@ never when the caller supplies the text (an empty note is then about to be fille
 note also takes the tick boxes every note in its folder has (`VaultWriter._shaped`): read
 from the folder, not asked of a model, so a base shows real check boxes.
 
-**The staged reader** (`app/vault/staged.py`, `FILER_MODE=staged`; the single reader stays
-the default until the comparison in `documentation/STAGED_REVIEW.md` is judged). The single
+**The staged reader** (`app/vault/staged.py`, the default since 0.6.10; `FILER_MODE=single`
+brings the old one back). On the 53 real messages where the two readers disagreed, the user
+judged the staged reader right 36 times, both fine 10, the single one right 4 and neither 3
+(`documentation/STAGED_REVIEW.md`); the seven losses were each fixed and replayed. The single
 reader asks one question about everything — what is this, where does it go, what does it say
 — and the light model answers that unreliably. The staged one asks three narrow ones:
 

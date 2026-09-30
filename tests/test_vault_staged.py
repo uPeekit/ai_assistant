@@ -447,3 +447,66 @@ async def test_a_single_chore_is_never_expanded_into_a_made_up_checklist():
     actions, _, _ = await StagedFiler(script, "haiku").file("надо внести траты", ctx())
     assert [a["text"] for a in actions] == ["внести траты"]
     assert "LOOKUP_TASKS_PROMPT" not in script.stages
+
+
+# ---- from the review of the 81 real messages ------------------------------------------------
+
+async def test_titles_the_user_never_said_are_a_set_to_look_up_not_notes():
+    """e18: asked for «все романы Пелевина», the details stage listed three novels from memory
+    instead of asking for a lookup. «Чапаев и Пустота» got past the check only because of «и»."""
+    light = Script(
+        INTENT_PROMPT={"intent": "add"}, TARGET_PROMPT={"target": "f2"},
+        FOLDER_PROMPT={"items": [{"title": "Чапаев и Пустота", "props": [], "body": [],
+                                  "tags": []}], "lookup": "", "web": "", "media": "text"})
+    strong = Script(LOOKUP_NOTES_PROMPT={"items": [{"title": "Омон Ра", "props": []},
+                                                   {"title": "Чапаев и Пустота", "props": []}]})
+    message = "я прочитал все романы Пелевина добавь их в список прочитанных книг"
+
+    actions, _, _ = await StagedFiler(light, "haiku", lookup=strong).file(message, ctx())
+
+    assert [a["title"] for a in actions] == ["Омон Ра", "Чапаев и Пустота"]
+    assert all(a.get("looked_up") for a in actions)  # both from the lookup, both guarded
+    assert message in strong.asked[0][2]  # asked with the user's words, having none of its own
+
+
+async def test_a_note_is_named_when_most_of_its_name_is_there_despite_dictation():
+    """e93: «Найди мне страницу мою проворота тории … каждый вид и подвид» — «про» glued onto
+    «ворота», and «виды» said as «вид». Two of three words is naming the note."""
+    script = Script(INTENT_PROMPT={"intent": "change"}, CHANGE_PROMPT={"target": "none"})
+    await StagedFiler(script, "haiku").file(
+        "Найди мне страницу мою проворота тории и там с каждым подтипе картинка, каждый вид "
+        "и подвид", ctx(known_notes=["Виды ворот тории", "Смотритель"]))
+
+    choices = script.asked[1][2]
+    assert "«Виды ворот тории»" in choices
+    assert "«Смотритель»" not in choices
+
+
+async def test_changing_a_note_can_bring_a_search_whose_result_is_appended():
+    """e90 and e93: the edit the words ask for, plus what the search found at the end of the
+    same note — never handed to the editor, because what the web returns is data."""
+    script = Script(INTENT_PROMPT={"intent": "change"}, CHANGE_PROMPT={"target": "n3"},
+                    CHANGE_NOTE_PROMPT={"kind": "rewrite", "props": [], "heading": "",
+                                        "web": "виды ворот тории картинки", "media": "images"})
+    message = "найди в пройектах каждый вид ворот и добавь картинки"
+
+    actions, _, _ = await StagedFiler(script, "haiku").file(message, ctx())
+
+    assert actions == [
+        {"action": "rewrite", "note": "пройекты", "text": message, "heading": ""},
+        {"action": "append", "note": "пройекты", "body": [],
+         "research": "виды ворот тории картинки", "media": "images"}]
+
+
+async def test_asking_for_a_plan_or_a_comparison_counts_as_asking_for_research():
+    """e21: «сравнить варианты и придумай нам план» named no search word, so the search the
+    reader asked for was refused and nothing but a search of the notes remained."""
+    folder = {"items": [{"title": "поездка на выходные", "props": [], "body": [], "tags": []}],
+              "lookup": "", "web": "паром Хельсинки или Стокгольм с ребёнком в октябре",
+              "media": "text"}
+    script = Script(INTENT_PROMPT={"intent": "add"}, TARGET_PROMPT={"target": "f1"},
+                    FOLDER_PROMPT=folder)
+    [action], _, _ = await StagedFiler(script, "haiku").file(
+        "хотим на выходные на пароме в Хельсинки или Стокгольм, сравни варианты и придумай "
+        "план поездки", ctx())
+    assert action["research"] == "паром Хельсинки или Стокгольм с ребёнком в октябре"

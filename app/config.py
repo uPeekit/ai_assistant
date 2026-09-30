@@ -69,7 +69,9 @@ class Settings(BaseSettings):
     filer_model: str = "claude-haiku-4-5"
     # How the vault reads a message: "single" asks one question about everything at once;
     # "staged" asks intent, then one target, then that target's details (app/vault/staged.py).
-    filer_mode: str = "single"
+    # Staged since 0.6.10: on the 53 real messages where the two disagreed, the user judged
+    # staged right 36 times, both fine 10, single right 4, neither 3.
+    filer_mode: str = "staged"
     # Asked the same question when the light filer's answer is visibly off (an empty note, an
     # inbox line). "" turns the second reading off.
     filer_strong_model: str = "claude-sonnet-5"

@@ -93,12 +93,30 @@ def _task_words(line: str) -> set[str]:
     return tokens(" ".join(w for w in bare.split() if not w.startswith("#")))
 
 
+def _same_word(one: str, two: str) -> bool:
+    """`index.related`, which already refuses words that merely start alike, plus a word too
+    short for it (under four letters) that begins the other one."""
+    if related(one, two):
+        return True
+    short, other = sorted((one.casefold(), two.casefold()), key=len)
+    return len(short) < 4 and len(other) - len(short) <= 2 and other.startswith(short)
+
+
 def _names(message: str, name: str) -> bool:
-    """Does the message name this note? Every word of the name has to be there, as the same
-    word in some form — not merely a word that starts alike."""
+    """Does the message name this note? Most of the name's words have to be there, each as the
+    same word in some form — not merely a word that starts alike.
+
+    Most rather than all: dictation glues and drops words, and a note called "kinds of torii
+    gates" was not offered for a message that said "my page about the gates … every kind and
+    sub-kind", with "about" glued onto "gates". One word of a one- or two-word name is not
+    enough, which is what keeps a note that merely begins with the same letters out."""
     said = _WORD.findall(message.casefold())
-    wanted = _WORD.findall(name.casefold())
-    return bool(wanted) and all(any(related(w, word) for word in said) for w in wanted)
+    wanted = [w for w in _WORD.findall(name.casefold()) if len(w) > 2] or \
+        _WORD.findall(name.casefold())
+    if not wanted:
+        return False
+    hits = sum(1 for w in wanted if any(_same_word(w, word) for word in said))
+    return hits == len(wanted) if len(wanted) <= 2 else hits * 3 >= len(wanted) * 2
 
 
 def _props(item: dict, judge: Callable[[object], str | None]) -> list[dict]:
@@ -185,6 +203,16 @@ class _Gate:
         """Every word of `value` is in the message (in any form)."""
         wanted = tokens(value)
         return bool(wanted) and all(any(_close(w, m) for m in self._tokens) for w in wanted)
+
+    def named(self, title: str) -> bool:
+        """At least half of the title's real words are in the message. "and", a single letter
+        or a number do not count: they let three novels the model knew from memory through as
+        if the user had named them."""
+        wanted = [w for w in tokens(title) if len(w) > 2]
+        if not wanted:
+            return self.mentions(title)
+        hits = sum(1 for w in wanted if any(_close(w, m) for m in self._tokens))
+        return hits * 2 >= len(wanted)
 
     def mentions(self, value: str) -> bool:
         """At least one word of `value` is in the message."""
@@ -396,7 +424,8 @@ class _Run:
         theirs, as on the Notion side, because a search is minutes of waiting."""
         query = str(answer.get("web", "")).strip()
         low = self.message.casefold()
-        if not query or not any(word in low for word in WEB_WORDS):
+        cues = (*WEB_WORDS, *texts.VAULT_COMPOSE_CUES)
+        if not query or not any(word in low for word in cues):
             return None
         media = str(answer.get("media", "")).strip()
         return query, media if media in MEDIA else "text"
@@ -478,13 +507,18 @@ class _Run:
                       P.section(P.H_TAGS, ", ".join(ctx.tags)), text=text))
         gate = _Gate(text, ctx.guide)
         known_tags = {t.casefold() for t in ctx.tags}
-        out = []
+        out: list[dict] = []
+        recalled: list[str] = []
         for item in answer.get("items") or []:
             if not isinstance(item, dict):
                 continue
             title = str(item.get("title", "")).strip()
-            # A title none of whose words the user said is a note about something else.
-            if not title or not gate.mentions(title):
+            if not title:
+                continue
+            if not gate.named(title):
+                # A title the user never said: the model listed a set from memory instead of
+                # asking for a lookup. That set is what the lookup is for (below).
+                recalled.append(title)
                 continue
             out.append({
                 "action": "note", "folder": folder, "title": title,
@@ -494,6 +528,9 @@ class _Run:
                          if t.casefold() in known_tags],
             })
         lookup = str(answer.get("lookup", "")).strip()
+        if recalled and not lookup:
+            log.info("staged: %d title(s) from memory, looking the set up instead", len(recalled))
+            lookup = text
         if lookup:
             seen = {o["title"].casefold() for o in out}
             schema = _obj({"items": {"type": "array", "items": _obj({
@@ -611,7 +648,8 @@ class _Run:
         headings = ctx.note_headings.get(note, [])
         answer = await self._ask(
             P.CHANGE_NOTE_PROMPT,
-            _obj({"kind": _enum(("props", "rewrite")), "props": _PROPS, "heading": _STRING}),
+            _obj({"kind": _enum(("props", "rewrite")), "props": _PROPS, "heading": _STRING,
+                  "web": _STRING, "media": _enum(MEDIA)}),
             P.message(self._guide(), self._today(), P.section(P.H_NOTE, note),
                       P.section(P.H_NOTE_PROPS, ", ".join(ctx.note_props.get(note, []))),
                       P.section(P.H_HEADINGS, "\n".join(headings)), text=text))
@@ -626,8 +664,16 @@ class _Run:
             if props:
                 return [{"action": "update", "note": note, "props": props}]
         heading = str(answer.get("heading", "")).strip()
-        return [{"action": "rewrite", "note": note, "text": text,
-                 "heading": heading if heading in headings else ""}]
+        out = [{"action": "rewrite", "note": note, "text": text,
+                "heading": heading if heading in headings else ""}]
+        web = self._web(answer)
+        if web:
+            # "Find my page about X and add pictures of each kind": the edit the words ask for,
+            # then what the search found, appended. The found text is never handed to the
+            # editor — what the web returns is data, not an instruction.
+            out.append({"action": "append", "note": note, "body": [],
+                        "research": web[0], "media": web[1]})
+        return out
 
     # ---- move ----------------------------------------------------------------------------
 

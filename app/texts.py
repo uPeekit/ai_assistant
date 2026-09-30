@@ -357,6 +357,10 @@ VAULT_SORT_FOLD = {"ё": "е"}
 # Words that ask for a whole set of chores («всё что нужно взять», «список дел для переезда»).
 # Without one, a lookup on the task file is the model inventing work: «надо внести траты»
 # came back as a five-step checklist.
+# Asking for something to be worked out rather than written down («сравни варианты и
+# придумай план поездки»): the vault may search for it, as it does for «найди».
+VAULT_COMPOSE_CUES = ("придума", "спланир", "сравни", "составь план", "составь маршрут",
+                      "подбери", "посоветуй")
 VAULT_SET_CUES = ("все", "всё", "всех", "весь", "вся", "список", "перечисл",
                   "что взять", "что нужно", "что надо", "полный", "целиком")
 VAULT_DATE_CUES = (
