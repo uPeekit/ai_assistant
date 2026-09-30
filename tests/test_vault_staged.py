@@ -35,7 +35,8 @@ class Script:
         self.answers = answers
         self.asked: list[tuple[str, dict, str]] = []
 
-    async def __call__(self, system: str, schema: dict, content: str):
+    async def __call__(self, system: str, schema: dict, content: str,
+                       max_tokens: int = 0):
         name = next(k for k, v in vars(P).items() if k.endswith("_PROMPT") and v == system)
         self.asked.append((name, schema, content))
         answer = self.answers[name]
@@ -280,7 +281,9 @@ async def test_whatever_the_stages_answer_the_result_passes_the_same_gate_as_bef
 
 
 def test_the_gate_sees_short_words_and_knows_a_time_from_a_word_that_contains_one():
-    assert tokens("сыра, Чай и ёж") == {"сыр", "чай", "и", "еж"}
+    assert tokens("сыра, Чай и ёж") == {"сыра", "чай", "и", "еж"}
+    assert _Gate("купить борща", "").said("борщ")  # a four-letter word, inflected
+    assert _Gate("два кило сыра", "").said("сыр")  # a short one
     gate = _Gate("купить сыр 12 октября, статус читаю", GUIDE)
     assert gate.said("сыр") and not gate.said("Пастернак")
     assert gate.prop("To read") == "To read"        # from the user's guide
@@ -352,3 +355,95 @@ async def test_a_task_that_is_already_open_is_not_filed_a_second_time():
     assert actions[0] == {"action": "update", "note": "Задачи",
                           "task": "платить счета #home 📅 2026-09-15"}
     assert actions[1]["action"] == "task" and actions[1]["text"] == "заказать очки"
+
+
+# ---- the vault plans for itself: lookups and web searches ---------------------------------
+
+async def test_a_set_the_user_did_not_list_is_looked_up_and_each_item_becomes_a_note():
+    """«я прочитал все романы Пелевина, добавь в список прочитанных» gave one note: the list of
+    novels only ever existed in the Notion planner's steps. The vault now asks for it itself —
+    of the lookup model — and writes one note per book."""
+    light = Script(
+        INTENT_PROMPT={"intent": "add"}, TARGET_PROMPT={"target": "f2"},
+        FOLDER_PROMPT={"items": [], "lookup": "романы Пелевина, все прочитаны", "web": "",
+                       "media": "text"})
+    strong = Script(LOOKUP_NOTES_PROMPT={"items": [
+        {"title": "Омон Ра", "props": [{"name": "author", "value": "Виктор Пелевин"},
+                                      {"name": "status", "value": "Read"},
+                                      {"name": "url", "value": "https://example.com/omon"}]},
+        {"title": "Generation П", "props": [{"name": "date", "value": "1999-03-01"}]},
+        {"title": "омон ра", "props": []}]})  # the same book twice is one note
+
+    actions, prompt_tokens, _ = await StagedFiler(light, "haiku", lookup=strong).file(
+        "я прочитал все романы Пелевина добавь в список прочитанных книг", ctx())
+
+    assert [(a["folder"], a["title"]) for a in actions] == [
+        ("Книги", "Омон Ра"), ("Книги", "Generation П")]
+    # Knowing the author is what the lookup was for; a link or a date from memory is not.
+    assert actions[0]["props"] == [{"name": "author", "value": "Виктор Пелевин"},
+                                   {"name": "status", "value": "Read"}]
+    assert actions[1]["props"] == []
+    assert strong.stages == ["LOOKUP_NOTES_PROMPT"] and "TITLE_PROMPT" not in light.stages
+    assert "романы Пелевина, все прочитаны" in strong.asked[0][2]
+    assert prompt_tokens == 400  # four calls, the lookup included
+
+
+async def test_a_web_search_is_asked_for_only_when_the_user_asked_for_one():
+    folder = {"items": [{"title": "рецепт борща", "props": [], "body": [], "tags": []}],
+              "lookup": "", "web": "рецепт борща из копчёной курицы", "media": "text"}
+    for message, research in (("найди рецепт борща и запиши в заметки",
+                               "рецепт борща из копчёной курицы"),
+                              ("запиши рецепт борща в заметки", None)):
+        script = Script(INTENT_PROMPT={"intent": "add"}, TARGET_PROMPT={"target": "f1"},
+                        FOLDER_PROMPT=dict(folder))
+        [action], _, _ = await StagedFiler(script, "haiku").file(message, ctx())
+        assert action.get("research") == research, message
+
+
+async def test_a_list_page_gets_the_looked_up_lines_and_a_search_goes_on_the_append():
+    script = Script(INTENT_PROMPT={"intent": "add"}, TARGET_PROMPT={"target": "n1"},
+                    APPEND_PROMPT={"heading": "", "body": [], "lookup": "фильмы Нолана",
+                                   "web": "", "media": "text"},
+                    LOOKUP_LINES_PROMPT={"items": ["Помни", "Начало", " "]})
+    [action], _, _ = await StagedFiler(script, "haiku").file(
+        "добавь в дом все фильмы Нолана", ctx())
+    assert action["body"] == ["Помни", "Начало"]
+
+    script = Script(INTENT_PROMPT={"intent": "add"}, TARGET_PROMPT={"target": "n1"},
+                    APPEND_PROMPT={"heading": "", "body": [], "lookup": "",
+                                   "web": "уход за фикусом", "media": "text_and_images"})
+    [action], _, _ = await StagedFiler(script, "haiku").file(
+        "найди как ухаживать за фикусом и допиши в дом", ctx())
+    assert action["body"] == [] and action["research"] == "уход за фикусом"
+    assert action["media"] == "text_and_images"
+
+
+async def test_looked_up_chores_take_the_date_the_user_gave_the_whole_list():
+    script = Script(
+        INTENT_PROMPT={"intent": "add"}, TARGET_PROMPT={"target": "t"},
+        TASKS_PROMPT={"items": [{"text": "собрать рюкзак", "due": "2026-10-01", "repeat": "",
+                                 "heading": "дом", "tag": "home", "countdown": False}],
+                      "lookup": "что взять в поход"},
+        LOOKUP_TASKS_PROMPT={"items": ["взять палатку", "взять спальник"]})
+    actions, _, _ = await StagedFiler(script, "haiku").file(
+        "завтра поход, собрать рюкзак и всё что нужно взять", ctx())
+    assert [(a["text"], a["due"], a["tags"]) for a in actions] == [
+        ("собрать рюкзак", "2026-10-01", ["home"]), ("взять палатку", "2026-10-01", ["home"]),
+        ("взять спальник", "2026-10-01", ["home"])]
+
+
+def test_the_staged_reader_says_it_plans_for_itself():
+    assert StagedFiler(Script(), "haiku").plans_itself is True
+
+
+async def test_a_single_chore_is_never_expanded_into_a_made_up_checklist():
+    """«надо внести траты» came back as five chores the user never mentioned: the tasks stage
+    asked for a lookup, and a lookup on the task file invents work. It takes a word that asks
+    for a set («все», «список», «что взять»)."""
+    script = Script(INTENT_PROMPT={"intent": "add"}, TARGET_PROMPT={"target": "t"},
+                    TASKS_PROMPT={"items": [{"text": "внести траты", "due": "", "repeat": "",
+                                             "heading": "", "tag": "", "countdown": False}],
+                                  "lookup": "как вести учёт трат"})
+    actions, _, _ = await StagedFiler(script, "haiku").file("надо внести траты", ctx())
+    assert [a["text"] for a in actions] == ["внести траты"]
+    assert "LOOKUP_TASKS_PROMPT" not in script.stages

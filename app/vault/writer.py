@@ -51,6 +51,11 @@ class VaultAction(BaseModel):
     due_from: str = ""
     due_to: str = ""
     scope: str = ""
+    # The body is to be looked up on the web before writing: what to search for, and
+    # whether text, pictures or both (app/vault/pipeline.py fills it in; the writer never
+    # sees an action that still carries one).
+    research: str = ""
+    media: str = ""
 
 
 class VaultUndo(BaseModel):

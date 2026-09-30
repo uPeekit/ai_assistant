@@ -20,6 +20,7 @@ from pathlib import PurePosixPath
 from app import texts
 from app.llm.edits import EditError, Editor, NothingToChange
 from app.llm.prompts import MOVE_INSTRUCTION
+from app.llm.research import ResearchError, ResearchQuestion
 from app.llm.rewrite import RewriteError, Rewriter
 from app.vault import agenda as agenda_mod
 from app.vault import frontmatter, mdedit
@@ -30,6 +31,9 @@ from app.vault.search import Hit, search, vault_name
 from app.vault.writer import VaultAction, VaultUndo, VaultWrite, VaultWriter
 
 log = logging.getLogger(__name__)
+
+# (the user's message, what to search for, text / images / text_and_images) -> markdown
+Research = Callable[[str, str, str], Awaitable[str]]
 
 MAX_SUMMARY = 3
 # Where a plan step's text goes when the filer picked no note for it. A folder, not the
@@ -92,6 +96,9 @@ class VaultTurn:
     # app/llm/health.py, so the reply names the cause in the user's own language rather than
     # showing them "claude 400".
     reason: str = ""
+    # Said after what was written, when it was written with something missing: a search
+    # that found nothing still leaves the note the user asked for.
+    remark: str = ""
     model: str = ""
     prompt_tokens: int = 0
     output_tokens: int = 0
@@ -113,6 +120,8 @@ class VaultTurn:
         what = ", ".join(w.what for w in self.writes[:MAX_SUMMARY])
         if len(self.writes) > MAX_SUMMARY:
             what += f" (+{len(self.writes) - MAX_SUMMARY})"
+        if self.remark:
+            what += f" — {self.remark}"
         line = texts.VAULT_REPLY.format(what=what)
         if self.answer:
             return f"{line}\n{self.answer}"
@@ -154,6 +163,12 @@ class VaultPipeline:
         self._linking = linking
         self._tasks: set[asyncio.Task] = set()  # linking, running behind the reply
 
+    @property
+    def plans_itself(self) -> bool:
+        """Does this vault's reader look things up and search the web on its own? Then the
+        Notion side hands it nothing: the two branches plan independently."""
+        return bool(getattr(self._filer, "plans_itself", False))
+
     async def aclose(self) -> None:
         for task in list(self._tasks):
             task.cancel()
@@ -168,14 +183,19 @@ class VaultPipeline:
             await self._editor.aclose()
 
     async def handle(self, message: str, *, content: str = "",
-                     go: Callable[[], Awaitable[bool]] | None = None) -> VaultTurn:
+                     go: Callable[[], Awaitable[bool]] | None = None,
+                     research: Research | None = None) -> VaultTurn:
         """Read the message, write the vault, and start the linking behind the reply.
 
         `content` is text the caller already has (a plan step's research): the filer still
         decides where it goes, but it is written as it stands. `go` is awaited before
         anything is written, so a caller that started this in parallel and then learned it
         was not wanted can stop it without a half-finished write — cancelling the task
-        could not, because the writes happen in a thread."""
+        could not, because the writes happen in a thread.
+
+        `research` runs a web search for an action that asks for one (the staged reader
+        decides that on its own); the orchestrator hands in one that is shared with the
+        Notion side, so the same search for the same message runs once."""
         try:
             await asyncio.to_thread(self._index.refresh)
             ctx = context(self._index, message, self._now())
@@ -207,12 +227,20 @@ class VaultPipeline:
             log.info("vault: held back; the text the Notion side produced is written instead")
             return VaultTurn(model=model, prompt_tokens=prompt_tokens,
                              output_tokens=output_tokens)
+        if not actions and any(isinstance(r, dict) and r.get("looked_up") for r in raw):
+            # Every item of the set the user asked for is already in the vault, and check()
+            # leaves those alone. That is an answer, not a message nobody understood.
+            log.info("vault: everything looked up is already there")
+            return VaultTurn(answer=texts.VAULT_ALL_THERE, model=model,
+                             prompt_tokens=prompt_tokens, output_tokens=output_tokens)
         if not actions:  # the model answered nothing usable: keep the words rather than drop them
             actions = [VaultAction(action="inbox", text=message)]
         if content:
             actions = with_content(actions, content, message)
         turn = VaultTurn(model=model, prompt_tokens=prompt_tokens,
                          output_tokens=output_tokens, vault=vault_name(self._index.root))
+        if any(a.research for a in actions):
+            actions = await self._looked_up(actions, message, research, turn)
         dated = [a for a in actions if a.action == "agenda"]
         questions = [a for a in actions if a.action == "search"]
         shopping = [a for a in actions
@@ -258,6 +286,39 @@ class VaultPipeline:
                               if turn.answer else [])]) or "-")
         self._link_later(turn.writes)
         return turn
+
+    async def _looked_up(self, actions: list[VaultAction], message: str,
+                         research: Research | None, turn: VaultTurn) -> list[VaultAction]:
+        """Each action that asks for a web search, with what the search found as its body.
+
+        The found text goes into the note as it stands and never into a prompt: what the
+        web returned is data. A search that fails still leaves a new note written (the
+        user asked for the page), with a word in the reply about why it is empty."""
+        out: list[VaultAction] = []
+        for action in actions:
+            if not action.research:
+                out.append(action)
+                continue
+            query, media = action.research, action.media or "text"
+            action = action.model_copy(update={"research": "", "media": ""})
+            found = ""
+            if research is None:
+                turn.remark = turn.remark or texts.VAULT_WEB_OFF
+            else:
+                try:
+                    found = await research(message, query, media)
+                except ResearchQuestion:
+                    turn.remark = turn.remark or texts.VAULT_WEB_UNCLEAR
+                except ResearchError as e:
+                    log.warning("vault web search failed: %s", e)
+                    turn.remark = turn.remark or texts.VAULT_WEB_FAILED
+            if found.strip():
+                action = action.model_copy(
+                    update={"body": [*action.body, *found.strip().splitlines()]})
+            elif action.action == "append" and not action.body:
+                continue  # nothing to add to a note that is already there
+            out.append(action)
+        return out
 
     async def _rewritten(self, action: VaultAction, turn: VaultTurn) -> VaultAction | None:
         """The same action with `body` filled in, or None when nothing could be changed and

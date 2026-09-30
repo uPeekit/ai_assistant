@@ -354,6 +354,11 @@ VAULT_GUIDE = """# Как бот раскладывает записи
 VAULT_SORT_FOLD = {"ё": "е"}
 # Word beginnings that mean a message names a time. A date the model returns counts only when
 # the message has a digit or one of these: a model asked for a date tends to supply one.
+# Words that ask for a whole set of chores («всё что нужно взять», «список дел для переезда»).
+# Without one, a lookup on the task file is the model inventing work: «надо внести траты»
+# came back as a five-step checklist.
+VAULT_SET_CUES = ("все", "всё", "всех", "весь", "вся", "список", "перечисл",
+                  "что взять", "что нужно", "что надо", "полный", "целиком")
 VAULT_DATE_CUES = (
     "сегодн", "завтр", "послезавтр", "вчера", "понедельник", "вторник", "сред", "четверг",
     "пятниц", "суббот", "воскресен", "недел", "месяц", "выходн", "через", "январ", "феврал",
@@ -403,6 +408,12 @@ VAULT_FAILED = "⚠️ Obsidian — не записано: {error}"
 VAULT_NOTHING_TO_CHANGE = "не нашёл, что именно поправить"
 VAULT_REWRITE_OFF = "некому переписать — нужен Claude"
 # A move the editor could not pin down to lines: nothing is cut, nothing is copied.
+# A note that asked for a web search and was written without what it would have found.
+# A set the user asked for, every item of which the vault already has.
+VAULT_ALL_THERE = "всё это уже есть — ничего не менял"
+VAULT_WEB_OFF = "поиск в интернете не подключён, записал без него"
+VAULT_WEB_FAILED = "в интернете ничего не нашлось, записал без найденного"
+VAULT_WEB_UNCLEAR = "поиску нужен запрос точнее, записал без найденного"
 VAULT_NOTHING_TO_MOVE = "не нашёл, что переносить — ничего не тронул"
 VAULT_MOVE_UNCLEAR = "не понял, какие строки переносить — ничего не тронул"
 VAULT_WHAT = {

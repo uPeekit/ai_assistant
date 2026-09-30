@@ -70,6 +70,7 @@ from app.conversation.session import (
     SessionStore,
     session_from_decision,
 )
+from app.conversation.shared_research import SharedResearch
 from app.conversation.steps import to_interpretation
 from app.interpretation.models import Interpretation
 from app.llm.base import (
@@ -330,6 +331,9 @@ class _Turn:
     # the end, so the vault writes once per message — never once per step.
     vault_text: str = ""
     vault_content: list[str] = field(default_factory=list)
+    # One web search per message, whichever branch asks first (shared_research.py). The
+    # two branches read and plan on their own; this is the one thing they share.
+    research: SharedResearch | None = None
     execution_id: int | None = None
 
     def let_vault_write(self, allowed: bool) -> None:
@@ -525,7 +529,8 @@ class Orchestrator:
             turn.vault_text = text
             turn.vault_go = asyncio.get_running_loop().create_future()
             turn.vault = asyncio.create_task(
-                self._vault.handle(text, go=lambda: turn.vault_go))
+                self._vault.handle(text, go=lambda: turn.vault_go,
+                                   research=self._vault_research(turn)))
 
         # A live session makes this message a free-text answer: the model sees the question it is
         # answering and both halves of the request, and its fresh interpretation replaces the
@@ -595,7 +600,8 @@ class Orchestrator:
             return self._plain(turn, "NOTHING_ENABLED")
         turn.audit(decision=_kind("VAULT"))
         turn.source_text = text
-        turn.vault = asyncio.create_task(self._vault.handle(text))
+        turn.vault = asyncio.create_task(
+            self._vault.handle(text, research=self._vault_research(turn)))
         return Reply("")
 
     async def _dispatch(
@@ -656,7 +662,8 @@ class Orchestrator:
         if isinstance(command, Search):
             return Reply(format_search(executed))
         text_reply = format_execution(executed, target_url=candidate.target.url)
-        if turn.vault is not None and (turn.plan is not None or candidate.web_query):
+        if (turn.vault is not None and not self._vault.plans_itself
+                and (turn.plan is not None or candidate.web_query)):
             # Words the user never wrote — what a search found, what a plan step composed —
             # are the one thing the vault cannot get from the message itself. Anything else
             # it reads on its own, from the message, once.
@@ -688,7 +695,7 @@ class Orchestrator:
             return decision, await self._inbox_or_error(turn, text, "WEB_UNAVAILABLE")
         await self._progress(turn, Reply(texts.SEARCHING_THE_WEB))
         try:
-            found = await self._researcher.research(text, candidate.web_query,
+            found = await self._search(turn)(text, candidate.web_query,
                                                     candidate.web_media)
         except ResearchQuestion as e:
             q = Question(type="clarify", target_key=candidate.key, proposed=e.question)
@@ -1281,6 +1288,8 @@ class Orchestrator:
         )
         return _Turn(
             event_id, chat_id, self._clock(), source_text=cols.get("raw_input"),
+            research=(SharedResearch(self._researcher)
+                      if self._researcher is not None else None),
             # A placeholder no exit ever writes, so the column is never null and a row that was
             # closed without a decision is visible as exactly that.
             cols={"decision": _kind(OPEN)},
@@ -1298,6 +1307,16 @@ class Orchestrator:
     def _plain(self, turn: _Turn, code: str, **fmt: Any) -> Reply:
         turn.audit(error=code, decision=json.dumps({"kind": "ERROR", "code": code}))
         return Reply(_error(code, **fmt))
+
+    def _search(self, turn: _Turn):
+        """The web search this turn's Notion side should use: the shared one."""
+        assert self._researcher is not None
+        return turn.research.research if turn.research is not None else (
+            self._researcher.research)
+
+    def _vault_research(self, turn: _Turn):
+        """The web search the vault may run, shared with the Notion side of this turn."""
+        return turn.research.research if turn.research is not None else None
 
     def _hand_over(self, turn: _Turn) -> None:
         """Open the vault's gate, the one time it opens.

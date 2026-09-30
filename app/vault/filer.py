@@ -42,6 +42,8 @@ MAX_GUIDE = 4000
 MAX_GROCERIES = 60
 # `scope` on a grocery action: answer with what still has to be bought, write nothing.
 GROCERY_LIST = "list"
+# What a web search may bring back for a note: the research module's own names.
+MEDIA = ("text", "text_and_images", "images")
 # Properties that describe the file, not the thing it is about: never offered to a model.
 SYSTEM_PROPS = frozenset({"notion", "aliases", "tags", "cssclasses", "created"})
 GUIDE_LINK = re.compile(r"\[\[([^\]|#]+)")
@@ -143,6 +145,31 @@ def context(index: VaultIndex, message: str, now: datetime) -> VaultContext:
         today=now.strftime("%Y-%m-%d"),
         weekday=RU_WEEKDAYS[now.weekday()],
     )
+
+
+_NOT_A_LETTER = re.compile(r"[\W_]+")
+
+
+def _bare(name: str) -> str:
+    """A name reduced to its letters and digits, with the one letter Russian spells two
+    ways folded to one."""
+    folded = "".join(texts.VAULT_SORT_FOLD.get(c, c) for c in name.casefold())
+    return _NOT_A_LETTER.sub("", folded)
+
+
+def _same_note(index: VaultIndex, title: str, folder: str):
+    """The note this title means, if there is one: by name, or by the same letters and
+    digits once punctuation and quotes are dropped — a looked-up title writes a full stop or
+    a pair of quotes the migrated note's name does not have."""
+    found = index.by_name(title)
+    if found is not None:
+        return found
+    wanted = _bare(title)
+    if not wanted:
+        return None
+    return next((n for n in index.notes
+                 if (not folder or n.folder == folder)
+                 and _bare(n.name) == wanted), None)
 
 
 def folder_props(index: VaultIndex) -> dict[str, list[str]]:
@@ -274,6 +301,8 @@ def check(raw_actions: list[dict], index: VaultIndex, message: str) -> list[Vaul
                 due_from=str(raw.get("due_from", "")).strip(),
                 due_to=str(raw.get("due_to", "")).strip(),
                 scope=str(raw.get("scope", "")).strip().lower(),
+                research=str(raw.get("research", "")).strip(),
+                media=str(raw.get("media", "")).strip(),
             )
         except ValidationError:
             continue
@@ -297,7 +326,25 @@ def check(raw_actions: list[dict], index: VaultIndex, message: str) -> list[Vaul
             action = VaultAction(action="inbox", text=message)
         elif action.action == "move" and not action.text.strip():
             action.text = message  # what to move, in the user's own words
+        if action.media not in MEDIA:
+            action.media = "text"
+        if action.research and action.action not in ("note", "append"):
+            action.research = ""  # only a note can hold what a search found
         if action.action == "note":
+            existing = _same_note(index, action.title, action.folder)
+            if existing is not None and raw.get("looked_up"):
+                # A set the user did not list, and this item of it is already there. The
+                # lookup knows the book, not what the user has done with it: "I want to read
+                # all of them" must not reset one they have read. Left exactly as it is.
+                continue
+            if (existing is not None and action.props and not action.body
+                    and not action.research
+                    and (existing.folder == action.folder or not action.folder)):
+                # "Add this book, I have read it" when the note is there already: set its
+                # properties rather than start a second copy with " 2" on its name.
+                out.append(VaultAction(action="update", note=existing.name,
+                                       props=action.props))
+                continue
             if action.folder not in folders:
                 action.folder = texts.VAULT_NOTES_DIR
             if not (action.title or action.text).strip():

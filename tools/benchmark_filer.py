@@ -182,7 +182,8 @@ def score(case: dict, actions: list[dict], ms: int, error: str = "") -> Result:
 
 
 _SHOWN = ("note", "to", "folder", "title", "heading", "text", "task", "due", "repeat",
-          "due_from", "due_to", "scope", "body", "props", "tags", "done", "countdown")
+          "due_from", "due_to", "scope", "body", "props", "tags", "done", "countdown",
+          "research", "media")
 
 
 def brief(action: dict) -> str:
@@ -286,7 +287,8 @@ def ollama_ask(base_url: str, model: str, *, num_ctx: int, timeout_s: float):
     """The staged reader's question, put to a local model. Returns (ask, close)."""
     client = httpx.AsyncClient(base_url=base_url.rstrip("/"), timeout=timeout_s)
 
-    async def ask(system: str, schema: dict, content: str) -> tuple[dict, int, int]:
+    async def ask(system: str, schema: dict, content: str,
+                  max_tokens: int = 0) -> tuple[dict, int, int]:
         body = {"model": model, "stream": False, "format": schema, "keep_alive": "30m",
                 "messages": [{"role": "system", "content": system},
                              {"role": "user", "content": content}],

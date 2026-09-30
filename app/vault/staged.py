@@ -33,19 +33,26 @@ import anthropic
 from app import texts
 from app.llm import staged_prompts as P
 from app.llm.health import Health, describe
-from app.vault.filer import GROCERY_LIST, GUIDE_LINK, FilerError, VaultContext
+from app.llm.prompts import WEB_WORDS
+from app.vault.filer import GROCERY_LIST, GUIDE_LINK, MEDIA, FilerError, VaultContext
 from app.vault.index import related
 
 log = logging.getLogger(__name__)
 
-# (system prompt, JSON schema, user content) -> (answer, prompt tokens, output tokens)
-Ask = Callable[[str, dict, str], Awaitable[tuple[dict, int, int]]]
+# (system prompt, JSON schema, user content, max tokens) -> (answer, prompt tokens, output
+# tokens)
+Ask = Callable[[str, dict, str, int], Awaitable[tuple[dict, int, int]]]
 
 INTENTS = ("add", "done", "change", "move", "ask", "unclear")
 ASK_KINDS = ("day", "overdue", "now", "groceries", "search")
 MAX_TOKENS = 2000
+# A list of thirty novels in order, from a model that thinks before it answers: 2000 cut
+# the chronological Pelevin list off mid-answer.
+LOOKUP_MAX_TOKENS = 8000
 MAX_NOTES_SHOWN = 12
 MAX_GUIDE_VALUE = 80
+MAX_LOOKUP = 30
+MAX_TITLE = 120
 TASKS, GROCERIES, DIARY, INBOX, NONE = "t", "g", "d", "x", "none"
 _ISO = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _STRING = {"type": "string"}
@@ -62,8 +69,19 @@ def tokens(text: str) -> set[str]:
     out = set()
     for raw in _WORD.findall(text.casefold()):
         word = "".join(texts.VAULT_SORT_FOLD.get(c, c) for c in raw)
-        out.add(word[:4] if len(word) >= 5 else word[:3])
+        # Four letters for every word that has them: cutting a four-letter word shorter than
+        # its own five-letter form made a word and its inflected form two different words.
+        out.add(word[:4])
     return out
+
+
+def _close(one: str, two: str) -> bool:
+    """The same word, as far as `tokens` can tell: equal, or a word too short to have been
+    cut that begins the other one (a three-letter product and its genitive)."""
+    if one == two:
+        return True
+    short, other = sorted((one, two), key=len)
+    return len(short) < 4 and other.startswith(short)
 
 
 _TASK_TAIL = re.compile(r"[\U0001F4C5\U0001F501\u2705].*$")
@@ -83,6 +101,17 @@ def _names(message: str, name: str) -> bool:
     return bool(wanted) and all(any(related(w, word) for word in said) for w in wanted)
 
 
+def _props(item: dict, judge: Callable[[object], str | None]) -> list[dict]:
+    """An item's properties that pass `judge`, empty ones dropped."""
+    out = []
+    for prop in item.get("props") or []:
+        name = str((prop or {}).get("name", "")).strip()
+        value = judge((prop or {}).get("value"))
+        if name and value:
+            out.append({"name": name, "value": value})
+    return out
+
+
 def _obj(props: dict) -> dict:
     return {"type": "object", "additionalProperties": False, "required": list(props),
             "properties": props}
@@ -93,6 +122,8 @@ def _enum(values) -> dict:
 
 
 _PROPS = {"type": "array", "items": _obj({"name": _STRING, "value": _STRING})}
+# Asked of the stages that write notes: a set to look up, a web search to run.
+_EXPAND = {"lookup": _STRING, "web": _STRING, "media": _enum(MEDIA)}
 
 
 def claude_ask(client: anthropic.AsyncAnthropic, model: str,
@@ -100,10 +131,11 @@ def claude_ask(client: anthropic.AsyncAnthropic, model: str,
     """The stages' question, put to Claude with structured output."""
     health = health or Health()
 
-    async def ask(system: str, schema: dict, content: str) -> tuple[dict, int, int]:
+    async def ask(system: str, schema: dict, content: str,
+                  max_tokens: int = MAX_TOKENS) -> tuple[dict, int, int]:
         try:
             resp = await client.messages.create(
-                model=model, max_tokens=MAX_TOKENS, system=system,
+                model=model, max_tokens=max_tokens, system=system,
                 messages=[{"role": "user", "content": content}],
                 output_config={"format": {"type": "json_schema", "schema": schema}})
         except anthropic.APIError as e:
@@ -152,11 +184,11 @@ class _Gate:
     def said(self, value: str) -> bool:
         """Every word of `value` is in the message (in any form)."""
         wanted = tokens(value)
-        return bool(wanted) and wanted <= self._tokens
+        return bool(wanted) and all(any(_close(w, m) for m in self._tokens) for w in wanted)
 
     def mentions(self, value: str) -> bool:
         """At least one word of `value` is in the message."""
-        return bool(tokens(value) & self._tokens)
+        return any(_close(w, m) for w in tokens(value) for m in self._tokens)
 
     def prop(self, value: object) -> str | None:
         """The value to write, "" to leave the property empty, None when it has no source."""
@@ -171,6 +203,16 @@ class _Gate:
             return text
         return None
 
+    def looked_up(self, value: object) -> str | None:
+        """A value the lookup model gave for an item the user did not list. Knowing an
+        author is what it was asked for; a date or a link from memory is not."""
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        if _ISO.match(text):
+            return text if self._timed else None
+        return None if "://" in text else text
+
     def heading(self, value: object) -> str:
         """A heading for the task file, only when the user's guide knows it: the writer creates
         a heading that is missing, so an invented one would grow the file a new section."""
@@ -179,28 +221,49 @@ class _Gate:
 
 
 class StagedFiler:
-    """Same contract as `Filer`: `file(message, ctx)` -> raw actions and the tokens they cost."""
+    """Same contract as `Filer`: `file(message, ctx)` -> raw actions and the tokens they cost.
+
+    `lookup` answers the one question the light model is not good at — "list all of X" — when
+    a message asks for a set it does not spell out. It is asked only then."""
+
+    # It looks sets up and asks for web searches itself (app/vault/pipeline.py runs them),
+    # so the orchestrator hands it nothing the Notion side produced.
+    plans_itself = True
 
     def __init__(self, ask: Ask, model: str,
-                 close: Callable[[], Awaitable[None]] | None = None) -> None:
+                 close: Callable[[], Awaitable[None]] | None = None, *,
+                 lookup: Ask | None = None) -> None:
         self.model = model
         self._ask_model = ask
+        self._lookup = lookup
         self._close = close
 
     @classmethod
     def claude(cls, api_key: str, model: str, *, timeout_s: float = 30.0,
-               client: anthropic.AsyncAnthropic | None = None,
+               lookup_model: str = "", client: anthropic.AsyncAnthropic | None = None,
                health: Health | None = None) -> StagedFiler:
         sdk = client or anthropic.AsyncAnthropic(api_key=api_key, timeout=timeout_s,
                                                  max_retries=1)
-        return cls(claude_ask(sdk, model, health), model, sdk.close)
+        lookup = None
+        closers = [sdk.close]
+        if lookup_model and lookup_model != model:
+            # A list from memory is a longer answer from a model that thinks first.
+            strong = anthropic.AsyncAnthropic(api_key=api_key, timeout=120.0, max_retries=1)
+            lookup = claude_ask(strong, lookup_model, health)
+            closers.append(strong.close)
+
+        async def close() -> None:
+            for closer in closers:
+                await closer()
+
+        return cls(claude_ask(sdk, model, health), model, close, lookup=lookup)
 
     async def aclose(self) -> None:
         if self._close is not None:
             await self._close()
 
     async def file(self, message: str, ctx: VaultContext) -> tuple[list[dict], int, int]:
-        run = _Run(self._ask_model, message, ctx)
+        run = _Run(self._ask_model, message, ctx, lookup=self._lookup)
         actions = await run.read()
         log.info("staged %s: %s | %d call(s)", self.model, " > ".join(run.trail) or "-", run.calls)
         return actions, run.prompt_tokens, run.output_tokens
@@ -209,8 +272,10 @@ class StagedFiler:
 class _Run:
     """One message going through the stages."""
 
-    def __init__(self, ask: Ask, message: str, ctx: VaultContext) -> None:
+    def __init__(self, ask: Ask, message: str, ctx: VaultContext, *,
+                 lookup: Ask | None = None) -> None:
         self._ask_model = ask
+        self._lookup_model = lookup or ask
         self.message = message
         self.ctx = ctx
         self.prompt_tokens = 0
@@ -218,8 +283,10 @@ class _Run:
         self.calls = 0
         self.trail: list[str] = []  # what each stage answered, for the log
 
-    async def _ask(self, system: str, schema: dict, content: str) -> dict:
-        data, prompt_tokens, output_tokens = await self._ask_model(system, schema, content)
+    async def _ask(self, system: str, schema: dict, content: str, *,
+                   model: Ask | None = None, max_tokens: int = MAX_TOKENS) -> dict:
+        data, prompt_tokens, output_tokens = await (model or self._ask_model)(
+            system, schema, content, max_tokens)
         self.prompt_tokens += prompt_tokens
         self.output_tokens += output_tokens
         self.calls += 1
@@ -322,40 +389,72 @@ class _Run:
             return await self._append(text, note)
         return [self._inbox(text)]
 
+    # ---- expanding what the message only names -------------------------------------------
+
+    def _web(self, answer: dict) -> tuple[str, str] | None:
+        """The search a details stage asked for, if the user asked for one: it takes a word of
+        theirs, as on the Notion side, because a search is minutes of waiting."""
+        query = str(answer.get("web", "")).strip()
+        low = self.message.casefold()
+        if not query or not any(word in low for word in WEB_WORDS):
+            return None
+        media = str(answer.get("media", "")).strip()
+        return query, media if media in MEDIA else "text"
+
+    async def _expand(self, prompt: str, schema: dict, lookup: str, *context: str) -> list:
+        """The items of a set the user named without listing it, from the lookup model."""
+        self.trail.append("lookup")
+        answer = await self._ask(
+            prompt, schema, P.message(*context, P.section(P.H_LOOKUP, lookup),
+                                      text=self.message), model=self._lookup_model,
+            max_tokens=LOOKUP_MAX_TOKENS)
+        return list(answer.get("items") or [])[:MAX_LOOKUP]
+
+    # ---- add: the details of each kind of place -------------------------------------------
+
+    def _task(self, item: dict, gate: _Gate) -> dict:
+        ctx = self.ctx
+        text = str(item.get("text", "")).strip()
+        wanted = _task_words(text)
+        twin = next((line for line in ctx.open_tasks
+                     if wanted and _task_words(line) == wanted), None)
+        if twin is not None:
+            # Already on the list, word for word: point at that line rather than add a
+            # second one under it.
+            return {"action": "update", "note": ctx.tasks_note, "task": twin}
+        tag = str(item.get("tag", "")).strip().lstrip("#")
+        repeat = str(item.get("repeat", "")).strip()
+        return {
+            "action": "task", "text": text, "due": gate.date(item.get("due")),
+            "repeat": repeat if repeat.lower().startswith("every") else "",
+            "heading": gate.heading(item.get("heading")),
+            "tags": [tag] if tag.casefold() in {t.casefold() for t in ctx.tags} else [],
+            "countdown": bool(item.get("countdown")),
+        }
+
     async def _add_tasks(self, text: str) -> list[dict]:
         ctx = self.ctx
         schema = _obj({"items": {"type": "array", "items": _obj({
             "text": _STRING, "due": _STRING, "repeat": _STRING, "heading": _STRING,
-            "tag": _STRING, "countdown": {"type": "boolean"}})}})
+            "tag": _STRING, "countdown": {"type": "boolean"}})}, "lookup": _STRING})
         answer = await self._ask(
             P.TASKS_PROMPT, schema,
             P.message(self._guide(), self._today(),
                       P.section(P.H_AREAS, ", ".join(ctx.tags)), text=text))
         gate = _Gate(text, ctx.guide)
-        known_tags = {t.casefold() for t in ctx.tags}
-        out = []
-        for item in answer.get("items") or []:
-            if not isinstance(item, dict) or not str(item.get("text", "")).strip():
-                continue
-            wanted = _task_words(str(item["text"]))
-            twin = next((line for line in ctx.open_tasks
-                         if wanted and _task_words(line) == wanted), None)
-            if twin is not None:
-                # Already on the list, word for word: point at that line rather than add
-                # a second one under it.
-                out.append({"action": "update", "note": ctx.tasks_note, "task": twin})
-                continue
-            tag = str(item.get("tag", "")).strip().lstrip("#")
-            repeat = str(item.get("repeat", "")).strip()
-            out.append({
-                "action": "task", "text": str(item["text"]).strip(),
-                "due": gate.date(item.get("due")),
-                "repeat": repeat if repeat.lower().startswith("every") else "",
-                "heading": gate.heading(item.get("heading")),
-                "tags": [tag] if tag.casefold() in known_tags else [],
-                "countdown": bool(item.get("countdown")),
-            })
-        return out
+        items = [i for i in answer.get("items") or []
+                 if isinstance(i, dict) and str(i.get("text", "")).strip()]
+        lookup = str(answer.get("lookup", "")).strip()
+        low = self.message.casefold()
+        if lookup and any(cue in low for cue in texts.VAULT_SET_CUES):
+            # "What to take on a hike": the chores come from the lookup; the date and the area
+            # the user gave for the whole list apply to each of them.
+            first = items[0] if items else {}
+            listed = await self._expand(P.LOOKUP_TASKS_PROMPT, _obj({"items": _STRINGS}),
+                                        lookup, self._guide())
+            items += [{**first, "text": str(line).strip()} for line in listed
+                      if str(line).strip()]
+        return [self._task(item, gate) for item in items]
 
     async def _groceries(self, text: str, *, done: bool) -> list[dict]:
         answer = await self._ask(P.GROCERY_PROMPT, _obj({"names": _STRINGS}),
@@ -368,12 +467,14 @@ class _Run:
 
     async def _add_notes(self, text: str, folder: str) -> list[dict]:
         ctx = self.ctx
+        props_of = ", ".join(ctx.folder_props.get(folder, []))
         schema = _obj({"items": {"type": "array", "items": _obj({
-            "title": _STRING, "props": _PROPS, "body": _STRINGS, "tags": _STRINGS})}})
+            "title": _STRING, "props": _PROPS, "body": _STRINGS, "tags": _STRINGS})},
+            **_EXPAND})
         answer = await self._ask(
             P.FOLDER_PROMPT, schema,
             P.message(self._guide(), self._today(), P.section(P.H_FOLDER, folder),
-                      P.section(P.H_PROPS, ", ".join(ctx.folder_props.get(folder, []))),
+                      P.section(P.H_PROPS, props_of),
                       P.section(P.H_TAGS, ", ".join(ctx.tags)), text=text))
         gate = _Gate(text, ctx.guide)
         known_tags = {t.casefold() for t in ctx.tags}
@@ -385,23 +486,44 @@ class _Run:
             # A title none of whose words the user said is a note about something else.
             if not title or not gate.mentions(title):
                 continue
-            props = []
-            for prop in item.get("props") or []:
-                name = str((prop or {}).get("name", "")).strip()
-                value = gate.prop((prop or {}).get("value"))
-                if name and value:
-                    props.append({"name": name, "value": value})
             out.append({
-                "action": "note", "folder": folder, "title": title, "props": props,
+                "action": "note", "folder": folder, "title": title,
+                "props": _props(item, gate.prop),
                 "body": [str(line) for line in item.get("body") or []],
                 "tags": [t for t in (str(x).strip().lstrip("#") for x in item.get("tags") or [])
                          if t.casefold() in known_tags],
             })
-        if out:
-            return out
-        # The folder was chosen and nothing was listed for it: asked for every field at once,
-        # the model sometimes takes the one thing named for the folder's own name. One
-        # narrower question — what to call the note — before giving the message up to the inbox.
+        lookup = str(answer.get("lookup", "")).strip()
+        if lookup:
+            seen = {o["title"].casefold() for o in out}
+            schema = _obj({"items": {"type": "array", "items": _obj({
+                "title": _STRING, "props": _PROPS})}})
+            for item in await self._expand(P.LOOKUP_NOTES_PROMPT, schema, lookup,
+                                           self._guide(), P.section(P.H_FOLDER, folder),
+                                           P.section(P.H_PROPS, props_of)):
+                title = str((item or {}).get("title", "")).strip()[:MAX_TITLE]
+                if not title or title.casefold() in seen:
+                    continue
+                seen.add(title.casefold())
+                # What the user said about the whole set ("all read") reaches these through
+                # the lookup's own wording. Nothing said about one listed item is copied onto
+                # the rest: that is how "I have read these two" marked every novel read.
+                out.append({"action": "note", "folder": folder, "title": title,
+                            "props": _props(item, gate.looked_up),
+                            "body": [], "tags": [], "looked_up": True})
+        web = self._web(answer)
+        if not out and not lookup:
+            out = await self._titled(text, folder, gate)
+        if web and out:
+            # One search per message, into the first note: the same search written into
+            # several notes would be the same text several times.
+            out[0]["research"], out[0]["media"] = web
+        return out
+
+    async def _titled(self, text: str, folder: str, gate: _Gate) -> list[dict]:
+        """The folder was chosen and nothing was listed for it: asked for every field at once,
+        the model sometimes takes the one thing named for the folder's own name. One narrower
+        question — what to call the note — before giving the message up to the inbox."""
         answer = await self._ask(P.TITLE_PROMPT, _obj({"title": _STRING}),
                                  P.message(P.section(P.H_FOLDER, folder), text=text))
         title = str(answer.get("title", "")).strip()
@@ -414,14 +536,23 @@ class _Run:
     async def _append(self, text: str, note: str) -> list[dict]:
         headings = self.ctx.note_headings.get(note, [])
         answer = await self._ask(
-            P.APPEND_PROMPT, _obj({"heading": _STRING, "body": _STRINGS}),
+            P.APPEND_PROMPT, _obj({"heading": _STRING, "body": _STRINGS, **_EXPAND}),
             P.message(P.section(P.H_NOTE, note),
                       P.section(P.H_HEADINGS, "\n".join(headings)), text=text))
         heading = str(answer.get("heading", "")).strip()
         body = [str(line).strip() for line in answer.get("body") or [] if str(line).strip()]
-        return [{"action": "append", "note": note,
-                 "heading": heading if heading in headings else "",
-                 "body": body or [text]}]
+        lookup = str(answer.get("lookup", "")).strip()
+        if lookup:
+            listed = await self._expand(P.LOOKUP_LINES_PROMPT, _obj({"items": _STRINGS}),
+                                        lookup, self._guide(), P.section(P.H_NOTE, note))
+            body += [str(line).strip() for line in listed if str(line).strip()]
+        web = self._web(answer)
+        action = {"action": "append", "note": note,
+                  "heading": heading if heading in headings else "",
+                  "body": body or ([] if web else [text])}
+        if web:
+            action["research"], action["media"] = web
+        return [action]
 
     # ---- done ----------------------------------------------------------------------------
 

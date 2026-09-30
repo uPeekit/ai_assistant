@@ -246,14 +246,19 @@ def _vault_pipeline(settings: Settings, switches: Switches, tuning: Tuning,
     strong = settings.filer_strong_model.strip()
     staged = settings.filer_mode.strip().lower() == "staged"
     log.info("vault reader: %s on %s", "staged" if staged else "single", settings.filer_model)
-    filer = (StagedFiler.claude(key, settings.filer_model, health=health) if staged
+    # Listing a whole set ("all of his novels") is asked of the stronger model, and only then.
+    filer = (StagedFiler.claude(key, settings.filer_model, health=health,
+                                lookup_model=strong or settings.rewrite_model) if staged
              else Filer(key, settings.filer_model, health=health))
     return VaultPipeline(index, writer, filer,
                          linker, linking=lambda: switches.get("linker"), rewriter=rewriter,
                          editor=editor,
-                         # A longer timeout than the light filer's: Sonnet thinks first.
+                         # The single reader's second opinion (0.6.7), with a longer timeout
+                         # because Sonnet thinks first. The staged reader asks narrow questions
+                         # instead, and one Sonnet question about everything would undo that.
                          strong=(Filer(key, strong, timeout_s=90.0, health=health)
-                                 if strong and strong != settings.filer_model else None))
+                                 if strong and strong != settings.filer_model and not staged
+                                 else None))
 
 
 def _daily_digest(settings: Settings, vault: VaultPipeline | None, switches: Switches,

@@ -605,6 +605,23 @@ places lands in the first.
 Measured on the dictated message that started this, against the live vault: single reader 0
 of 6, staged 8 of 8, on the same model and about a fifth fewer tokens.
 
+**The two branches plan independently** (since 0.6.9). The staged reader does its own
+planning: a details stage may name a *lookup* — a set the user did not list («все романы
+Пелевина», «все фильмы Нолана», «что взять в поход») — which the lookup model (Sonnet) answers
+in that place's own shape, one item per note, line or task; or a *web search*, which the
+pipeline runs and whose result becomes the note's body without ever entering a prompt. Code
+iterates; no model is asked per item. Guards: a lookup never touches a note that already
+exists (it knows the book, not what the user did with it) and matches names with punctuation
+and ё folded; a lookup on the task file needs a word that asks for a set, or it invents work;
+a web search needs one of the user's search words, as on the Notion side.
+
+The Notion side no longer hands the vault anything when the vault plans for itself
+(`VaultPipeline.plans_itself`); the 0.6.3 hand-over remains only for the single reader. What
+the two branches share is the web search (`app/conversation/shared_research.py`): one per
+turn, keyed on the user's message and the kind of result, so when both branches ask to search
+the same message it runs once and both write from it. A search for text and pictures also
+answers a request for either alone.
+
 **Moving between notes** (`move`, vault only): the filer names the source, the destination
 and what to move; the editor marks lines with `delete` ops, and only a plan made of nothing
 but deletes counts. The code copies exactly those lines to the destination (appended, or a
