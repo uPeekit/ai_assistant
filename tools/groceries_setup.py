@@ -29,7 +29,7 @@ from app import texts  # noqa: E402
 from app.vault import frontmatter, groceries  # noqa: E402
 
 # What moves, unless --products says otherwise: the consumables in this vault's task file.
-DEFAULT_PRODUCTS = ("бальзам для волос", "шампунь", "яйца", "бекон", "мусорные пакеты", "тортик")
+DEFAULT_PRODUCTS = ("яйца", "бекон", "мусорные пакеты", "тортик")
 # Lines that look like a purchase, so the tool can show everything it did *not* move.
 _PURCHASE = re.compile("|".join(texts.VAULT_BUY_WORDS), re.IGNORECASE)
 _TASK = re.compile(r"^\s*[-*+]\s+\[[^\]]\]\s*(.*)$")
