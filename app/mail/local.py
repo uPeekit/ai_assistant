@@ -18,7 +18,7 @@ import httpx
 
 from app.llm.ollama import CTX_MARGIN, wants_think_flag
 from app.llm.prompts import MAIL_PROMPT, mail_message
-from app.mail.classify import OTHER, ClassifyError, Sorted, _schema, gate
+from app.mail.classify import MAX_SUMMARY, OTHER, ClassifyError, Sorted, _schema, gate
 from app.mail.imap import Message
 
 log = logging.getLogger(__name__)
@@ -28,6 +28,27 @@ log = logging.getLogger(__name__)
 # sixteen). The only limit is the context window, and a request that overflows it is split in
 # half and tried again, so this is where to start, not a size anything must fit into.
 BATCH = 20
+# What one email's answer may take, and a little for the brackets around them all: the
+# budget for a whole answer. A summary is capped at MAX_SUMMARY characters by the schema;
+# this only stops a model that loops somewhere the schema allows.
+TOKENS_PER_EMAIL = 160
+TOKENS_OVERHEAD = 200
+MAX_ID = 40
+
+
+def capped_schema(buckets: list[str]) -> dict:
+    """The classifier's schema with every free string given a length.
+
+    Ollama holds a local model to the schema as a grammar, and a length in the grammar forces
+    a string closed. Without one, gemma3:1b repeated a sentence inside a summary until the
+    context was full, three answers in four — and a cut-off answer is not JSON. The cap costs
+    nothing: the digest cuts a summary to MAX_SUMMARY anyway (classify.gate). Claude's schema
+    is left as it is; it never looped, and its structured output is its own."""
+    schema = _schema(buckets)
+    item = schema["properties"]["messages"]["items"]["properties"]
+    item["summary"] = {**item["summary"], "maxLength": MAX_SUMMARY}
+    item["id"] = {**item["id"], "maxLength": MAX_ID}
+    return schema
 
 
 class ContextOverflow(ClassifyError):
@@ -122,8 +143,9 @@ class LocalClassifier:
             "messages": [{"role": "system", "content": MAIL_PROMPT},
                          {"role": "user", "content": payload}],
             "stream": False,
-            "format": _schema(self.buckets),
-            "options": {"temperature": 0.0, "num_ctx": self._num_ctx},
+            "format": capped_schema(self.buckets),
+            "options": {"temperature": 0.0, "num_ctx": self._num_ctx,
+                        "num_predict": TOKENS_OVERHEAD + TOKENS_PER_EMAIL * len(batch)},
             "keep_alive": "10m",
         }
         if wants_think_flag(self.model):
@@ -142,5 +164,10 @@ class LocalClassifier:
         try:
             answer = json.loads(text)
         except json.JSONDecodeError:
+            if data.get("done_reason") == "length":
+                # Not a model that cannot write JSON: one that did not stop writing.
+                raise ClassifyError(
+                    f"answer cut off after {data.get('eval_count', 0)} tokens "
+                    "(the model kept writing)") from None
             raise ClassifyError("not JSON") from None
         return answer, prompt_tokens, data.get("eval_count", 0) or 0

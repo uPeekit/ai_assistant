@@ -302,3 +302,36 @@ async def test_the_digest_sender_sends_the_real_digest_before_any_local_model_ru
     assert events == ["send:real", "send:real",
                       "sort:first", "send:first", "send:first",
                       "sort:second", "send:second", "send:second"]
+
+
+
+
+@pytest.mark.asyncio
+async def test_a_summary_is_capped_in_the_schema_so_a_looping_model_still_closes_its_json():
+    """gemma3:1b on real mail: one summary repeated «если вы уже оплатили… позвоните…» until
+    the context was full, and the half-written answer was "not JSON" — three runs in four.
+    The schema is the grammar Ollama holds the model to; a length cap there forces the string
+    closed. Measured: five runs in five parsed, and the answer shrank from 6263 tokens to 475."""
+    seen: list = []
+    await local({"messages": []}, seen=seen).sort([message("1"), message("2")])
+
+    item = seen[0]["format"]["properties"]["messages"]["items"]["properties"]
+    assert item["summary"]["maxLength"] == 200 and item["id"]["maxLength"] > 0
+    # And a budget for the whole answer, so even a loop the grammar allows ends soon.
+    assert 0 < seen[0]["options"]["num_predict"] < 8192
+
+
+@pytest.mark.asyncio
+async def test_an_answer_cut_off_by_its_length_says_so_rather_than_not_json():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if not json.loads(request.content).get("messages"):
+            return httpx.Response(200, json={})
+        return httpx.Response(200, json={
+            "message": {"content": '{"messages": [{"id": "1", "summary": "если вы уже опл'},
+            "done_reason": "length", "prompt_eval_count": 1929, "eval_count": 6263})
+
+    classifier = LocalClassifier("http://x", "gemma3:1b", BUCKETS,
+                                 transport=httpx.MockTransport(handler))
+    sorted_, _, _ = await classifier.sort([message("1")])
+
+    assert sorted_ == [] and "cut off" in classifier.last_error
