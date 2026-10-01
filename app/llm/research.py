@@ -9,7 +9,9 @@ import asyncio
 import json
 import logging
 import re
+import time
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
 from itertools import zip_longest
 from typing import Any
 
@@ -18,15 +20,27 @@ import anthropic
 from app.llm.health import Health, describe
 from app.llm.image_search import ImageSearch
 from app.llm.prompts import (
+    ALREADY_READ,
+    FORCE_ANSWER,
     IMAGE_FILTER_PROMPT,
     IMAGE_QUERIES_PROMPT,
     IMAGES_HEADING,
+    READ_FAILED,
+    READ_REFUSED,
+    READ_TOOL,
+    READS_LEFT,
     RESEARCH_PROMPT,
     RESEARCH_QUESTION,
     SOURCES_HEADING,
+    TOOL_INPUT_ERROR,
     image_filter_message,
+    research_loop_prompt,
     research_message,
+    site_search_tool,
 )
+from app.web.reader import PageUnreadable, Reader
+from app.web.sites import RENT, SALE, SITES, search_url
+from app.web.trim import relevant
 
 log = logging.getLogger(__name__)
 
@@ -42,6 +56,14 @@ _FIRST_HEADING = re.compile(r"(?<![\w#])(#{1,3} )")  # "C# " is not a heading
 # Models with the dynamic-filtering tool versions; everything else gets the earlier ones.
 _DYNAMIC_PREFIXES = ("claude-opus-5", "claude-sonnet-5", "claude-fable-5", "claude-mythos-5",
                      "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6")
+MAX_TURNS = 12  # model calls in one lookup, pause_turn resumes included; the budget ends it sooner
+MAX_TOKENS = 8192  # thinking and the answer together; the answer is capped at MAX_RESULT_CHARS
+_EFFORT_PREFIXES = ("claude-sonnet-5", "claude-opus-5", "claude-fable-5", "claude-mythos-5",
+                    "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6")
+# Dollars per million tokens (input, output), for the log line's estimate; a search is $0.01.
+PRICES = {"claude-haiku-4-5": (1.0, 5.0), "claude-sonnet-5": (2.0, 10.0),
+          "claude-sonnet-4-6": (3.0, 15.0), "claude-opus-5": (5.0, 25.0)}
+SEARCH_PRICE = 0.01
 
 
 MAX_IMAGES = 6
@@ -96,10 +118,11 @@ def research_tools(model: str, max_uses: int) -> list[dict]:
 
 
 def final_text(blocks: list[Any]) -> str:
-    """The answer proper: the text after the last tool result. Text before it is the model
-    narrating its search ("let me look that up"), which does not belong in the note."""
-    last_tool = max((i for i, b in enumerate(blocks) if b.type.endswith("_tool_result")),
-                    default=-1)
+    """The answer proper: the text after the last tool call or result. Text before it is the
+    model narrating its search ("let me look that up"), which does not belong in the note."""
+    last_tool = max((i for i, b in enumerate(blocks)
+                     if b.type.endswith("_tool_result")
+                     or b.type in ("tool_use", "server_tool_use")), default=-1)
     text = "".join(b.text for b in blocks[last_tool + 1:] if b.type == "text").strip()
     return _drop_preamble(text)
 
@@ -144,14 +167,76 @@ def merge(text: str, images: list[str]) -> str:
     return f"{head.rstrip()}\n\n{block}\n\n{sep}{tail}"
 
 
+def estimate_cost(model: str, *, input_tokens: int, output_tokens: int, cache_read: int = 0,
+                  cache_write: int = 0, searches: int = 0) -> float:
+    """Dollars, roughly, for the log and the benchmark. Unknown models are priced as Sonnet 5."""
+    pin, pout = PRICES.get(model, PRICES["claude-sonnet-5"])
+    tokens = (input_tokens * pin + cache_write * pin * 1.25 + cache_read * pin * 0.1
+              + output_tokens * pout)
+    return tokens / 1_000_000 + searches * SEARCH_PRICE
+
+
+def loop_tools(max_searches: int) -> list[dict]:
+    """web_search is Anthropic's, the basic version: it runs on their side and has no code
+    sandbox — the newer version's sandbox is where a model once slept and retried for minutes.
+    site_search and read run here, so this code decides how many there are."""
+    return [
+        {"type": "web_search_20250305", "name": "web_search", "max_uses": max_searches},
+        {"name": "site_search", "description": site_search_tool(SITES),
+         "input_schema": {"type": "object", "additionalProperties": False,
+                          "required": ["site", "query"],
+                          "properties": {"site": {"enum": [s.name for s in SITES]},
+                                         "query": {"type": "string"},
+                                         "deal": {"enum": [SALE, RENT]}}}},
+        {"name": "read", "description": READ_TOOL,
+         "input_schema": {"type": "object", "additionalProperties": False,
+                          "required": ["url"],
+                          "properties": {"url": {"type": "string"},
+                                         "look_for": {"type": "string"}}}},
+    ]
+
+
+@dataclass
+class Lookup:
+    """One lookup's budget, the pages it read, and what it cost."""
+
+    reads_left: int
+    pages: dict[str, str] = field(default_factory=dict)
+    sites: list[str] = field(default_factory=list)
+    site_reads: int = 0
+    page_reads: int = 0
+    fallbacks: int = 0
+    unreadable: int = 0
+    chars: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read: int = 0
+    cache_write: int = 0
+    searches: int = 0
+
+    @property
+    def spent(self) -> bool:
+        return self.reads_left <= 0
+
+    def count(self, usage: Any) -> None:
+        self.input_tokens += getattr(usage, "input_tokens", 0) or 0
+        self.output_tokens += getattr(usage, "output_tokens", 0) or 0
+        self.cache_read += getattr(usage, "cache_read_input_tokens", 0) or 0
+        self.cache_write += getattr(usage, "cache_creation_input_tokens", 0) or 0
+        tools = getattr(usage, "server_tool_use", None)
+        self.searches += getattr(tools, "web_search_requests", 0) or 0
+
+
 class WebResearcher:
     def __init__(
-        self, api_key: str, model: str, *, max_searches: int = 5, timeout_s: float = 600.0,
+        self, api_key: str, model: str, *, max_searches: int = 4, timeout_s: float = 600.0,
         client: anthropic.AsyncAnthropic | None = None,
         is_image: Callable[[str], Awaitable[bool]] | None = None,
         search: ImageSearch | None = None,
         extra: Callable[[], str] | None = None, deadline_s: float = DEADLINE_S,
-        health: Health | None = None,
+        health: Health | None = None, reader: Reader | None = None, max_reads: int = 8,
+        soft_deadline_s: float = 90.0, clock: Callable[[], float] = time.monotonic,
+        engine: str = "server",
     ) -> None:
         self.model = model
         self._health = health or Health()
@@ -159,6 +244,14 @@ class WebResearcher:
         # The user's own additions to the research prompt, from the admin page.
         self._extra = extra or (lambda: "")
         self._tools = research_tools(model, max_searches)
+        self._max_searches = max_searches
+        self._max_reads = max_reads
+        self._soft_deadline = soft_deadline_s
+        self._clock = clock
+        self._engine = engine
+        self._loop_tools = loop_tools(max_searches)
+        self._reader = reader if reader is not None else Reader()
+        self.last: Lookup | None = None
         self._client = client or anthropic.AsyncAnthropic(
             # No retry: a search that ran long is slow, not broken, and trying again only
             # doubles the wait. DEADLINE_S is what actually bounds it.
@@ -170,6 +263,7 @@ class WebResearcher:
 
     async def aclose(self) -> None:
         await self._client.close()
+        await self._reader.aclose()
 
     async def research(self, request: str, query: str, media: str = "text") -> str:
         """Markdown ready to write: text, pictures, or both, per `media` (the interpreter's
@@ -185,8 +279,7 @@ class WebResearcher:
 
     async def _research(self, request: str, query: str, media: str) -> str:
         want_text, want_images = media != "images", media != "text"
-        text_call = (self._run(_with_extra(RESEARCH_PROMPT, self._extra()), request, query)
-                     if want_text
+        text_call = (self._text(request, query) if want_text
                      else asyncio.sleep(0, result=""))
         commons_call = (self._commons(request, query) if want_images
                         else asyncio.sleep(0, result=[]))
@@ -289,6 +382,150 @@ class WebResearcher:
             ok = await asyncio.gather(*(self._is_image(url) for url, _ in hits))
             hits = [hit for hit, good in zip(hits, ok, strict=True) if good]
         return [f"![{_md_caption(cap)}]({url})" for url, cap in hits[:MAX_IMAGES]]
+
+    def _text(self, request: str, query: str) -> Awaitable[str]:
+        if self._engine == "loop":
+            prompt = research_loop_prompt(self._max_searches, self._max_reads)
+            return self._run_loop(_with_extra(prompt, self._extra()), request, query)
+        return self._run(_with_extra(RESEARCH_PROMPT, self._extra()), request, query)
+
+    async def _run_loop(self, system: str, request: str, query: str) -> str:
+        """Claude asks for lookups, this runs them, until it answers or the budget ends it. When
+        the reads are spent or the soft deadline passes, the next request has tools switched
+        off: the model cannot call one again, so it cannot spin — it answers."""
+        lookup = Lookup(reads_left=self._max_reads)
+        self.last = lookup
+        start = self._clock()
+        history: list[dict] = [{"role": "user", "content": research_message(request, query)}]
+        turn: list[Any] = []  # the assistant turn being written, across pause_turn resumes
+        force = False
+        resp = None
+        for _ in range(MAX_TURNS):
+            messages = [*history, {"role": "assistant", "content": turn}] if turn else history
+            resp = await self._create(system, messages, force)
+            lookup.count(resp.usage)
+            turn = [*turn, *resp.content]
+            if resp.stop_reason == "pause_turn":
+                continue
+            calls = [b for b in resp.content if b.type == "tool_use"]
+            if force or resp.stop_reason != "tool_use" or not calls:
+                break
+            results = await self._run_tools(lookup, calls, request)
+            force = lookup.spent or self._clock() - start >= self._soft_deadline
+            if force:
+                results.append({"type": "text", "text": FORCE_ANSWER})
+            history += [{"role": "assistant", "content": turn},
+                        {"role": "user", "content": results}]
+            turn = []
+        self._log(lookup, start)
+        text = final_text(turn)
+        question = _question(text)
+        if question:
+            raise ResearchQuestion(question)
+        if not text:
+            stop = resp.stop_reason if resp is not None else "none"
+            raise ResearchError(f"no answer (stop_reason={stop})")
+        return text[:MAX_RESULT_CHARS]
+
+    async def _create(self, system: str, messages: list[dict], force: bool) -> Any:
+        kwargs: dict[str, Any] = {
+            "model": self.model, "max_tokens": MAX_TOKENS, "system": system,
+            "messages": messages, "tools": self._loop_tools,
+            # Every turn re-sends the conversation so far; cached, the repeat costs a tenth.
+            "cache_control": {"type": "ephemeral"},
+        }
+        if force:
+            kwargs["tool_choice"] = {"type": "none"}
+        if self.model.startswith(_EFFORT_PREFIXES):
+            kwargs["output_config"] = {"effort": "medium"}
+        try:
+            resp = await self._client.messages.create(**kwargs)
+        except anthropic.APIError as e:
+            raise ResearchError(describe(e), self._health.record(e)) from None
+        self._health.ok()
+        return resp
+
+    async def _run_tools(self, lookup: Lookup, calls: list[Any], request: str) -> list[dict]:
+        """Every client tool call of one turn, answered in one message. The budget is handed out
+        in the order the calls came, before any runs; the reads then run side by side."""
+        seen: set[str] = set()
+        plans = [self._allocate(lookup, call, seen) for call in calls]
+        answers = await asyncio.gather(*(self._answer(lookup, plan, request) for plan in plans))
+        note = READS_LEFT.format(n=lookup.reads_left)
+        return [{"type": "tool_result", "tool_use_id": call.id, "content": body + note,
+                 "is_error": failed}
+                for call, (body, failed) in zip(calls, answers, strict=True)]
+
+    @staticmethod
+    def _allocate(lookup: Lookup, call: Any, seen: set[str]) -> tuple:
+        """What to do with one call, decided before anything runs: ("error", why),
+        ("refused",), ("cached", url), ("dup",) or ("read", url, look_for, site)."""
+        args = call.input if isinstance(call.input, dict) else {}
+        try:
+            if call.name == "site_search":
+                site = str(args.get("site", ""))
+                look_for = str(args.get("query", ""))
+                url = search_url(site, look_for, str(args.get("deal") or SALE))
+            elif call.name == "read":
+                site = ""
+                look_for = str(args.get("look_for", ""))
+                url = str(args.get("url", "")).strip()
+                if not url.startswith(("http://", "https://")):
+                    raise ValueError("read needs a full http or https address")
+            else:
+                raise ValueError(f"unknown tool {call.name!r}")
+        except ValueError as e:  # SiteError is a ValueError too
+            return ("error", TOOL_INPUT_ERROR.format(error=e))
+        if url in lookup.pages:
+            return ("cached", url)
+        if url in seen:
+            return ("dup",)
+        if lookup.spent:
+            return ("refused",)
+        lookup.reads_left -= 1
+        seen.add(url)
+        return ("read", url, look_for, site)
+
+    async def _answer(self, lookup: Lookup, plan: tuple, request: str) -> tuple[str, bool]:
+        kind = plan[0]
+        if kind == "error":
+            return plan[1], True
+        if kind == "refused":
+            return READ_REFUSED, True
+        if kind == "dup":
+            return ALREADY_READ, False
+        if kind == "cached":
+            return lookup.pages[plan[1]], False
+        _, url, look_for, site = plan
+        if site:
+            lookup.sites.append(site)
+            lookup.site_reads += 1
+        else:
+            lookup.page_reads += 1
+        try:
+            page = await self._reader.read(url)
+        except PageUnreadable as e:
+            lookup.unreadable += 1
+            return READ_FAILED.format(reason=e), True
+        lookup.fallbacks += page.via != "jina"
+        log.debug("research read %s via %s", url, page.via)
+        body = f"{page.title}\n{page.url}\n\n{relevant(page.text, f'{look_for} {request}')}"
+        lookup.pages[url] = body
+        lookup.chars += len(body)
+        return body, False
+
+    def _log(self, lookup: Lookup, start: float) -> None:
+        cost = estimate_cost(self.model, input_tokens=lookup.input_tokens,
+                             output_tokens=lookup.output_tokens, cache_read=lookup.cache_read,
+                             cache_write=lookup.cache_write, searches=lookup.searches)
+        sites = f" ({', '.join(dict.fromkeys(lookup.sites))})" if lookup.sites else ""
+        log.info("research: %d web search(es), %d site search(es)%s, %d page read(s) "
+                 "(%d via fallback, %d unreadable), %.1fk chars, %.0f s, %dk+%dk tok, ~$%.3f",
+                 lookup.searches, lookup.site_reads, sites, lookup.page_reads,
+                 lookup.fallbacks, lookup.unreadable, lookup.chars / 1000,
+                 self._clock() - start,
+                 (lookup.input_tokens + lookup.cache_read + lookup.cache_write) // 1000,
+                 lookup.output_tokens // 1000, cost)
 
     async def _run(self, system: str, request: str, query: str) -> str:
         user = {"role": "user", "content": research_message(request, query)}
