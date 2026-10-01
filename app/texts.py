@@ -379,8 +379,6 @@ VAULT_BUY_WORDS = ("купить", "купи", "куплю", "купили", "к
                    "закупился", "закупить", "заказать", "закажи", "заказали", "заказала",
                    "заказал", "взять", "возьми", "взяли", "взяла", "взял", "есть")
 VAULT_GROCERIES_NOTE = "Продукты"
-# The grocery block's title on the home page: a Tasks group header (tools/groceries_setup.py).
-VAULT_GROCERIES_TITLE = "🛒 Купить"
 VAULT_GROCERIES_INTRO = ("Отмеченные — есть дома. Снимите галочку с того, что нужно "
                          "купить — оно появится на Главной. Сроков и повторов здесь не бывает.")
 # The answer to "что надо купить?"

@@ -37,10 +37,13 @@ _TASK = re.compile(r"^\s*[-*+]\s+\[[^\]]\]\s*(.*)$")
 # No markdown heading: it would stay on the page over an empty list. The title is a group
 # header, which Tasks draws only when the group has tasks, and `hide task count` drops the
 # "0 tasks" line — so with nothing to buy the block takes no room at all.
+# `group by filename`, not `group by function`: Tasks 8 runs no JavaScript in a query unless
+# the user turns it on, and shows an error in its place. The header is then a link to the
+# grocery page, which is where a product gets ticked off anyway.
 HOME_BLOCK = f"""```tasks
 not done
 filename includes {texts.VAULT_GROCERIES_NOTE}
-group by function '{texts.VAULT_GROCERIES_TITLE}'
+group by filename
 hide task count
 hide backlink
 hide edit button
@@ -92,6 +95,8 @@ def home(text: str) -> str:
         props, body = frontmatter.split(out)
         out = frontmatter.render(props, f"{HOME_BLOCK}\n{body.lstrip()}") if props else (
             f"{HOME_BLOCK}\n{body.lstrip()}")
+    # A page set up by an earlier version groups with JavaScript, which Tasks 8 refuses.
+    out = re.sub(r"^group by function '[^'\n]*'$", "group by filename", out, flags=re.M)
     if EXCLUDE not in out:
         out = re.sub(r"(\nno due date\n)", f"\\1{EXCLUDE}\n", out, count=1)
     return out

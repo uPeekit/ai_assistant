@@ -354,7 +354,19 @@ def test_the_grocery_block_shows_only_when_something_has_to_be_bought(setup_vaul
 
     block = groceries_setup.HOME_BLOCK
     assert not block.lstrip().startswith("#")
-    assert "group by function '" in block and "hide task count" in block
+    assert "group by filename" in block and "hide task count" in block
+
+
+def test_the_block_uses_no_javascript_and_an_old_page_is_repaired(setup_vault):
+    """Tasks 8 runs no JavaScript in a query by default: the block showed «JavaScript is
+    now disabled in Tasks queries by default» on the home page instead of the groceries."""
+    from tools import groceries_setup
+
+    assert "function" not in groceries_setup.HOME_BLOCK
+    old = groceries_setup.HOME_BLOCK.replace("group by filename",
+                                             "group by function '🛒 Купить'") + HOME
+    fixed = groceries_setup.home(old)
+    assert "group by function" not in fixed and fixed.count("group by filename") == 1
 
 
 def test_setup_narrows_the_undated_query_so_groceries_do_not_show_up_twice(setup_vault):
