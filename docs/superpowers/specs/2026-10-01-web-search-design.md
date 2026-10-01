@@ -70,8 +70,9 @@ the plan rule below.
   | hinnavaatlus.ee | price comparison across shops | `https://www.hinnavaatlus.ee/search/?Type=products&Query={q}` |
 
   Not working yet (pages without results or prices): Prisma, Coop (ecoop.ee), Bauhof, Espak,
-  kinnisvara24, city24 rentals. The build tries more address formats for these and adds only
-  those that pass `tools/check_sites.py`; until then they are reachable through search + read.
+  kinnisvara24, city24 rentals. They are reachable through search + read. Finding working
+  addresses for them is deferred: the user will ask for more sites later, and each will be added
+  only once it passes `tools/check_sites.py`.
 - The loop — in `app/llm/research.py`, replacing `_run`.
 
 ### The loop
