@@ -313,6 +313,8 @@ class _Turn:
     # is written, later steps of the same plan reuse it instead of asking again.
     asked_field: str | None = None
     outcome: str = "failed"
+    # This plan step comes right after one whose web search failed: it does not search.
+    skip_web: bool = False
     last_undo: str | None = None
     # Sends an intermediate message (a finished plan step) before the turn's own reply.
     progress: Callable[[Reply], Awaitable[None]] | None = None
@@ -673,6 +675,11 @@ class Orchestrator:
         execution_id = self._record_execution(turn, executed)
         return Reply(text_reply, _undo_buttons(execution_id), undo_id=execution_id)
 
+    @staticmethod
+    def _web_failed(turn: _Turn) -> None:
+        if turn.plan is not None:
+            turn.plan.skip_web_next = True
+
     async def _research(
         self, turn: _Turn, decision: Decision, result: ValidationResult, text: str
     ) -> tuple[Decision, Reply | None]:
@@ -684,6 +691,9 @@ class Orchestrator:
         if (candidate is None or not candidate.web_query
                 or result.intent not in ("create", "append")):
             return decision, None
+        if turn.skip_web:
+            log.info("plan: the step before could not search the web; this one writes without")
+            return replace(decision, candidate=replace(candidate, web_query=None)), None
         if not _asked_to_search(text, self._web_words) and _has_something_to_write(candidate):
             # The model offers a search for "I want to watch the film X" as readily as for
             # "find a borsch recipe". The first costs minutes of waiting, a page instead of a
@@ -704,10 +714,12 @@ class Orchestrator:
             # Not the same as an empty web: it was cut short, and saying "found nothing" sent
             # the user looking for a search that never finished.
             log.warning("web research timed out: %s", e)
+            self._web_failed(turn)
             return decision, await self._inbox_or_error(
                 turn, text, "WEB_TIMEOUT", minutes=max(1, round(self._s.research_deadline_s / 60)))
         except ResearchError as e:
             log.warning("web research failed: %s", e)
+            self._web_failed(turn)
             return decision, await self._inbox_or_error(turn, text, "WEB_FAILED")
         content = "\n\n".join(part for part in (candidate.content, found) if part)
         return replace(decision, candidate=replace(candidate, content=content)), None
@@ -810,6 +822,7 @@ class Orchestrator:
         resolves the names against this snapshot. turn.outcome says which way it went."""
         assert turn.plan is not None
         turn.outcome, turn.last_undo = "failed", None
+        turn.skip_web, turn.plan.skip_web_next = turn.plan.skip_web_next, False
         try:
             snapshot = await self._discovery.get()
         except Exception as e:
