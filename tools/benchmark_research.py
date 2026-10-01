@@ -22,7 +22,7 @@ import anthropic
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from app.llm.research import ResearchError, WebResearcher, estimate_cost
+from app.llm.research import ResearchError, ResearchQuestion, WebResearcher, estimate_cost
 from app.web.reader import Reader
 
 QUESTIONS = [
@@ -75,6 +75,17 @@ class Meter:
         await self._client.close()
 
 
+async def ask(researcher: Any, request: str, query: str) -> tuple[str, str]:
+    """(answer, outcome): "ok", "asked" (it put a question to the user) or "failed". A question
+    back is a real outcome of a lookup, not a crash of the benchmark."""
+    try:
+        return await researcher.research(request, query, "text"), "ok"
+    except ResearchQuestion as e:
+        return f"[asked: {e.question}]", "asked"
+    except ResearchError as e:
+        return f"[{type(e).__name__}: {e}]", "failed"
+
+
 def build(engine: str, key: str, model: str, meter: Meter) -> WebResearcher:
     if engine == "server":  # what production runs before the switch
         return WebResearcher(key, model, client=meter, max_searches=3, deadline_s=600.0,
@@ -89,7 +100,10 @@ async def run(args: argparse.Namespace) -> int:
     if not key:
         raise SystemExit(f"ANTHROPIC_API_KEY is not set ({args.env})")
     only = set(args.only.split(",")) if args.only else None
-    rows, answers = [], []
+    rows = []
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    out = OUT_DIR / f"benchmark-{date.today().isoformat()}.md"
+    out.write_text("", encoding="utf-8")  # each answer is added as it arrives
     for engine in ("server", "loop"):
         meter = Meter(anthropic.AsyncAnthropic(api_key=key, max_retries=0, timeout=600))
         researcher = build(engine, key, args.model, meter)
@@ -99,33 +113,28 @@ async def run(args: argparse.Namespace) -> int:
                     continue
                 meter.reset()
                 start = time.monotonic()
-                try:
-                    answer, ok = await researcher.research(request, query, "text"), True
-                except ResearchError as e:
-                    answer, ok = f"[{type(e).__name__}: {e}]", False
+                answer, outcome = await ask(researcher, request, query)
                 seconds = time.monotonic() - start
                 cost = estimate_cost(args.model, input_tokens=meter.input,
                                      output_tokens=meter.output, cache_read=meter.cache_read,
                                      cache_write=meter.cache_write, searches=meter.searches)
-                rows.append((name, engine, ok, seconds, meter.input + meter.cache_read
+                rows.append((name, engine, outcome, seconds, meter.input + meter.cache_read
                              + meter.cache_write, meter.output, cost))
-                answers.append(f"## {name} — {engine} ({seconds:.0f} s, ~${cost:.3f})\n\n{answer}")
-                print(f"{name:8} {engine:6} {'ok' if ok else 'FAIL':4} {seconds:5.0f} s  "
-                      f"~${cost:.3f}", flush=True)
+                with out.open("a", encoding="utf-8") as f:
+                    f.write(f"## {name} — {engine} ({seconds:.0f} s, ~${cost:.3f})\n\n"
+                            f"{answer}\n\n")
+                print(f"{name:8} {engine:6} {outcome:6} {seconds:5.0f} s  ~${cost:.3f}",
+                      flush=True)
         finally:
             await researcher.aclose()
-    print("\n| question | engine | answered | s | tokens in | out | ~$ |\n"
+    print("\n| question | engine | outcome | s | tokens in | out | ~$ |\n"
           "|---|---|---|---|---|---|---|")
-    for name, engine, ok, s, tin, tout, cost in rows:
-        print(f"| {name} | {engine} | {'yes' if ok else 'no'} | {s:.0f} | {tin:,} | {tout:,} "
-              f"| {cost:.3f} |")
+    for name, engine, outcome, s, tin, tout, cost in rows:
+        print(f"| {name} | {engine} | {outcome} | {s:.0f} | {tin:,} | {tout:,} | {cost:.3f} |")
     for engine in ("server", "loop"):
         mine = [r for r in rows if r[1] == engine]
-        print(f"{engine}: {sum(r[2] for r in mine)}/{len(mine)} answered, "
+        print(f"{engine}: {sum(r[2] == 'ok' for r in mine)}/{len(mine)} answered, "
               f"{sum(r[3] for r in mine):.0f} s, ~${sum(r[6] for r in mine):.2f}")
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-    out = OUT_DIR / f"benchmark-{date.today().isoformat()}.md"
-    out.write_text("\n\n".join(answers), encoding="utf-8")
     print(f"answers: {out}")
     return 0
 

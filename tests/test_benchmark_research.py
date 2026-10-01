@@ -25,3 +25,25 @@ def test_the_questions_cover_real_estate_shops_and_general_research():
     keys = [key for key, _, _ in QUESTIONS]
     assert len(keys) == len(set(keys)) == 8
     assert {"kv", "flats", "panels", "milk", "iphone", "borscht", "trip", "pelevin"} == set(keys)
+
+
+class Answers:
+    def __init__(self, outcome):
+        self.outcome = outcome
+
+    async def research(self, request, query, media):
+        from app.llm.research import ResearchError, ResearchQuestion
+
+        if self.outcome == "asked":
+            raise ResearchQuestion("какой город?")
+        if self.outcome == "failed":
+            raise ResearchError("no answer")
+        return "## Ответ"
+
+
+async def test_a_question_back_or_a_failure_is_an_outcome_not_a_crash():
+    from tools.benchmark_research import ask
+
+    assert await ask(Answers("ok"), "r", "q") == ("## Ответ", "ok")
+    assert await ask(Answers("asked"), "r", "q") == ("[asked: какой город?]", "asked")
+    assert await ask(Answers("failed"), "r", "q") == ("[ResearchError: no answer]", "failed")
