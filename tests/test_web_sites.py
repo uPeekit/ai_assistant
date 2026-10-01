@@ -26,6 +26,6 @@ def test_errors_say_what_is_wrong_in_words_the_model_can_act_on():
     with pytest.raises(SiteError, match="unknown site"):
         search_url("bauhof.ee", "liimpuit")
     with pytest.raises(SiteError, match="no rent search"):
-        search_url("city24.ee", "Lasnamäe", RENT)
+        search_url("rimi.ee", "piim", RENT)
     with pytest.raises(SiteError, match="empty"):
         search_url("rimi.ee", "   ")

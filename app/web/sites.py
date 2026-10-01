@@ -4,6 +4,10 @@ Search engines are slow to index a new listing or a shop's stock; the site's own
 them today. Every template here was checked on 2026-10-01 to come back through Jina Reader with
 the query and prices on the page (tools/check_sites.py runs the same check), so the model is only
 offered searches that work. A site not listed is still reachable through web_search and read.
+
+Taken out on 2026-10-02: city24.ee and ehituseabc.ee. Their search pages build the results in
+the browser after Jina has captured the page, so what comes back is menus and a login form.
+k-rauta.ee does the same now and then; it stays while it passes more often than not.
 """
 
 from __future__ import annotations
@@ -26,14 +30,9 @@ class Site:
 SITES: tuple[Site, ...] = (
     Site("kv.ee", "real_estate", "https://www.kv.ee/search?deal_type=1&keyword={q}",
          rent_template="https://www.kv.ee/search?deal_type=2&keyword={q}", probe="Lasnamäe"),
-    Site("city24.ee", "real_estate",
-         "https://www.city24.ee/real-estate-search/apartments-for-sale?search={q}",
-         probe="Lasnamäe"),
     Site("rimi.ee", "groceries", "https://www.rimi.ee/epood/ee/otsing?query={q}", probe="piim"),
     Site("selver.ee", "groceries", "https://www.selver.ee/search?q={q}", probe="piim"),
     Site("k-rauta.ee", "building", "https://www.k-rauta.ee/otsing?q={q}", probe="liimpuit"),
-    Site("ehituseabc.ee", "building", "https://www.ehituseabc.ee/search?q={q}",
-         probe="liimpuit"),
     Site("kaup24.ee", "goods", "https://kaup24.ee/et/search?q={q}", probe="iphone"),
     Site("euronics.ee", "electronics", "https://www.euronics.ee/search?q={q}", probe="iphone"),
     Site("hinnavaatlus.ee", "prices",

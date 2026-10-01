@@ -69,6 +69,10 @@ the plan rule below.
   | euronics.ee | electronics | `https://www.euronics.ee/search?q={q}` |
   | hinnavaatlus.ee | price comparison across shops | `https://www.hinnavaatlus.ee/search/?Type=products&Query={q}` |
 
+  2026-10-02, during the build: city24.ee and ehituseabc.ee failed `tools/check_sites.py` twice
+  — their results render in the browser after Jina captures the page, so only menus came back —
+  and were taken out of the table. k-rauta.ee failed once and passed once; it stays, flaky.
+
   Not working yet (pages without results or prices): Prisma, Coop (ecoop.ee), Bauhof, Espak,
   kinnisvara24, city24 rentals. They are reachable through search + read. Finding working
   addresses for them is deferred: the user will ask for more sites later, and each will be added

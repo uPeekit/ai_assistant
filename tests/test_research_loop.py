@@ -152,7 +152,7 @@ async def test_a_url_read_twice_is_not_charged_again():
 async def test_bad_tool_input_costs_nothing_and_says_why():
     handler, bodies = scripted(
         message([tool_use("t1", "site_search", site="bauhof.ee", query="liimpuit"),
-                 tool_use("t2", "site_search", site="city24.ee", query="Lasnamäe", deal="rent"),
+                 tool_use("t2", "site_search", site="rimi.ee", query="piim", deal="rent"),
                  tool_use("t3", "read", url="kv.ee/1")], "tool_use"),
         message([text("## Итог")]))
     reader = FakeReader()
