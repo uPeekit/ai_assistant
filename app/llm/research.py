@@ -1,7 +1,9 @@
-"""Web research: Claude with its server-side web search and fetch tools, for a message that asks
-to find something and write it down. The interpreter only decides *that* something is to be
-looked up (Candidate.web_query); this turns the query into Markdown with sources, which then
-goes through the normal write path as the candidate's content."""
+"""Web research: Claude with three tools — Anthropic's web search, a known shop's or
+real-estate site's own search (app/web/sites.py), and reading a page (app/web/reader.py,
+trimmed by app/web/trim.py) — in a loop this module drives, with a budget it enforces. The
+interpreter only decides *that* something is to be looked up (Candidate.web_query); this turns
+the query into Markdown with sources, which then goes through the normal write path as the
+candidate's content."""
 
 from __future__ import annotations
 
@@ -29,7 +31,6 @@ from app.llm.prompts import (
     READ_REFUSED,
     READ_TOOL,
     READS_LEFT,
-    RESEARCH_PROMPT,
     RESEARCH_QUESTION,
     SOURCES_HEADING,
     TOOL_INPUT_ERROR,
@@ -44,18 +45,12 @@ from app.web.trim import relevant
 
 log = logging.getLogger(__name__)
 
-MAX_CONTINUATIONS = 3  # pause_turn resumes: the server-side tool loop stops every 10 steps
-# What a whole search may take before the user is told it did not work out. Measured: Sonnet
-# with pictures took 3m45s on a film query, so this is generous rather than tight — but a
-# search that has not finished by then is not going to be worth the wait.
-DEADLINE_S = 360.0
+# The backstop behind the soft deadline: the loop answers by itself once its budget or
+# RESEARCH_SOFT_DEADLINE_S is spent, so this only fires when a single call hangs.
+DEADLINE_S = 180.0
 MAX_RESULT_CHARS = 20_000
-MAX_FETCH_TOKENS = 8_000  # per fetched page
 PREAMBLE_CHARS = 300  # how far into the answer a lead-in before the first heading may run
 _FIRST_HEADING = re.compile(r"(?<![\w#])(#{1,3} )")  # "C# " is not a heading
-# Models with the dynamic-filtering tool versions; everything else gets the earlier ones.
-_DYNAMIC_PREFIXES = ("claude-opus-5", "claude-sonnet-5", "claude-fable-5", "claude-mythos-5",
-                     "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6")
 MAX_TURNS = 12  # model calls in one lookup, pause_turn resumes included; the budget ends it sooner
 MAX_TOKENS = 8192  # thinking and the answer together; the answer is capped at MAX_RESULT_CHARS
 _EFFORT_PREFIXES = ("claude-sonnet-5", "claude-opus-5", "claude-fable-5", "claude-mythos-5",
@@ -104,17 +99,6 @@ def _with_extra(prompt: str, extra: str) -> str:
     """The user's extra instructions, appended to a system prompt. They add to it; they never
     replace it, so the rules the code depends on still hold."""
     return f"{prompt}\n\n{extra.strip()}" if extra.strip() else prompt
-
-
-def research_tools(model: str, max_uses: int) -> list[dict]:
-    if model.startswith(_DYNAMIC_PREFIXES):
-        search, fetch = "web_search_20260209", "web_fetch_20260209"
-    else:
-        search, fetch = "web_search_20250305", "web_fetch_20250910"
-    # A fetched page arrives whole unless capped: one test query read 200k tokens of pages.
-    return [{"type": search, "name": "web_search", "max_uses": max_uses},
-            {"type": fetch, "name": "web_fetch", "max_uses": max_uses,
-             "max_content_tokens": MAX_FETCH_TOKENS}]
 
 
 def final_text(blocks: list[Any]) -> str:
@@ -236,19 +220,16 @@ class WebResearcher:
         extra: Callable[[], str] | None = None, deadline_s: float = DEADLINE_S,
         health: Health | None = None, reader: Reader | None = None, max_reads: int = 8,
         soft_deadline_s: float = 90.0, clock: Callable[[], float] = time.monotonic,
-        engine: str = "server",
     ) -> None:
         self.model = model
         self._health = health or Health()
         self._deadline = deadline_s
         # The user's own additions to the research prompt, from the admin page.
         self._extra = extra or (lambda: "")
-        self._tools = research_tools(model, max_searches)
         self._max_searches = max_searches
         self._max_reads = max_reads
         self._soft_deadline = soft_deadline_s
         self._clock = clock
-        self._engine = engine
         self._loop_tools = loop_tools(max_searches)
         self._reader = reader if reader is not None else Reader()
         self.last: Lookup | None = None
@@ -384,12 +365,10 @@ class WebResearcher:
         return [f"![{_md_caption(cap)}]({url})" for url, cap in hits[:MAX_IMAGES]]
 
     def _text(self, request: str, query: str) -> Awaitable[str]:
-        if self._engine == "loop":
-            prompt = research_loop_prompt(self._max_searches, self._max_reads)
-            return self._run_loop(_with_extra(prompt, self._extra()), request, query)
-        return self._run(_with_extra(RESEARCH_PROMPT, self._extra()), request, query)
+        prompt = research_loop_prompt(self._max_searches, self._max_reads)
+        return self._run(_with_extra(prompt, self._extra()), request, query)
 
-    async def _run_loop(self, system: str, request: str, query: str) -> str:
+    async def _run(self, system: str, request: str, query: str) -> str:
         """Claude asks for lookups, this runs them, until it answers or the budget ends it. When
         the reads are spent or the soft deadline passes, the next request has tools switched
         off: the model cannot call one again, so it cannot spin — it answers."""
@@ -418,6 +397,8 @@ class WebResearcher:
                         {"role": "user", "content": results}]
             turn = []
         self._log(lookup, start)
+        if resp is not None and resp.stop_reason == "refusal":
+            raise ResearchError("claude declined")
         text = final_text(turn)
         question = _question(text)
         if question:
@@ -526,34 +507,3 @@ class WebResearcher:
                  self._clock() - start,
                  (lookup.input_tokens + lookup.cache_read + lookup.cache_write) // 1000,
                  lookup.output_tokens // 1000, cost)
-
-    async def _run(self, system: str, request: str, query: str) -> str:
-        user = {"role": "user", "content": research_message(request, query)}
-        blocks: list[Any] = []
-        for _ in range(MAX_CONTINUATIONS + 1):
-            messages = [user, {"role": "assistant", "content": blocks}] if blocks else [user]
-            try:
-                # Not streamed on purpose: max_tokens is small (the length comes from the
-                # server-side tool loop, not from the answer), so the request stays well inside
-                # what a single response may take. DEADLINE_S is the bound that matters.
-                resp = await self._client.messages.create(
-                    model=self.model, max_tokens=4096, system=system,
-                    messages=messages, tools=self._tools,
-                )
-            except anthropic.APIError as e:
-                raise ResearchError(describe(e), self._health.record(e)) from None
-            self._health.ok()
-            blocks = [*blocks, *resp.content]
-            if resp.stop_reason != "pause_turn":
-                break
-        if resp.stop_reason == "refusal":
-            raise ResearchError("claude declined")
-        text = final_text(blocks)
-        question = _question(text)
-        if question:
-            raise ResearchQuestion(question)
-        if not text:
-            raise ResearchError(f"no answer (stop_reason={resp.stop_reason})")
-        log.info("llm %s researched the web: %d chars | %d+%d tok", self.model, len(text),
-                 resp.usage.input_tokens, resp.usage.output_tokens)
-        return text[:MAX_RESULT_CHARS]

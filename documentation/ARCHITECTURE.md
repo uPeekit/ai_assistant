@@ -624,6 +624,24 @@ turn, keyed on the user's message and the kind of result, so when both branches 
 the same message it runs once and both write from it. A search for text and pictures also
 answers a request for either alone.
 
+**Web research** (`app/llm/research.py`, `app/web/`). A message that asks to find something is
+looked up by a loop the bot drives. Claude gets three tools: `web_search` (Anthropic's, the
+basic version without a code sandbox), `site_search` (a shop's or real-estate site's own search
+page, from the verified table in `app/web/sites.py`) and `read` (a page through Jina Reader,
+which gets past the Cloudflare challenge in front of kv.ee and K-Rauta, with a plain fetch as
+fallback — public addresses only, every redirect checked). Pages are cut to what matters before
+the model sees them (`app/web/trim.py`; images become their alt text, so a shop named only by
+its logo keeps its name). The prompt says the user lives in Tallinn and lists Estonian sites by
+category, with and without a direct search. The budget is the code's, not the model's:
+`RESEARCH_MAX_SEARCHES` searches and `RESEARCH_MAX_READS` site searches and reads, and after
+`RESEARCH_SOFT_DEADLINE_S` the tools are switched off and the model answers with what it has;
+`RESEARCH_DEADLINE_S` is a backstop. It replaced Claude's server-side tool loop, which once
+spent 20 minutes on a kv.ee listing it had already read in the first 40 seconds; on the same
+eight questions the loop costs about an eighth and answers at least as well
+(`documentation/RESEARCH_BENCHMARK.md`, `docs/superpowers/specs/2026-10-01-web-search-design.md`).
+`tools/check_sites.py` checks the site table live; `tools/benchmark_research.py` measures a
+change.
+
 **Moving between notes** (`move`, vault only): the filer names the source, the destination
 and what to move; the editor marks lines with `delete` ops, and only a plan made of nothing
 but deletes counts. The code copies exactly those lines to the destination (appended, or a

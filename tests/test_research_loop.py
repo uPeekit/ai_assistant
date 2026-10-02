@@ -62,7 +62,7 @@ def loop(handler, reader, model="claude-sonnet-5", **kw) -> WebResearcher:
     sdk = anthropic.AsyncAnthropic(
         api_key=KEY, max_retries=0,
         http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(handler)))
-    return WebResearcher(KEY, model, client=sdk, reader=reader, engine="loop", **kw)
+    return WebResearcher(KEY, model, client=sdk, reader=reader, **kw)
 
 
 async def test_tool_calls_run_and_are_answered_in_one_message():
@@ -240,3 +240,10 @@ def test_where_is_it_cheapest_is_routed_to_the_price_comparison_where_the_tool_i
     site_search = next(t for t in loop_tools(4) if t["name"] == "site_search")
     assert "hinnavaatlus.ee" in site_search["description"]
     assert "дешевле" in site_search["description"]
+
+
+async def test_a_refusal_is_a_research_error_not_an_answer():
+    """The old path said "claude declined"; the loop must not pass a refusal off as a result."""
+    handler, _ = scripted(message([text("## Не могу помочь с этим")], "refusal"))
+    with pytest.raises(ResearchError, match="declined"):
+        await loop(handler, FakeReader()).research("x", "y", "text")

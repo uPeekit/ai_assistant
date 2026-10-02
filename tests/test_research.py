@@ -6,11 +6,9 @@ import httpx2
 import pytest
 
 from app.llm.research import (
-    MAX_FETCH_TOKENS,
     ResearchError,
     WebResearcher,
     final_text,
-    research_tools,
 )
 
 KEY = "sk-ant-test-key"
@@ -29,15 +27,6 @@ def test_final_text_is_what_comes_after_the_last_tool_result():
 
 def test_final_text_without_any_tool_use_is_all_the_text():
     assert final_text([block("text", "## Ответ")]) == "## Ответ"
-
-
-def test_tool_versions_follow_the_model():
-    haiku = {t["type"] for t in research_tools("claude-haiku-4-5", 3)}
-    sonnet = {t["type"] for t in research_tools("claude-sonnet-5", 3)}
-    assert haiku == {"web_search_20250305", "web_fetch_20250910"}
-    assert sonnet == {"web_search_20260209", "web_fetch_20260209"}
-    fetch = next(t for t in research_tools("claude-haiku-4-5", 3) if t["name"] == "web_fetch")
-    assert fetch["max_uses"] == 3 and fetch["max_content_tokens"] == MAX_FETCH_TOKENS
 
 
 def message(content, stop_reason="end_turn"):
@@ -67,7 +56,7 @@ async def test_research_sends_tools_and_resumes_a_paused_turn():
     r = researcher(handler)
     assert await r.research("найди рецепт борща", "рецепт борща") == "## Борщ\n- свёкла"
     first, second = bodies
-    assert {t["name"] for t in first["tools"]} == {"web_search", "web_fetch"}
+    assert {t["name"] for t in first["tools"]} == {"web_search", "site_search", "read"}
     assert "рецепт борща" in first["messages"][0]["content"]
     assert [m["role"] for m in second["messages"]] == ["user", "assistant"]
 

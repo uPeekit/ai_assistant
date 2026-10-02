@@ -96,6 +96,7 @@ from app.vault.linker import Linker
 from app.vault.pipeline import VaultPipeline
 from app.vault.staged import StagedFiler
 from app.vault.writer import VaultWriter
+from app.web.reader import Reader
 
 log = logging.getLogger(__name__)
 
@@ -370,7 +371,11 @@ def build(
     images = ImageHost(provider)
     researcher = (
         WebResearcher(settings.anthropic_api_key.get_secret_value(), settings.research_model,
-                      max_searches=settings.research_max_searches, is_image=images.is_image,
+                      max_searches=settings.research_max_searches,
+                      max_reads=settings.research_max_reads,
+                      soft_deadline_s=settings.research_soft_deadline_s,
+                      reader=Reader(jina_key=settings.jina_api_key.get_secret_value()),
+                      is_image=images.is_image,
                       search=ImageSearch(), extra=lambda: tuning.research_note,
                       deadline_s=settings.research_deadline_s, health=health)
         if uses_cloud(settings) else None

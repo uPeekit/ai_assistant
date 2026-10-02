@@ -38,10 +38,15 @@ class Settings(BaseSettings):
     # writes the better note, for about three times what Haiku costs — a search already costs
     # far more than an ordinary message, and this is the call whose quality you read.
     research_model: str = "claude-sonnet-5"
-    research_max_searches: int = Field(3, ge=1, le=20)
-    # How long one search may run before it is cut short. Two six-minute searches inside one
-    # plan is what 360 s produced; the user is told it was cut short, not that nothing exists.
-    research_deadline_s: float = Field(600.0, ge=30.0, le=1800.0)
+    research_max_searches: int = Field(4, ge=1, le=20)
+    # Site searches and page reads together, per lookup; past it the model is told to answer.
+    research_max_reads: int = Field(8, ge=1, le=40)
+    # After this the tools are switched off and the model answers with what it found.
+    research_soft_deadline_s: float = Field(90.0, ge=15.0, le=900.0)
+    # The backstop: only fires when one call hangs. The user is told it was cut short.
+    research_deadline_s: float = Field(180.0, ge=30.0, le=1800.0)
+    # Optional: Jina Reader works without a key at ~20 pages a minute; a key raises that.
+    jina_api_key: SecretStr = SecretStr("")
     # Multi-step goals: the model that splits a goal into steps and checks after each one. Its
     # own knowledge fills the steps ("all of Pelevin's novels"): Haiku listed 8, one of them
     # wrong; Sonnet listed 15, all right.
