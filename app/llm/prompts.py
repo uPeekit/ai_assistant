@@ -165,6 +165,12 @@ WEB_RULE = (
     "(«добавь картинок», «найди референсы», «покажи, как выглядит»).\n"
 )
 
+ANSWER_RULE = (
+    "- intent answer — пользователь спрашивает о содержимом присланной ссылки («какой залог?», "
+    "«сколько стоит?», «что тут пишут про парковку?») и ничего не просит записать: бот ответит "
+    "по странице. Если просят записать или добавить — это create или append, не answer, даже "
+    "когда есть вопрос. Для answer кандидата укажи как лучшую догадку, поля не заполняй.\n"
+)
 PLAN_RULE = (
     "- intent plan — сообщение требует нескольких действий в Notion: создать страницу и "
     "наполнить её, завести несколько задач, или несколько предметов, каждый из которых — "
@@ -204,6 +210,8 @@ def system_prompt(ctx: Context) -> str:
         extra += WEB_RULE
     if ctx.planning:
         extra += PLAN_RULE
+    if ctx.answering:
+        extra += ANSWER_RULE
     if ctx.pending and PLAN_KEY in ctx.pending:
         extra += STEP_RULE
     notes = NOTES_FIRST if ctx.reasoning_first else NOTES_LAST

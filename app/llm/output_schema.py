@@ -106,7 +106,8 @@ def candidate_schema(ctx: Context, target_key: str) -> dict:
 
 
 def intents(ctx: Context) -> list[str]:
-    return [*INTENTS, "plan"] if ctx.planning else list(INTENTS)
+    offered = [*INTENTS, "plan"] if ctx.planning else list(INTENTS)
+    return [*offered, "answer"] if ctx.answering else offered
 
 
 def build_schema(ctx: Context) -> dict:

@@ -195,6 +195,7 @@ ERRORS: dict[str, str] = {
     "INTERNAL": "Не удалось обработать сообщение.",
     "WEB_UNAVAILABLE": "Поиск в интернете работает только с Claude (ANTHROPIC_API_KEY в .env).",
     "WEB_FAILED": "Не удалось ничего найти в интернете.",
+    "LINK_ANSWER_FAILED": "Не получилось ответить по ссылке — попробуйте спросить ещё раз.",
     # A search that ran past its deadline: it was cut short, not empty.
     "WEB_TIMEOUT": "Поиск в интернете шёл дольше {minutes} мин — прервал его. "
                     "Попробуйте запрос покороче или по частям.",

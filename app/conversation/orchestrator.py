@@ -73,6 +73,7 @@ from app.conversation.session import (
 from app.conversation.shared_research import SharedResearch
 from app.conversation.steps import to_interpretation
 from app.interpretation.models import Interpretation
+from app.llm.answer import LinkAnswerer, LinkAnswerError
 from app.llm.base import (
     LLMClient,
     LLMContextOverflow,
@@ -369,12 +370,15 @@ class Orchestrator:
         note: Callable[[], str] | None = None, vault: VaultPipeline | None = None,
         switches: Switches | None = None, tuning: Tuning | None = None,
         health: Health | None = None, links: LinkReader | None = None,
+        answerer: LinkAnswerer | None = None,
     ) -> None:
         self._s = settings
         self._health = health or Health()
         self._researcher = researcher
         # Reads the links in a fresh message once, before either branch interprets it.
         self._links = links
+        # Answers a question about a linked page; None: the "answer" intent is never offered.
+        self._answerer = answerer
         self._planner = planner
         self._vault = vault
         self._switches = switches
@@ -564,6 +568,8 @@ class Orchestrator:
         ctx = self._builder.build(snapshot, turn.now, pending, allow_plan=turn.plan is None,
                                   recent=self._recent(turn, snapshot))
         ctx.links = turn.links
+        ctx.answering = (self._answerer is not None
+                         and any(not page.error for page in turn.links))
         if not ctx.target_keys():
             return _prefixed(self._plain(turn, "DISCOVERY_FAILED"), prefix)
         turn.audit(llm_context=ctx.json())
@@ -575,6 +581,8 @@ class Orchestrator:
             return _prefixed(await self._inbox_or_error(turn, prompt, code), prefix)
 
         self._audit_llm(turn, interp, trace)
+        if interp.intent.value == "answer" and ctx.answering:
+            return _prefixed(await self._answer_link(turn, prompt), prefix)
         if interp.intent.value == "plan" and turn.plan is None:
             # Even with a clarifying question attached: a plan's side question ("which dates?")
             # is not worth stopping for, and each step can still ask what it really needs.
@@ -685,6 +693,20 @@ class Orchestrator:
                 turn.vault_content.append(written)
         execution_id = self._record_execution(turn, executed)
         return Reply(text_reply, _undo_buttons(execution_id), undo_id=execution_id)
+
+    async def _answer_link(self, turn: _Turn, question: str) -> Reply:
+        """A question about a page the user sent: answered from the page, written nowhere —
+        the vault side, which read the same message, is held back too."""
+        assert self._answerer is not None
+        turn.let_vault_write(False)
+        turn.audit(decision=_kind("ANSWER"))
+        pages = [page for page in turn.links if not page.error]
+        try:
+            return Reply(await self._answerer.answer(question, pages))
+        except LinkAnswerError as e:
+            log.warning("link answer failed: %s", e)
+            turn.audit(error="LINK_ANSWER_FAILED")
+            return Reply(_error("LINK_ANSWER_FAILED"))
 
     @staticmethod
     def _web_failed(turn: _Turn) -> None:

@@ -89,6 +89,8 @@ class Context:
     # What the links in the message turned out to be (app.web.links.LinkPage): page title and
     # trimmed text, or why one was not read. Shown after the message as data, never as orders.
     links: list = field(default_factory=list)
+    # The "answer" intent is on offer: an answerer exists and a link in the message was read.
+    answering: bool = False
 
     def json(self, *, cloud: bool = False) -> str:
         payload = self.cloud_payload() if cloud else self.payload
