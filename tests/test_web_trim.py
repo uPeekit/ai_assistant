@@ -1,4 +1,4 @@
-from app.web.trim import GAP, relevant
+from app.web.trim import GAP, page_facts, relevant
 
 PAGE = "\n".join([
     "Kasutame küpsiseid, et leht töötaks",          # cookie banner: dropped
@@ -81,3 +81,42 @@ def test_a_shop_page_about_biscuits_keeps_its_products():
     out = relevant(page, "küpsised", limit=6000)
     assert "Küpsised Selga 180 g" in out and "Kaerahelbeküpsised 300 g" in out
     assert "Kasutame" not in out  # the banner itself still goes
+
+
+LISTING = "\n".join([
+    *[f"[Menüü {n}](https://www.kv.ee/m{n})" for n in range(80)],           # navigation
+    "Hind", "–", "Ehitusaasta",                                              # a search form
+    "# Kalevipoja põik 3, Lasnamäe, Tallinn",
+    "Kodulaenu pakub Swedbank AS. Laenusumma 133 000 €; lepingutasu 190 €; "
+    + "tingimused " * 90,                                                    # a loan disclaimer
+    *[f"[Läänemere tee {n} _168 900€_ Müüa korter, 4 tuba](https://www.kv.ee/o{n})"
+      for n in range(30)],                                                   # other listings
+    " 174 900€  2 695 €/m² ",
+    "| Müüa korter |", "| --- |",
+    "| Tube | 4 |", "| Üldpind | 64.9 m² |", "| Korrus/Korruseid | 3/9 |",
+    "| Ehitusaasta | 1979 |", "| [Energiamärgis](https://ttja.ee/energia) | D |",
+    "Korter asub üheksakorruselise maja kolmandal korrusel ning selle aknad avanevad maja "
+    "mõlemale poole.",
+    *[f"Muu kuulutus {n}" for n in range(200)],
+])
+
+
+def test_a_linked_page_keeps_its_facts_table_price_and_description():
+    """The page a link points to is the subject: its facts come first, wherever they sit, and
+    menus and other listings go. The question is in Russian and shares no word with the page."""
+    out = page_facts(LISTING, "сколько стоит и на каком этаже?", limit=3000)
+    assert len(out) <= 3000
+    for fact in ("174 900€", "| Tube | 4 |", "| Korrus/Korruseid | 3/9 |", "| Ehitusaasta | 1979 |",
+                 "Energiamärgis", "kolmandal korrusel", "# Kalevipoja põik 3"):
+        assert fact in out, fact
+    assert "Menüü 5" not in out and "Läänemere tee 3 " not in out and "| --- |" not in out
+
+
+def test_a_linked_page_is_still_in_page_order():
+    out = page_facts(LISTING, "", limit=3000)
+    assert out.index("Kalevipoja") < out.index("174 900€") < out.index("Tube")
+
+
+def test_a_short_linked_page_comes_back_whole():
+    page = "# Pealkiri\nEsimene lõik, mis räägib asjast.\nTeine lõik."
+    assert page_facts(page, "что тут", limit=3000) == page

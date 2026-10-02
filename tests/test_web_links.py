@@ -1,6 +1,6 @@
 import asyncio
 
-from app.web.links import MAX_LINKS, PAGE_CHARS, LinkReader, find_links, is_private
+from app.web.links import LINKS_CHARS, MAX_LINKS, LinkReader, find_links, is_private
 from app.web.reader import Page, PageUnreadable
 
 
@@ -41,7 +41,13 @@ async def test_each_link_is_read_trimmed_and_titled():
     pages = await reader(FakeReader()).read("добавь https://www.kv.ee/1 в таблицу")
     [page] = pages
     assert (page.url, page.title, page.error) == ("https://www.kv.ee/1", "Pealkiri", "")
-    assert "174 900 €" in page.text and len(page.text) <= PAGE_CHARS
+    assert "174 900 €" in page.text and LINKS_CHARS // 2 < len(page.text) <= LINKS_CHARS
+
+
+async def test_several_links_share_one_budget():
+    pages = await reader(FakeReader()).read("https://a.ee/1 https://b.ee/2 https://c.ee/3")
+    assert len(pages) == 3
+    assert all(0 < len(page.text) <= LINKS_CHARS // 3 for page in pages)
 
 
 async def test_a_private_link_is_never_read():

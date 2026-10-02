@@ -19,12 +19,14 @@ from typing import Protocol
 from urllib.parse import urlsplit
 
 from app.web.reader import Page, PageUnreadable
-from app.web.trim import relevant
+from app.web.trim import page_facts
 
 log = logging.getLogger(__name__)
 
 MAX_LINKS = 3
-PAGE_CHARS = 3000  # half what research gets: this goes into every interpretation of the message
+# All the pages of one message together, split evenly: what research gives one page, because
+# this goes into every interpretation of the message. One link gets it all, three get a third.
+LINKS_CHARS = 6000
 DEADLINE_S = 12.0  # a slow page never holds the message up for long
 URL = re.compile(r"https?://[^\s<>«»\"'()\[\]]+", re.I)
 TRAILING = ".,;:!?"
@@ -41,7 +43,7 @@ NEVER_OPEN_DEFAULT = (
 class LinkPage:
     url: str
     title: str = ""
-    text: str = ""  # trimmed to PAGE_CHARS; empty when the page could not be read
+    text: str = ""  # its share of LINKS_CHARS; empty when the page could not be read
     error: str = ""  # why not: "private", "timeout", or the reader's reason
 
 
@@ -84,8 +86,9 @@ class LinkReader:
         never = list(self._never_open())
         pages: dict[str, LinkPage] = {u: LinkPage(u, error="private")
                                       for u in urls if is_private(u, never)}
-        tasks = {asyncio.ensure_future(self._one(u, message)): u
-                 for u in urls if u not in pages}
+        readable = [u for u in urls if u not in pages]
+        limit = LINKS_CHARS // max(len(readable), 1)
+        tasks = {asyncio.ensure_future(self._one(u, message, limit)): u for u in readable}
         if tasks:
             done, pending = await asyncio.wait(tasks, timeout=self._deadline)
             for task in pending:
@@ -101,7 +104,7 @@ class LinkReader:
                  time.monotonic() - start)
         return result
 
-    async def _one(self, url: str, message: str) -> LinkPage:
+    async def _one(self, url: str, message: str, limit: int) -> LinkPage:
         try:
             page = await self._reader.read(url)
         except PageUnreadable as e:
@@ -109,4 +112,4 @@ class LinkReader:
         except Exception as e:  # one link must never cost the message
             log.warning("links: a page read failed unexpectedly (%s)", type(e).__name__)
             return LinkPage(url, error=type(e).__name__)
-        return LinkPage(url, page.title, relevant(page.text, message, limit=PAGE_CHARS))
+        return LinkPage(url, page.title, page_facts(page.text, message, limit=limit))
