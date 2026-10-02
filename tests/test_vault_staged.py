@@ -535,3 +535,47 @@ async def test_a_question_with_a_read_link_is_answered_from_the_link_not_the_vau
     actions, _, _ = await StagedFiler(script, "haiku").file(message, ctx(links=(page,)))
     assert actions == [{"action": "link_answer", "text": message}]
     assert script.stages == ["INTENT_PROMPT"]
+
+
+async def test_a_title_and_fields_from_a_read_page_are_the_users_not_the_models_memory():
+    """«в книги <link>»: the page names the book and its author. Judged against the message
+    alone, the title was "from memory" and went to a second, Sonnet lookup."""
+    from app.web.links import LinkPage
+
+    page = LinkPage("https://www.apollo.ee/dune", "Дюна — Фрэнк Герберт",
+                    "Автор: Фрэнк Герберт\nЦена 24,99 €")
+    folder = {"items": [{"title": "Дюна", "body": [], "tags": [],
+                         "props": [{"name": "author", "value": "Фрэнк Герберт"},
+                                   {"name": "status", "value": "Толстой"}]}],  # on no page
+              "lookup": "", "web": "", "media": "text"}
+    script = Script(INTENT_PROMPT={"intent": "add"}, TARGET_PROMPT={"target": "f2"},
+                    FOLDER_PROMPT=folder)
+    actions, _, _ = await StagedFiler(script, "haiku").file(
+        "в книги https://www.apollo.ee/dune", ctx(links=(page,)))
+    assert script.stages == ["INTENT_PROMPT", "TARGET_PROMPT", "FOLDER_PROMPT"]
+    assert [(a["title"], a["props"]) for a in actions] == [
+        ("Дюна", [{"name": "author", "value": "Фрэнк Герберт"}])]
+
+
+async def test_a_product_from_a_read_page_goes_on_the_grocery_list():
+    from app.web.links import LinkPage
+
+    page = LinkPage("https://rimi.ee/p/1", "Piim Alma 2,5% 1 l", "1,39 €")
+    script = Script(INTENT_PROMPT={"intent": "add"}, TARGET_PROMPT={"target": "g"},
+                    GROCERY_PROMPT={"names": ["piim Alma"]})
+    actions, _, _ = await StagedFiler(script, "haiku").file(
+        "купить https://rimi.ee/p/1", ctx(links=(page,)))
+    assert actions[0]["body"] == ["piim Alma"]
+
+
+async def test_a_page_full_of_numbers_does_not_let_an_invented_due_date_through():
+    from app.web.links import LinkPage
+
+    page = LinkPage("https://kino.ee/1", "Dune", "Seansid 2026-10-05 19:00, 21:30")
+    answer = {"items": [{"text": "сходить на Дюну", "due": "2026-09-30", "repeat": "",
+                         "heading": "", "tag": "", "countdown": False}]}
+    script = Script(INTENT_PROMPT={"intent": "add"}, TARGET_PROMPT={"target": "t"},
+                    TASKS_PROMPT=answer)
+    actions, _, _ = await StagedFiler(script, "haiku").file(
+        "сходить на Дюну https://kino.ee/1", ctx(links=(page,)))
+    assert actions[0]["due"] == ""
