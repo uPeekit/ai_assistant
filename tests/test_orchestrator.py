@@ -2000,3 +2000,23 @@ async def test_an_answer_to_a_question_is_never_taken_for_a_question_about_the_p
                                              fields={"t2.f1": val("Квартира", 1.0)})))
     await bot.orch.handle_text(CHAT, USER, "квартира")
     assert "answer" not in offered_intents(bot)
+
+
+async def test_the_pages_a_message_was_read_with_are_in_its_audit_row(make):
+    """After a misfiling, the row shows what the model was shown, not only what it answered."""
+    from app.web.links import LinkPage
+
+    pages = [LinkPage("https://www.kv.ee/1", "Müüa korter, 4 tuba", "Hind 174 900 €"),
+             LinkPage("https://docs.google.com/d/1", error="private")]
+    bot = make(links=FakeLinks(pages))
+    bot.llm.queue(make_interp("create", cand(bot.ctx, "t2", 0.95,
+                                             fields={"t2.f1": val("Квартира", 1.0)})))
+    await bot.orch.handle_text(CHAT, USER, "добавь https://www.kv.ee/1 в покупки")
+
+    (event,) = closed_events(bot, ["text"])
+    seen = json.loads(event["llm_context"])
+    assert "targets" in seen  # the workspace the model saw is still there
+    assert seen["links"] == [
+        {"url": "https://www.kv.ee/1", "title": "Müüa korter, 4 tuba",
+         "text": "Hind 174 900 €", "error": ""},
+        {"url": "https://docs.google.com/d/1", "title": "", "text": "", "error": "private"}]

@@ -476,3 +476,15 @@ async def test_with_both_sides_off_no_link_is_read(bot, tmp_path):
     bot.orch._links = links = FakeLinks([])
     reply = await bot.orch.handle_text(CHAT, USER, "https://www.kv.ee/1")
     assert reply.text == texts.ERRORS["NOTHING_ENABLED"] and links.asked == []
+
+
+async def test_notion_off_the_pages_read_are_audited_too(bot, tmp_path):
+    from app.web.links import LinkPage
+    from tests.test_orchestrator import FakeLinks, closed_events
+
+    bot.orch._switches = Switches(tmp_path / "switches.json", {"notion": False})
+    bot.orch._links = FakeLinks([LinkPage("https://www.kv.ee/1", "Korter", "Hind 174 900 €")])
+    bot.claude.answers = [{"actions": [{"action": "inbox", "text": "https://www.kv.ee/1"}]}]
+    await bot.orch.handle_text(CHAT, USER, "https://www.kv.ee/1")
+    (event,) = closed_events(bot, ["text"])
+    assert json.loads(event["llm_context"])["links"][0]["title"] == "Korter"

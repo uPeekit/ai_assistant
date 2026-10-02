@@ -1352,6 +1352,13 @@ class Orchestrator:
     def _finish(self, turn: _Turn) -> None:
         if turn.fallback_error and not turn.cols.get("error"):
             turn.audit(error=turn.fallback_error)
+        if turn.links:
+            # What the models were shown of the message's links, next to the workspace they
+            # were shown: after a misfiling, the answer alone does not say why.
+            seen = json.loads(turn.cols.get("llm_context") or "{}")
+            seen["links"] = [{"url": p.url, "title": p.title, "text": p.text, "error": p.error}
+                             for p in turn.links]
+            turn.audit(llm_context=json.dumps(seen, ensure_ascii=False, separators=(",", ":")))
         if turn.calls:
             turn.audit(llm_model=_models(turn.calls),
                        llm_response=json.dumps(turn.calls, ensure_ascii=False))
