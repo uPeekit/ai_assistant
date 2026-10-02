@@ -86,6 +86,16 @@ def test_flat_answer_converts_to_one_that_fits_the_full_schema(ctx):
     assert c["target_name"] == ctx.target_labels[tk]
 
 
+def test_long_reasoning_notes_are_cut_rather_than_failing_the_answer(ctx):
+    """Sonnet reasons at length, and the flat schema sets no limit: a whole correct answer was
+    rejected over a thinking aid nobody reads."""
+    answer = flat(ctx)
+    answer["notes"] = "Сообщение — заметка о баге. " * 40
+    converted = to_interpretation(answer, ctx)
+    assert check(converted, build_schema(ctx)) == ""
+    assert converted["notes"].startswith("Сообщение — заметка о баге.")
+
+
 def test_a_converted_answer_breaking_the_full_schema_is_reported(ctx):
     answer = to_interpretation(flat(ctx, item="t2.i999"), ctx)
     assert "item" in check(answer, build_schema(ctx))
