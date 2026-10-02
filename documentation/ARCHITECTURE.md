@@ -644,8 +644,10 @@ change.
 
 **Links as data** (`app/web/links.py`, `app/llm/answer.py`). Before a text message is
 interpreted, `LinkReader` reads up to three of its links in parallel through the research
-`Reader`, with a 12-second deadline. Each page is cut by `trim.relevant` to the 3 000
-characters nearest the message. A link whose host is on the tuning list `never_open` (admin
+`Reader`, with a 12-second deadline. Each page is cut by `trim.page_facts` to its share of
+6 000 characters. The cut is not `relevant`'s: the page is the subject, and the message may
+share no word with it. So table rows, prices, sizes and headings come first wherever they sit,
+then prose; menus and other listings are dropped. A link whose host is on the tuning list `never_open` (admin
 page; defaults to `NEVER_OPEN_DEFAULT`: Google documents, Notion, the Estonian banks) is not
 read. Nor is one past the deadline. Either way it stays a plain link with a reason.
 
