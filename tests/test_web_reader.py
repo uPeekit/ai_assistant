@@ -95,3 +95,12 @@ async def test_a_huge_page_is_cut_at_the_byte_cap(monkeypatch):
     page = await reader(jina=lambda r: httpx.Response(503),
                         site=lambda r: httpx.Response(200, html=big)).read("https://big.ee/")
     assert len(page.text) < 10_000
+
+
+async def test_a_malformed_url_is_unreadable_not_a_crash():
+    """httpx.InvalidURL is not an httpx.HTTPError: uncaught, one bad address the model made up
+    ended the whole lookup with the generic error instead of the usual fallback."""
+    r = reader(jina=lambda r: httpx.Response(200, text=JINA_OK),
+               site=lambda r: httpx.Response(200, html=SHOP))
+    with pytest.raises(PageUnreadable):
+        await r.read("https://shop.ee/a\nb")

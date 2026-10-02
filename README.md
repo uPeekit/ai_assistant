@@ -215,9 +215,16 @@ themselves.
 ## Web search and images
 
 With an Anthropic key set, a message that asks to *find* something *and write it down* is
-looked up first: Claude runs up to `RESEARCH_MAX_SEARCHES` web searches (default 3), reads the
-pages it needs, and the bot writes the Markdown result — a short summary, then «Источники» —
+looked up first, and the bot writes the Markdown result — a short summary, then «Источники» —
 to the page or database you named. Say where it should go; without a destination the bot asks.
+
+Claude knows you are in Tallinn and prefers Estonian sources. Besides web search
+(`RESEARCH_MAX_SEARCHES`, default 4) it can search some Estonian sites directly — kv.ee, Rimi,
+Selver, K-Rauta, kaup24, Euronics, and hinnavaatlus.ee for "where is it cheapest" — and read
+pages; together that is up to `RESEARCH_MAX_READS` (default 8). Pages are read through Jina
+Reader, which gets past the bot checks on kv.ee and K-Rauta (`JINA_API_KEY` is optional);
+`tools/check_sites.py` checks the direct searches still work, and
+`documentation/RESEARCH_BENCHMARK.md` shows how it compares with the old way.
 «найди в Notion …» / «что у меня в …» stays a search of your own workspace.
 
 When you ask for pictures («с изображениями», «добавь картинок», «покажи, как выглядит»), up
@@ -234,10 +241,11 @@ The bot only searches when your message asks it to — «найди», «пои�
 картинками», «референсы». «Хочу посмотреть фильм Uncharted» is a line for a list, not a
 research project, and is written as one even if the model offers to look it up.
 
-A search takes one to four minutes with `claude-sonnet-5` (what `RESEARCH_MODEL` ships as) and
-costs roughly 10–15 ¢; the chat says «🔎 Ищу в интернете…» while it runs, and it gives up after
-six minutes rather than leaving you waiting. `claude-haiku-4-5` is faster and about a third of
-the price, with shallower writing. Undo removes the whole written result, and its few minutes
+A search takes about 20 seconds to a minute with `claude-sonnet-5` (what `RESEARCH_MODEL` ships
+as) and costs roughly 4–15 ¢; the chat says «🔎 Ищу в интернете…» while it runs. After
+`RESEARCH_SOFT_DEADLINE_S` (90 s) the bot stops it looking and has it answer with what it found,
+and `RESEARCH_DEADLINE_S` (3 minutes) is the backstop. `claude-haiku-4-5` is faster and about
+half the price, with shallower writing. Undo removes the whole written result, and its few minutes
 are counted from the moment the page appears — not from when you sent the message.
 
 ## Teaching the bot your workspace

@@ -70,3 +70,14 @@ def test_an_image_becomes_its_alt_text_so_a_shop_named_only_by_its_logo_keeps_it
     out = relevant(page, "iphone", limit=6000)
     assert "TuruLiider.ee logo" in out and "743,00 €" in out
     assert "mrliider.jpg" not in out
+
+
+def test_a_shop_page_about_biscuits_keeps_its_products():
+    """"küpsis" is Estonian for biscuit as well as for cookie: as a cookie-banner word it emptied
+    a Rimi results page for küpsised down to bare prices."""
+    page = "\n".join(["Kasutame küpsiseid, et leht töötaks",
+                      "[Küpsised Selga 180 g](https://rimi.ee/p/1)", "1,29 €",
+                      "[Kaerahelbeküpsised 300 g](https://rimi.ee/p/2)", "2,15 €"])
+    out = relevant(page, "küpsised", limit=6000)
+    assert "Küpsised Selga 180 g" in out and "Kaerahelbeküpsised 300 g" in out
+    assert "Kasutame" not in out  # the banner itself still goes

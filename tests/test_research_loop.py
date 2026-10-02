@@ -247,3 +247,30 @@ async def test_a_refusal_is_a_research_error_not_an_answer():
     handler, _ = scripted(message([text("## Не могу помочь с этим")], "refusal"))
     with pytest.raises(ResearchError, match="declined"):
         await loop(handler, FakeReader()).research("x", "y", "text")
+
+
+async def test_the_turn_limit_forces_an_answer_instead_of_discarding_the_findings(monkeypatch):
+    """Re-reading a page it already has costs no budget, so a model can loop on it: the last
+    turn the limit allows must be a forced answer, not a lookup thrown away as "no answer"."""
+    from app.llm import research
+
+    monkeypatch.setattr(research, "MAX_TURNS", 3)
+    handler, bodies = scripted(
+        message([tool_use("t1", "read", url="https://a.ee/1")], "tool_use"),
+        message([text("пока так"), tool_use("t2", "read", url="https://a.ee/1")], "tool_use"),
+        message([text("## Итог")]))
+    assert await loop(handler, FakeReader()).research("x", "y", "text") == "## Итог"
+    assert bodies[2]["tool_choice"] == {"type": "none"}
+    assert bodies[2]["messages"][-1]["content"][-1] == {"type": "text", "text": FORCE_ANSWER}
+
+
+async def test_one_page_failing_in_an_unexpected_way_does_not_end_the_lookup():
+    class Broken(FakeReader):
+        async def read(self, url):
+            raise RuntimeError("something nobody expected")
+
+    handler, bodies = scripted(
+        message([tool_use("t1", "read", url="https://a.ee/1")], "tool_use"),
+        message([text("## Итог")]))
+    assert await loop(handler, Broken()).research("x", "y", "text") == "## Итог"
+    assert bodies[1]["messages"][-1]["content"][0]["is_error"] is True

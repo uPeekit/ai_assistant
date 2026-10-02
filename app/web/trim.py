@@ -71,7 +71,11 @@ def _mentions(line: str, want: set[str]) -> bool:
 
 
 def _noise(line: str, want: set[str], near_price: bool = False) -> bool:
-    if IMAGE.match(line) or CHECKBOX.match(line) or BOILERPLATE.search(line):
+    if IMAGE.match(line) or CHECKBOX.match(line):
+        return True
+    # "küpsis" is a cookie banner's word and also Estonian for biscuit: a product line sits next
+    # to its price, a banner does not.
+    if BOILERPLATE.search(line) and not (near_price or PRICE.search(line)):
         return True
     # A bare link is a menu entry, unless it names what is looked for, carries a price, or sits
     # right next to one — a results page puts the shop or product link beside its price.

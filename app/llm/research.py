@@ -379,7 +379,7 @@ class WebResearcher:
         turn: list[Any] = []  # the assistant turn being written, across pause_turn resumes
         force = False
         resp = None
-        for _ in range(MAX_TURNS):
+        for turn_no in range(MAX_TURNS):
             messages = [*history, {"role": "assistant", "content": turn}] if turn else history
             resp = await self._create(system, messages, force)
             lookup.count(resp.usage)
@@ -390,7 +390,11 @@ class WebResearcher:
             if force or resp.stop_reason != "tool_use" or not calls:
                 break
             results = await self._run_tools(lookup, calls, request)
-            force = lookup.spent or self._clock() - start >= self._soft_deadline
+            # The turn limit is a budget like the others: the last call it allows is a forced
+            # answer. Re-reading a page costs no reads, so without this a model looping on one
+            # page reached the limit and its findings were thrown away as "no answer".
+            force = (lookup.spent or self._clock() - start >= self._soft_deadline
+                     or turn_no + 1 >= MAX_TURNS - 1)
             if force:
                 results.append({"type": "text", "text": FORCE_ANSWER})
             history += [{"role": "assistant", "content": turn},
@@ -488,6 +492,10 @@ class WebResearcher:
         except PageUnreadable as e:
             lookup.unreadable += 1
             return READ_FAILED.format(reason=e), True
+        except Exception as e:  # one page must never end a lookup, whatever it breaks with
+            lookup.unreadable += 1
+            log.warning("research: a page read failed unexpectedly (%s)", type(e).__name__)
+            return READ_FAILED.format(reason=type(e).__name__), True
         lookup.fallbacks += page.via != "jina"
         log.debug("research read %s via %s", url, page.via)
         body = f"{page.title}\n{page.url}\n\n{relevant(page.text, f'{look_for} {request}')}"

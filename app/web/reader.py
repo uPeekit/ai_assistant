@@ -60,13 +60,15 @@ class Reader:
     async def read(self, url: str) -> Page:
         if not await self._is_public(url):
             raise PageUnreadable("not a public web address")
+        # httpx.InvalidURL is not an httpx.HTTPError: an address the model made up (a newline in
+        # it, say) would otherwise escape both paths and end the whole lookup.
         try:
             return await self._jina(url)
-        except (httpx.HTTPError, PageUnreadable) as e:
+        except (httpx.HTTPError, httpx.InvalidURL, PageUnreadable) as e:
             log.info("jina could not read a page (%s); fetching it directly", type(e).__name__)
         try:
             return await self._direct(url)
-        except httpx.HTTPError as e:
+        except (httpx.HTTPError, httpx.InvalidURL) as e:
             raise PageUnreadable(f"could not be fetched ({type(e).__name__})") from None
 
     async def _jina(self, url: str) -> Page:
