@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 
 import anthropic
 
@@ -32,6 +32,10 @@ DOWN = "down"
 # How long between two showings of the same warning. An hour: often enough that a user who
 # missed the first one still learns why the answers got worse, rare enough not to nag.
 REMIND_S = 3600.0
+# A failure older than this is checked before it is reported again. The state is only ever
+# cleared by a call that goes through, and a reply that makes no call (an undo, a digest
+# with nothing to sort) would otherwise keep repeating a failure the user has since fixed.
+STALE_S = 300.0
 
 _CREDIT_MARKERS = ("credit balance", "billing", "insufficient_quota", "insufficient quota",
                    "purchase credits")
@@ -84,11 +88,18 @@ class Health:
     """Whether Claude is usable right now, and whether the user has been told."""
 
     def __init__(self, *, remind_s: float = REMIND_S,
-                 clock: Callable[[], float] = time.monotonic) -> None:
+                 clock: Callable[[], float] = time.monotonic,
+                 probe: Callable[[], Awaitable[object]] | None = None,
+                 stale_s: float = STALE_S) -> None:
         self._remind_s = remind_s
         self._clock = clock
+        # The smallest real call (main.py: one token from the cheapest model). Raises
+        # anthropic.APIError when Claude still refuses.
+        self._probe = probe
+        self._stale_s = stale_s
         self._reason = ""
         self._told_at: float | None = None
+        self._failed_at: float | None = None
 
     @property
     def reason(self) -> str:
@@ -101,6 +112,8 @@ class Health:
             log.warning("claude is down (%s): %s", why, describe(e))
             self._reason = why
             self._told_at = None  # a new reason is worth saying even if the old one was just said
+        if why:
+            self._failed_at = self._clock()
         return why
 
     def ok(self) -> None:
@@ -109,10 +122,37 @@ class Health:
             log.info("claude answers again (was: %s)", self._reason)
         self._reason = ""
         self._told_at = None
+        self._failed_at = None
 
     def short(self) -> str:
         """A few words for a line that is already about a failure, or ""."""
         return texts.LLM_DOWN_SHORT.get(self._reason, "")
+
+    async def checked_note(self) -> str:
+        """`note()`, but a failure older than STALE_S is checked with one real call first.
+
+        The 12:00 mail digest found the account out of credit, which was true; the user
+        topped up, and at 16:33 an /undo — which calls no model — was told there was no
+        credit. Only a call that goes through clears the state, and none had been made. The
+        check runs only when a warning is about to be given, so at most once an hour."""
+        if not self._reason:
+            return ""
+        now = self._clock()
+        due = self._told_at is None or now - self._told_at >= self._remind_s
+        stale = self._failed_at is None or now - self._failed_at >= self._stale_s
+        if due and stale and self._probe is not None:
+            try:
+                await self._probe()
+            except anthropic.APIError as e:
+                self.record(e)
+                self._failed_at = self._clock()
+            except Exception as e:  # a check that cannot run is no news either way
+                log.info("could not check whether claude answers again: %s",
+                         type(e).__name__)
+            else:
+                self.ok()
+                return ""
+        return self.note()
 
     def note(self) -> str:
         """The sentence to append to a reply, or "" when there is nothing to say or it has been

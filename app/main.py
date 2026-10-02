@@ -44,6 +44,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import NoReturn
 
+import anthropic
 from telegram import Bot, BotCommand
 from telegram.error import InvalidToken
 from telegram.ext import Application
@@ -228,6 +229,21 @@ class App:
     fatal: tuple[int, str] | None = None
 
 
+def _claude_probe(settings: Settings):
+    """The smallest real call, for checking that a remembered failure is still true before the
+    user is told about it again: one token from the cheapest model. None without a key."""
+    key = settings.anthropic_api_key.get_secret_value()
+    if not key:
+        return None
+    client = anthropic.AsyncAnthropic(api_key=key, timeout=20.0, max_retries=0)
+
+    async def probe() -> None:
+        await client.messages.create(model=settings.filer_model, max_tokens=1,
+                                     messages=[{"role": "user", "content": "."}])
+
+    return probe
+
+
 def _vault_pipeline(settings: Settings, switches: Switches, tuning: Tuning,
                     health: Health, rewriter: Rewriter | None = None,
                     editor: Editor | None = None) -> VaultPipeline | None:
@@ -274,7 +290,7 @@ def _daily_digest(settings: Settings, vault: VaultPipeline | None, switches: Swi
         if not switches.get("obsidian"):
             return
         text = await asyncio.to_thread(vault.digest)
-        warning = health.note()
+        warning = await health.checked_note()
         if not text and not warning:
             log.info("daily digest: nothing due, nothing sent")
             return
@@ -320,7 +336,7 @@ def _mail_digest(settings: Settings, switches: Switches, buckets_file: Buckets, 
             return
         run = await service.run()
         text = digest(run, service.buckets)
-        warning = health.note()
+        warning = await health.checked_note()
         if not text and not warning:
             log.info("mail digest: nothing new, nothing sent")
             return
@@ -358,7 +374,7 @@ def build(
     sessions = SessionStore(store)
     # One health record for the whole process: whichever Anthropic call fails first is the
     # one that explains it, and every reply and digest can say so (app/llm/health.py).
-    health = Health()
+    health = Health(probe=_claude_probe(settings))
     descriptions = Descriptions(settings.targets_file)
     note = WorkspaceNote(settings.targets_file.with_name("workspace_note.md"))
     provider = provider_factory(settings)

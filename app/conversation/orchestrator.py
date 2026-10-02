@@ -1238,7 +1238,7 @@ class Orchestrator:
             # goes here rather than in any one branch because every branch above can be the
             # degraded one — a question the local model asked, a vault line that says nothing
             # was written, a plan that stopped.
-            warning = self._health.note()
+            warning = await self._health.checked_note()
             if warning:
                 reply = replace(reply, text=f"{reply.text}\n\n{warning}".strip())
             try:
