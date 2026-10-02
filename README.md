@@ -220,7 +220,7 @@ to the page or database you named. Say where it should go; without a destination
 
 Claude knows you are in Tallinn and prefers Estonian sources. Besides web search
 (`RESEARCH_MAX_SEARCHES`, default 4) it can search some Estonian sites directly — kv.ee, Rimi,
-Selver, K-Rauta, kaup24, Euronics, and hinnavaatlus.ee for "where is it cheapest" — and read
+Selver, K-Rauta, Bauhaus, kaup24, Euronics, and hinnavaatlus.ee for "where is it cheapest" — and read
 pages; together that is up to `RESEARCH_MAX_READS` (default 8). Pages are read through Jina
 Reader, which gets past the bot checks on kv.ee and K-Rauta (`JINA_API_KEY` is optional);
 `tools/check_sites.py` checks the direct searches still work, and

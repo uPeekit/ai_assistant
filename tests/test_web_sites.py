@@ -29,3 +29,10 @@ def test_errors_say_what_is_wrong_in_words_the_model_can_act_on():
         search_url("rimi.ee", "piim", RENT)
     with pytest.raises(SiteError, match="empty"):
         search_url("rimi.ee", "   ")
+
+
+def test_bauhaus_is_searched_through_its_catalog_search():
+    """Checked live on 2026-10-02: 5 searches in 6 came back with names, prices and stock."""
+    assert search_url("bauhaus.ee", "liimpuit 28 mm") == (
+        "https://www.bauhaus.ee/catalogsearch/result/?q=liimpuit%2028%20mm")
+    assert BY_NAME["bauhaus.ee"].kind == "building"

@@ -8,6 +8,11 @@ offered searches that work. A site not listed is still reachable through web_sea
 Taken out on 2026-10-02: city24.ee and ehituseabc.ee. Their search pages build the results in
 the browser after Jina has captured the page, so what comes back is menus and a login form.
 k-rauta.ee does the same now and then; it stays while it passes more often than not.
+
+Added on 2026-10-02: bauhaus.ee (5 searches in 6 passed). Tried and left out the same day:
+online.depo.ee. It is a browser app whose pages are empty until its own scripts run, and Jina
+returns them empty even with caching off and a 40-second wait. Its products come from a
+GraphQL API, which would need an adapter of its own rather than a line in this table.
 """
 
 from __future__ import annotations
@@ -33,6 +38,8 @@ SITES: tuple[Site, ...] = (
     Site("rimi.ee", "groceries", "https://www.rimi.ee/epood/ee/otsing?query={q}", probe="piim"),
     Site("selver.ee", "groceries", "https://www.selver.ee/search?q={q}", probe="piim"),
     Site("k-rauta.ee", "building", "https://www.k-rauta.ee/otsing?q={q}", probe="liimpuit"),
+    Site("bauhaus.ee", "building", "https://www.bauhaus.ee/catalogsearch/result/?q={q}",
+         probe="liimpuit"),
     Site("kaup24.ee", "goods", "https://kaup24.ee/et/search?q={q}", probe="iphone"),
     Site("euronics.ee", "goods", "https://www.euronics.ee/search?q={q}", probe="iphone"),
     Site("hinnavaatlus.ee", "prices",
