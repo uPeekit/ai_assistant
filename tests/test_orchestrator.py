@@ -1971,3 +1971,32 @@ async def test_an_answer_that_fails_says_so(make):
     bot.llm.queue(make_interp("answer", cand(bot.ctx, "t2", 0.3)))
     reply = await bot.orch.handle_text(CHAT, USER, "сколько стоит? https://kv.ee/1")
     assert reply.text == texts.ERRORS["LINK_ANSWER_FAILED"]
+
+
+async def test_an_answer_to_a_question_still_has_the_page_from_the_request(make):
+    """The link is in the request, not in the answer: the page must not drop out between them."""
+    from app.web.links import LinkPage
+
+    page = LinkPage("https://www.kv.ee/1", "Müüa korter, 4 tuba", "Hind 174 900 €")
+    bot = make(links=FakeLinks([page]))
+    bot.llm.queue(make_interp("create", cand(bot.ctx, "t2", 0.95)))  # no title -> asks
+    await bot.orch.handle_text(CHAT, USER, "добавь https://www.kv.ee/1 в покупки")
+    bot.llm.queue(make_interp("create", cand(bot.ctx, "t2", 0.95,
+                                             fields={"t2.f1": val("Квартира", 1.0)})))
+    await bot.orch.handle_text(CHAT, USER, "квартира")
+    assert bot.llm.links == [[page], [page]]
+
+
+async def test_an_answer_to_a_question_is_never_taken_for_a_question_about_the_page(make):
+    """Otherwise the bot's own question would be left pending under a reply about the page."""
+    from app.web.links import LinkPage
+
+    page = LinkPage("https://www.kv.ee/1", "Müüa korter, 4 tuba", "Hind 174 900 €")
+    bot = make(links=FakeLinks([page]), answerer=FakeAnswerer())
+    bot.llm.queue(make_interp("create", cand(bot.ctx, "t2", 0.95)))  # no title -> asks
+    await bot.orch.handle_text(CHAT, USER, "добавь https://www.kv.ee/1 в покупки")
+    assert "answer" in offered_intents(bot)
+    bot.llm.queue(make_interp("create", cand(bot.ctx, "t2", 0.95,
+                                             fields={"t2.f1": val("Квартира", 1.0)})))
+    await bot.orch.handle_text(CHAT, USER, "квартира")
+    assert "answer" not in offered_intents(bot)

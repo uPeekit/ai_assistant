@@ -465,3 +465,14 @@ async def test_notion_off_a_question_about_a_link_is_answered_from_the_page(bot,
 
     assert "Залог — две месячные платы." in reply.text
     assert {p: p.read_bytes() for p in bot.dir.rglob("*.md")} == before
+
+
+async def test_with_both_sides_off_no_link_is_read(bot, tmp_path):
+    """Nothing would use the page, and the reader is a third party."""
+    from tests.test_orchestrator import FakeLinks
+
+    bot.orch._switches = Switches(tmp_path / "switches.json",
+                                  {"notion": False, "obsidian": False})
+    bot.orch._links = links = FakeLinks([])
+    reply = await bot.orch.handle_text(CHAT, USER, "https://www.kv.ee/1")
+    assert reply.text == texts.ERRORS["NOTHING_ENABLED"] and links.asked == []

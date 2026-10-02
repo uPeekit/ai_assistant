@@ -519,12 +519,11 @@ class Orchestrator:
                                             digest_at=self._s.daily_digest_at)
                          if not called.only_name else texts.CALLED)
         text = called.text or text
-        if self._links is not None:
-            # Before either branch: both interpret the message with what its links say.
-            turn.links = await self._links.read(text)
         if not self._on("notion"):
             # Notion is switched off on the admin page: the vault answers on its own, which is
             # what this pipeline was built to be able to do.
+            if self._links is not None and self._vault_on():
+                turn.links = await self._links.read(text)
             return await self._vault_only(turn, text)
         try:
             snapshot = await self._discovery.get()
@@ -536,6 +535,16 @@ class Orchestrator:
         expired = self._sessions.pop_expired_one(turn.chat_id, turn.now)
         prefix = await self._expired_prefix(turn, expired) if expired is not None else ""
         session = None if expired is not None else self._sessions.get(turn.chat_id, turn.now)
+        # Trimmed from the *head*: the newest answer is the part that has to survive. Cutting
+        # the tail instead freezes the conversation once the concatenation reaches the cap —
+        # every further answer chopped off, the same bytes sent again, the same question asked
+        # forever, at one LLM call a turn and with nothing ever reaching Notion or the inbox.
+        prompt = (f"{session.original_text}\n{text}"[-MAX_PROMPT:] if session is not None
+                  else text)
+        if self._links is not None:
+            # Before either branch: both interpret the message with what its links say. An
+            # answer to a question reads them from the request it answers.
+            turn.links = await self._links.read(prompt)
         if self._vault_on() and session is None:
             # A fresh thought goes to both stores at once. An answer to a question does not:
             # it answers Notion, and the vault has already had the message it belongs to —
@@ -557,18 +566,13 @@ class Orchestrator:
             turn.plan.answers.append(text[:MAX_PROMPT])
             turn.asked_field = session.question.field_name
             pending = {**(pending or {}), **plan_context(turn.plan)}
-        # Trimmed from the *head*: the newest answer is the part that has to survive. Cutting
-        # the tail instead freezes the conversation once the concatenation reaches the cap —
-        # every further answer chopped off, the same bytes sent again, the same question asked
-        # forever, at one LLM call a turn and with nothing ever reaching Notion or the inbox.
-        prompt = (f"{session.original_text}\n{text}"[-MAX_PROMPT:] if session is not None
-                  else text)
         asked = list(session.asked) if session is not None else []
 
         ctx = self._builder.build(snapshot, turn.now, pending, allow_plan=turn.plan is None,
                                   recent=self._recent(turn, snapshot))
         ctx.links = turn.links
-        ctx.answering = (self._answerer is not None
+        # A fresh question only: an answer to the bot's own question is never one about a page.
+        ctx.answering = (self._answerer is not None and session is None
                          and any(not page.error for page in turn.links))
         if not ctx.target_keys():
             return _prefixed(self._plain(turn, "DISCOVERY_FAILED"), prefix)
