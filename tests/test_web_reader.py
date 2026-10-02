@@ -89,6 +89,18 @@ async def test_a_redirect_to_a_private_address_is_refused():
         await reader(jina=lambda r: httpx.Response(503), site=site).read("https://evil.ee/go")
 
 
+async def test_a_page_the_site_answered_404_is_not_read_as_content():
+    """Jina answers 200 and passes the site's error page on: kv.ee's 404 for a delisted flat is
+    its top 10 listings, which read like the flat the user linked."""
+    gone = ("Title: KV.EE\nURL Source: https://www.kv.ee/1\n"
+            "Warning: Target URL returned error 404: Not Found\n\nMarkdown Content:\n"
+            "## 404 SEE LEHT EI ELA ENAM SIIN\n### TOP 10 KUULUTUSED\nVabaduse väljak 6, 189 000 €")
+    r = reader(jina=lambda req: httpx.Response(200, text=gone),
+               site=lambda req: httpx.Response(404, html="<p>404</p>"))
+    with pytest.raises(PageUnreadable, match="404"):
+        await r.read("https://www.kv.ee/1")
+
+
 async def test_a_never_open_site_is_refused_without_any_request():
     """The research loop reads through this too: a Docs link in the message must not reach
     Jina because the model chose to read it."""

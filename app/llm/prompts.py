@@ -237,7 +237,11 @@ def link_answer_message(question: str, pages: list) -> str:
     return f"Вопрос пользователя: «{question.strip()}»\n\n{links_section(pages)}"
 
 
-LINK_REASONS = {"private": "закрытая ссылка, не открывалась", "timeout": "не успела открыться"}
+LINK_REASONS = {
+    "private": "закрытая ссылка, не открывалась", "timeout": "не успела открыться",
+    "the site answered 404": "страницы больше нет — сайт ответил 404",
+    "the site answered 410": "страницы больше нет — сайт ответил 410",
+}
 
 
 def links_section(pages: list) -> str:

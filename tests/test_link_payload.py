@@ -35,3 +35,10 @@ def test_no_links_no_section():
     user = build_messages("купи молоко", ctx_with([]))[1]["content"]
     assert "Содержимое ссылок" not in user
     assert links_section([]) == ""
+
+
+def test_a_page_that_is_gone_is_called_gone():
+    """A delisted flat: the bot can say so instead of guessing at a page it never saw."""
+    for code in ("404", "410"):
+        section = links_section([LinkPage("https://www.kv.ee/1", error=f"the site answered {code}")])
+        assert "страницы больше нет" in section, code

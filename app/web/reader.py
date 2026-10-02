@@ -33,6 +33,7 @@ BROWSER_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 CHALLENGE = re.compile(r"just a moment|security verification|verify you are human|"
                        r"attention required|checking your browser|"
                        r"target url returned error (?:401|403|429|503)", re.I)
+SITE_ERROR = re.compile(r"target url returned error ([45]\d\d)", re.I)
 
 
 @dataclass(frozen=True)
@@ -102,6 +103,11 @@ class Reader:
         head, title, body = _jina_parts(resp.text)
         if not body or any(CHALLENGE.search(part) for part in (head, title, body[:2000])):
             raise PageUnreadable("protected")
+        # Jina answers 200 and passes the site's error page on: kv.ee's 404 for a delisted flat
+        # is its top 10 listings, which read like the flat that was asked about.
+        failed = SITE_ERROR.search(head)
+        if failed:
+            raise PageUnreadable(f"the site answered {failed.group(1)}")
         return Page(url, title, body, "jina")
 
     async def _direct(self, url: str) -> Page:
