@@ -71,3 +71,10 @@ def test_bad_inbox_mode_fails(env):
     env.setenv("INBOX_MODE", "bogus")
     with pytest.raises(ValidationError):
         Settings(_env_file=None)
+
+
+def test_research_budget_defaults(env):
+    s = Settings(_env_file=None)
+    assert (s.research_max_searches, s.research_max_reads) == (4, 8)
+    assert (s.research_soft_deadline_s, s.research_deadline_s) == (90.0, 180.0)
+    assert s.jina_api_key.get_secret_value() == ""

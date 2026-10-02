@@ -1864,3 +1864,23 @@ def test_the_model_naming_the_field_it_left_empty_is_not_a_question():
         assert clean_clarify(junk) is None, junk
     kept = "Записать на массаж как задачу или просто заметкой?"
     assert clean_clarify(kept) == kept
+
+
+async def test_after_a_failed_web_step_only_the_next_step_skips_searching(make):
+    """The checker answers a failed search with the same search reworded, which doubled a
+    10-minute wait for a site that answered the same way. The step after a failure writes what
+    it has; a later step searches again, because a plan may look up one item per step."""
+    researcher = FakeResearcher(fail=True)
+    planner = FakePlanner(["найди квартиру на kv.ee и добавь в идеи"],
+                          then=["найди квартиру на kv.ee ещё раз и добавь в идеи",
+                                "найди рецепт борща и добавь в идеи"])
+    bot = make(researcher=researcher, planner=planner)
+    bot.llm.queue(plan_interp(bot))
+    bot.llm.queue(make_interp("append", cand(bot.ctx, "t5", 0.95, web_query="kv.ee квартира")))
+    bot.llm.queue(make_interp("append", cand(bot.ctx, "t5", 0.95, web_query="kv.ee квартира",
+                                             content="таблица: адрес, цена")))
+    bot.llm.queue(make_interp("append", cand(bot.ctx, "t5", 0.95, web_query="рецепт борща")))
+    await bot.orch.handle_text(CHAT, USER, "сделай таблицу и найди квартиру на kv.ee",
+                               progress=collect([]))
+
+    assert [query for _, query in researcher.asked] == ["kv.ee квартира", "рецепт борща"]

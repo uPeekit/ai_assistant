@@ -64,6 +64,10 @@ class PlanState(BaseModel):
     # answered ("author: Dostoevsky"). A later step that says nothing about that field takes
     # the same value instead of asking again, once per book (app.conversation.steps).
     field_answers: dict[str, str] = Field(default_factory=dict)
+    # Set when a step's web search failed: the next step then writes what it has without
+    # searching. The checker's answer to a failed search is the same search reworded, which
+    # doubled a 10-minute wait for a site that answered the same way.
+    skip_web_next: bool = False
 
     @property
     def failures(self) -> int:

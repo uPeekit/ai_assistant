@@ -169,3 +169,53 @@ async def test_an_empty_balance_is_retried_far_less_often_than_a_rate_limit(reas
     await llm.interpret("x", None, {})
     assert primary.calls == 2
     assert local.calls == 3  # every message was answered, all the way through
+
+
+# ---- a warning is checked before it is given --------------------------------------------------
+
+async def test_a_stale_warning_is_checked_and_dropped_when_claude_answers_again():
+    """The 12:00 mail digest found the account out of credit — true then. The user topped up,
+    then sent /undo at 16:33: no Claude call, so nothing could clear the state, and the undo
+    reply said there was no credit. A warning older than a few minutes is checked first."""
+    now = [0.0]
+    probes: list[str] = []
+
+    async def probe() -> None:
+        probes.append("asked")
+
+    health = Health(clock=lambda: now[0], probe=probe)
+    health.record(_error(400, "Your credit balance is too low to access the Anthropic API."))
+    now[0] = 4.5 * 3600
+
+    assert await health.checked_note() == ""
+    assert probes == ["asked"] and health.reason == ""
+
+
+async def test_a_warning_that_is_still_true_is_given_after_the_check():
+    now = [0.0]
+
+    async def probe() -> None:
+        raise _error(400, "Your credit balance is too low to access the Anthropic API.")
+
+    health = Health(clock=lambda: now[0], probe=probe)
+    health.record(_error(400, "Your credit balance is too low to access the Anthropic API."))
+    now[0] = 600.0
+
+    assert await health.checked_note() == texts.LLM_DOWN_NOTE["credit"]
+    assert health.reason == "credit"
+
+
+async def test_a_fresh_failure_is_not_rechecked_and_nothing_is_checked_while_all_is_well():
+    """A failure seconds old needs no second opinion; and with nothing wrong, nothing is asked."""
+    now = [0.0]
+    probes: list[str] = []
+
+    async def probe() -> None:
+        probes.append("asked")
+
+    health = Health(clock=lambda: now[0], probe=probe)
+    assert await health.checked_note() == "" and probes == []
+
+    health.record(_error(400, "Your credit balance is too low to access the Anthropic API."))
+    now[0] = 30.0
+    assert await health.checked_note() == texts.LLM_DOWN_NOTE["credit"] and probes == []
