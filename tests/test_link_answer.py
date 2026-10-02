@@ -8,7 +8,8 @@ from app.llm.answer import LinkAnswerer, LinkAnswerError
 from app.web.links import LinkPage
 
 KEY = "sk-ant-test-key"
-PAGE = LinkPage("https://www.kv.ee/1", "Müüa korter, 4 tuba", "Hind 174 900 €\nTagatisraha 2 kuu üür")
+PAGE = LinkPage("https://www.kv.ee/1", "Müüa korter, 4 tuba",
+                "Hind 174 900 €\nTagatisraha 2 kuu üür")
 
 
 def message(content, stop_reason="end_turn"):
