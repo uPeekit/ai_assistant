@@ -86,6 +86,9 @@ class Context:
     web_research: bool = False
     # The "plan" intent is on offer: a planner exists and this is not already a plan's step.
     planning: bool = False
+    # What the links in the message turned out to be (app.web.links.LinkPage): page title and
+    # trimmed text, or why one was not read. Shown after the message as data, never as orders.
+    links: list = field(default_factory=list)
 
     def json(self, *, cloud: bool = False) -> str:
         payload = self.cloud_payload() if cloud else self.payload

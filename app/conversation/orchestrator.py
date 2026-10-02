@@ -103,6 +103,7 @@ from app.validation.policy import Decision, Policy, Question
 from app.validation.semantic import SemanticValidator, ValidationResult
 from app.vault.pipeline import VaultPipeline, VaultTurn
 from app.vault.writer import VaultUndo
+from app.web.links import LinkReader
 
 log = logging.getLogger(__name__)
 
@@ -315,6 +316,8 @@ class _Turn:
     outcome: str = "failed"
     # This plan step comes right after one whose web search failed: it does not search.
     skip_web: bool = False
+    # The pages behind the links in this turn's message (app.web.links.LinkPage), read once.
+    links: list = field(default_factory=list)
     last_undo: str | None = None
     # Sends an intermediate message (a finished plan step) before the turn's own reply.
     progress: Callable[[Reply], Awaitable[None]] | None = None
@@ -365,11 +368,13 @@ class Orchestrator:
         researcher: WebResearcher | None = None, planner: Planner | None = None,
         note: Callable[[], str] | None = None, vault: VaultPipeline | None = None,
         switches: Switches | None = None, tuning: Tuning | None = None,
-        health: Health | None = None,
+        health: Health | None = None, links: LinkReader | None = None,
     ) -> None:
         self._s = settings
         self._health = health or Health()
         self._researcher = researcher
+        # Reads the links in a fresh message once, before either branch interprets it.
+        self._links = links
         self._planner = planner
         self._vault = vault
         self._switches = switches
@@ -510,6 +515,9 @@ class Orchestrator:
                                             digest_at=self._s.daily_digest_at)
                          if not called.only_name else texts.CALLED)
         text = called.text or text
+        if self._links is not None:
+            # Before either branch: both interpret the message with what its links say.
+            turn.links = await self._links.read(text)
         if not self._on("notion"):
             # Notion is switched off on the admin page: the vault answers on its own, which is
             # what this pipeline was built to be able to do.
@@ -554,6 +562,7 @@ class Orchestrator:
 
         ctx = self._builder.build(snapshot, turn.now, pending, allow_plan=turn.plan is None,
                                   recent=self._recent(turn, snapshot))
+        ctx.links = turn.links
         if not ctx.target_keys():
             return _prefixed(self._plain(turn, "DISCOVERY_FAILED"), prefix)
         turn.audit(llm_context=ctx.json())
@@ -829,6 +838,7 @@ class Orchestrator:
             log.warning("discovery failed: %s", e)
             return Reply(_error("DISCOVERY_FAILED"))
         ctx = self._builder.build(snapshot, turn.now, plan_context(turn.plan), allow_plan=False)
+        ctx.links = turn.links  # a step made from a message with a link still sees the page
         log.info("step %d/%d: %s", turn.plan.index + 1, len(turn.plan.steps), _short(step.text))
         interp = to_interpretation(step, ctx, turn.plan.field_answers)
         if interp is not None:

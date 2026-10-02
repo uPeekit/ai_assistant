@@ -84,7 +84,7 @@ class Bot:
 
 
 def make_bot(tmp_path: Path, *, inbox: str | None = INBOX, inbox_mode: str = "auto",
-             researcher=None, planner=None) -> Bot:
+             researcher=None, planner=None, links=None) -> Bot:
     snap = flagged(inbox)
     db = tmp_path / "bot.sqlite"
     store = AuditStore(db)
@@ -102,7 +102,7 @@ def make_bot(tmp_path: Path, *, inbox: str | None = INBOX, inbox_mode: str = "au
     orch = Orchestrator(
         settings, discovery, builder, llm, SemanticValidator(),
         Policy(Thresholds.from_settings(settings)), Executor(notion), store,
-        SessionStore(store), clock=clock, researcher=researcher, planner=planner,
+        SessionStore(store), clock=clock, researcher=researcher, planner=planner, links=links,
     )
     return Bot(orch, llm, notion, discovery, store, SessionStore(store), clock,
                builder.build(snap, now=NOW), snap, db)
@@ -1884,3 +1884,37 @@ async def test_after_a_failed_web_step_only_the_next_step_skips_searching(make):
                                progress=collect([]))
 
     assert [query for _, query in researcher.asked] == ["kv.ee квартира", "рецепт борща"]
+
+
+# ---- links in a message -------------------------------------------------------------------------
+
+
+class FakeLinks:
+    def __init__(self, pages):
+        self.pages, self.asked = pages, []
+
+    async def read(self, message):
+        self.asked.append(message)
+        return self.pages if "http" in message else []
+
+
+async def test_the_pages_behind_a_messages_links_reach_the_interpreter(make):
+    from app.web.links import LinkPage
+
+    page = LinkPage("https://www.kv.ee/1", "Müüa korter, 4 tuba", "Hind 174 900 €")
+    links = FakeLinks([page])
+    bot = make(links=links)
+    bot.llm.queue(make_interp("create", cand(bot.ctx, "t2", 0.95,
+                                             fields={"t2.f1": val("Квартира", 1.0)})))
+    await bot.orch.handle_text(CHAT, USER, "добавь https://www.kv.ee/1 в покупки")
+
+    assert links.asked == ["добавь https://www.kv.ee/1 в покупки"]
+    assert bot.llm.links == [[page]]
+
+
+async def test_a_message_without_links_gives_the_interpreter_none(make):
+    bot = make(links=FakeLinks([]))
+    bot.llm.queue(make_interp("create", cand(bot.ctx, "t2", 0.95,
+                                             fields={"t2.f1": val("Молоко", 1.0)})))
+    await bot.orch.handle_text(CHAT, USER, "добавь молоко в покупки")
+    assert bot.llm.links == [[]]
