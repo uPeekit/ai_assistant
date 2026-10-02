@@ -446,3 +446,22 @@ async def test_a_question_about_a_link_writes_nothing_to_the_vault_either(bot):
     reply = await bot.orch.handle_text(CHAT, USER, "какой залог? https://www.kv.ee/1")
     assert reply.text.startswith("Залог")
     assert {p: p.read_bytes() for p in bot.dir.rglob("*.md")} == before
+
+
+async def test_notion_off_a_question_about_a_link_is_answered_from_the_page(bot, tmp_path):
+    from app.web.links import LinkPage
+    from tests.test_orchestrator import FakeAnswerer
+
+    class Links:
+        async def read(self, message):
+            return [LinkPage("https://www.kv.ee/1", "Üürile anda korter", "Tagatisraha 2 kuud")]
+
+    bot.orch._switches = Switches(tmp_path / "switches.json", {"notion": False})
+    bot.orch._links, bot.orch._answerer = Links(), FakeAnswerer()
+    bot.claude.answers = [{"actions": [{"action": "link_answer", "text": "какой залог?"}]}]
+    before = {p: p.read_bytes() for p in bot.dir.rglob("*.md")}
+
+    reply = await bot.orch.handle_text(CHAT, USER, "какой залог? https://www.kv.ee/1")
+
+    assert "Залог — две месячные платы." in reply.text
+    assert {p: p.read_bytes() for p in bot.dir.rglob("*.md")} == before

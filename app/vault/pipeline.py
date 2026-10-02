@@ -184,7 +184,8 @@ class VaultPipeline:
 
     async def handle(self, message: str, *, content: str = "",
                      go: Callable[[], Awaitable[bool]] | None = None,
-                     research: Research | None = None, links: tuple = ()) -> VaultTurn:
+                     research: Research | None = None, links: tuple = (),
+                     answer: Callable[[str, list], Awaitable[str]] | None = None) -> VaultTurn:
         """Read the message, write the vault, and start the linking behind the reply.
 
         `content` is text the caller already has (a plan step's research): the filer still
@@ -241,6 +242,10 @@ class VaultPipeline:
                          output_tokens=output_tokens, vault=vault_name(self._index.root))
         if any(a.research for a in actions):
             actions = await self._looked_up(actions, message, research, turn)
+        about_links = [a for a in actions if a.action == "link_answer"]
+        actions = [a for a in actions if a.action != "link_answer"]
+        if about_links:
+            await self._answer_links(message, links, answer, turn)
         dated = [a for a in actions if a.action == "agenda"]
         questions = [a for a in actions if a.action == "search"]
         shopping = [a for a in actions
@@ -472,6 +477,23 @@ class VaultPipeline:
         if not want:
             return texts.VAULT_GROCERIES_EMPTY
         return texts.VAULT_GROCERIES_LIST.format(items=", ".join(want))
+
+    @staticmethod
+    async def _answer_links(message: str, links: tuple,
+                            answer: Callable[[str, list], Awaitable[str]] | None,
+                            turn: VaultTurn) -> None:
+        """A question about a page the user sent, answered from the page; nothing written.
+        Only asked when the vault is on its own: with Notion on, its interpreter decides
+        answers, so the two sides never both answer one message."""
+        pages = [page for page in links if not page.error]
+        if answer is None or not pages:
+            return
+        try:
+            reply = await answer(message, pages)
+        except Exception as e:  # the answerer's own error, or Claude being down
+            log.warning("vault: link answer failed (%s)", type(e).__name__)
+            reply = texts.ERRORS["LINK_ANSWER_FAILED"]
+        turn.answer = f"{turn.answer}\n{reply}".strip() if turn.answer else reply
 
     def _agenda_answer(self, action: VaultAction) -> str:
         """A question about dates, answered from the vault: a day, a range, or "what now"."""

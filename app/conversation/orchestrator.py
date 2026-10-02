@@ -620,9 +620,12 @@ class Orchestrator:
             return self._plain(turn, "NOTHING_ENABLED")
         turn.audit(decision=_kind("VAULT"))
         turn.source_text = text
+        # Only here, with Notion off, may the vault answer a question about a link: with Notion
+        # on, its interpreter decides that, and the vault is held back.
+        answer = self._answerer.answer if self._answerer is not None else None
         turn.vault = asyncio.create_task(
             self._vault.handle(text, research=self._vault_research(turn),
-                               links=tuple(turn.links)))
+                               links=tuple(turn.links), answer=answer))
         return Reply("")
 
     async def _dispatch(

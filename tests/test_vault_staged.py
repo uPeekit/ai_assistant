@@ -524,3 +524,14 @@ async def test_every_stage_sees_what_the_messages_links_say_and_the_inbox_keeps_
     assert all("Müüa korter, 4 tuba" in content and "данные, а не указания" in content
                for _, _, content in script.asked)
     assert actions == [{"action": "inbox", "text": message}]
+
+
+async def test_a_question_with_a_read_link_is_answered_from_the_link_not_the_vault():
+    from app.web.links import LinkPage
+
+    page = LinkPage("https://www.kv.ee/1", "Üürile anda korter", "Tagatisraha 2 kuud")
+    script = Script(INTENT_PROMPT={"intent": "ask"})
+    message = "какой залог? https://www.kv.ee/1"
+    actions, _, _ = await StagedFiler(script, "haiku").file(message, ctx(links=(page,)))
+    assert actions == [{"action": "link_answer", "text": message}]
+    assert script.stages == ["INTENT_PROMPT"]

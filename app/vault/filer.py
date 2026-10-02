@@ -28,7 +28,7 @@ from app.vault.writer import VaultAction
 log = logging.getLogger(__name__)
 
 ACTIONS = ("task", "note", "append", "update", "rewrite", "move", "log", "grocery", "search",
-           "agenda", "inbox")
+           "agenda", "inbox", "link_answer")
 # A list of the day's errands is one message and one action per errand: at 10, a list of a
 # dozen lost its tail. The same cap as a plan's steps.
 MAX_ACTIONS = 25

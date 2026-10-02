@@ -699,6 +699,9 @@ class _Run:
 
     async def _question(self, text: str) -> list[dict]:
         ctx = self.ctx
+        if any(not page.error for page in ctx.links):
+            # A question that comes with a page is about the page, not about the vault.
+            return [{"action": "link_answer", "text": text}]
         schema = _obj({"kind": _enum(ASK_KINDS), "due_from": _STRING, "due_to": _STRING,
                        "text": _STRING, "folder": _enum(["", *ctx.folders]), "tag": _STRING,
                        "props": _PROPS})
