@@ -19,7 +19,7 @@ from pydantic import ValidationError
 
 from app import texts
 from app.llm.health import Health, describe
-from app.llm.prompts import FILER_PROMPT, filer_message, filer_vault
+from app.llm.prompts import FILER_PROMPT, filer_message, filer_vault, links_section
 from app.vault import groceries as groceries_mod
 from app.vault import mdedit
 from app.vault.index import GUIDE_NOTE, VaultIndex
@@ -79,6 +79,12 @@ ACTION_SCHEMA = _obj({
 FILER_SCHEMA = _obj({"actions": {"type": "array", "items": ACTION_SCHEMA}})
 
 
+def _with_links(content: str, ctx: VaultContext) -> str:
+    """The message's links beside it, never inside it: the inbox keeps the user's words."""
+    links = links_section(list(ctx.links))
+    return content + "\n\n" + links if links else content
+
+
 class FilerError(Exception):
     """`reason` is a code from app/llm/health.py when the call failed because Claude
     could not be used at all, and "" for every other failure."""
@@ -111,6 +117,9 @@ class VaultContext:
     folder_props: dict[str, list[str]] = field(default_factory=dict)
     note_props: dict[str, list[str]] = field(default_factory=dict)
     note_headings: dict[str, list[str]] = field(default_factory=dict)
+    # The pages behind the message's links (app.web.links.LinkPage), shown beside the message,
+    # never inside it: the inbox keeps the user's words, not a pasted web page.
+    links: tuple = ()
 
     def json(self) -> str:
         return filer_vault(guide=self.guide, today=self.today, weekday=self.weekday,
@@ -432,7 +441,8 @@ class Filer:
         try:
             resp = await self._client.messages.create(
                 model=self.model, max_tokens=MAX_TOKENS, system=FILER_PROMPT,
-                messages=[{"role": "user", "content": filer_message(message, ctx.json())}],
+                messages=[{"role": "user", "content": _with_links(
+                    filer_message(message, ctx.json()), ctx)}],
                 output_config={"format": {"type": "json_schema", "schema": FILER_SCHEMA}},
             )
         except anthropic.APIError as e:

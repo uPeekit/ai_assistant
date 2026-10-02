@@ -33,7 +33,7 @@ import anthropic
 from app import texts
 from app.llm import staged_prompts as P
 from app.llm.health import Health, describe
-from app.llm.prompts import WEB_WORDS
+from app.llm.prompts import WEB_WORDS, links_section
 from app.vault.filer import GROCERY_LIST, GUIDE_LINK, MEDIA, FilerError, VaultContext
 from app.vault.index import related
 
@@ -313,6 +313,9 @@ class _Run:
 
     async def _ask(self, system: str, schema: dict, content: str, *,
                    model: Ask | None = None, max_tokens: int = MAX_TOKENS) -> dict:
+        links = links_section(list(self.ctx.links))
+        if links:  # every stage sees the pages, whatever it decides from them
+            content = f"{content}\n\n{links}"
         data, prompt_tokens, output_tokens = await (model or self._ask_model)(
             system, schema, content, max_tokens)
         self.prompt_tokens += prompt_tokens

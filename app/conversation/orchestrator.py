@@ -540,7 +540,8 @@ class Orchestrator:
             turn.vault_go = asyncio.get_running_loop().create_future()
             turn.vault = asyncio.create_task(
                 self._vault.handle(text, go=lambda: turn.vault_go,
-                                   research=self._vault_research(turn)))
+                                   research=self._vault_research(turn),
+                                   links=tuple(turn.links)))
 
         # A live session makes this message a free-text answer: the model sees the question it is
         # answering and both halves of the request, and its fresh interpretation replaces the
@@ -612,7 +613,8 @@ class Orchestrator:
         turn.audit(decision=_kind("VAULT"))
         turn.source_text = text
         turn.vault = asyncio.create_task(
-            self._vault.handle(text, research=self._vault_research(turn)))
+            self._vault.handle(text, research=self._vault_research(turn),
+                               links=tuple(turn.links)))
         return Reply("")
 
     async def _dispatch(
@@ -1358,7 +1360,8 @@ class Orchestrator:
             # failure is never left unretrieved and the two can never both write.
             with suppress(Exception):
                 await held
-            return await self._vault.handle(turn.vault_text, content=content)
+            return await self._vault.handle(turn.vault_text, content=content,
+                                            links=tuple(turn.links))
 
         turn.vault = asyncio.create_task(with_content())
 

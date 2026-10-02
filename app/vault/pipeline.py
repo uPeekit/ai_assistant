@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from pathlib import PurePosixPath
 
@@ -184,7 +184,7 @@ class VaultPipeline:
 
     async def handle(self, message: str, *, content: str = "",
                      go: Callable[[], Awaitable[bool]] | None = None,
-                     research: Research | None = None) -> VaultTurn:
+                     research: Research | None = None, links: tuple = ()) -> VaultTurn:
         """Read the message, write the vault, and start the linking behind the reply.
 
         `content` is text the caller already has (a plan step's research): the filer still
@@ -198,7 +198,7 @@ class VaultPipeline:
         Notion side, so the same search for the same message runs once."""
         try:
             await asyncio.to_thread(self._index.refresh)
-            ctx = context(self._index, message, self._now())
+            ctx = replace(context(self._index, message, self._now()), links=tuple(links))
             raw, prompt_tokens, output_tokens = await self._filer.file(message, ctx)
         except FilerError as e:
             log.warning("filer failed: %s", e)
