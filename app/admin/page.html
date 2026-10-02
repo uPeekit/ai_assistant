@@ -111,6 +111,14 @@
     <input type="text" id="tuning-agenda_at" placeholder="09:00">
   </label>
   <p class="hint">Что просрочено, что сегодня и завтра. Несколько времён — через запятую.</p>
+  <h3>Сайты, ссылки на которые бот не открывает</h3>
+  <p class="hint">
+    Ссылку в сообщении бот открывает и читает — так он узнаёт название, цену, содержание. Ссылки
+    на эти сайты он не открывает: документы и банки всё равно закрыты, а читает страницы сторонний
+    сервис. Через запятую или с новой строки, поддомены тоже считаются. Пусто — список по
+    умолчанию.
+  </p>
+  <textarea id="tuning-never_open"></textarea>
 </details>
 
 <details>
@@ -397,7 +405,7 @@ function load() {
       document.getElementById("workspace-note").value = data.workspace_note || "";
       var tuning = data.tuning || {};
       ["bot_name", "agenda_at", "mail_at", "web_words", "countdown_tag", "date_props",
-       "research_note", "linker_note"].forEach(function (name) {
+       "research_note", "linker_note", "never_open"].forEach(function (name) {
         var el = document.getElementById("tuning-" + name);
         if (el) { el.value = tuning[name] || ""; }
       });
@@ -470,7 +478,7 @@ function collectBody() {
     targets: targets,
     workspace_note: document.getElementById("workspace-note").value,
     tuning: ["bot_name", "agenda_at", "mail_at", "web_words", "countdown_tag", "date_props",
-             "research_note", "linker_note"].reduce(function (acc, name) {
+             "research_note", "linker_note", "never_open"].reduce(function (acc, name) {
       var el = document.getElementById("tuning-" + name);
       if (el) { acc[name] = el.value; }
       return acc;

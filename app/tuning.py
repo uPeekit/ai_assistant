@@ -15,6 +15,9 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
+
+from app.web.links import NEVER_OPEN_DEFAULT
 
 log = logging.getLogger(__name__)
 
@@ -32,6 +35,7 @@ class Defaults:
     web_words: tuple[str, ...]
     countdown_tag: str
     date_props: tuple[str, ...]
+    never_open: tuple[str, ...] = NEVER_OPEN_DEFAULT
 
 
 class Tuning:
@@ -95,6 +99,7 @@ class Tuning:
             "date_props": ", ".join(self.date_props),
             "research_note": self.research_note,
             "linker_note": self.linker_note,
+            "never_open": ", ".join(self.never_open),
         }
 
     # ---- fields ----------------------------------------------------------------------
@@ -137,6 +142,12 @@ class Tuning:
         return self._list("date_props", self._defaults.date_props)
 
     @property
+    def never_open(self) -> tuple[str, ...]:
+        """Sites whose links are never read: documents and banks by default. A pasted link
+        counts as its site, so either form works on the admin page."""
+        return tuple(_site(entry) for entry in self._list("never_open", self._defaults.never_open))
+
+    @property
     def research_note(self) -> str:
         """Extra instructions appended to the web-research prompt. Empty by default."""
         return self._text("research_note", "")
@@ -145,6 +156,12 @@ class Tuning:
     def linker_note(self) -> str:
         """Extra instructions appended to the linker's prompt. Empty by default."""
         return self._text("linker_note", "")
+
+
+def _site(entry: str) -> str:
+    host = urlsplit(entry).hostname if "://" in entry else entry.split("/")[0]
+    host = (host or entry).lower()
+    return host.removeprefix("www.")
 
 
 def _clean(key: str, value: object) -> str:

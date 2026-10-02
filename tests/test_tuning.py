@@ -63,7 +63,8 @@ def test_only_strings_are_accepted(tuning):
 def test_the_prompts_themselves_are_not_editable(tuning):
     """Deliberate: the extra-instruction fields add to a prompt, they never replace it."""
     assert set(tuning.all()) == {"bot_name", "agenda_at", "mail_at", "web_words",
-                                 "countdown_tag", "date_props", "research_note", "linker_note"}
+                                 "countdown_tag", "date_props", "research_note", "linker_note",
+                                 "never_open"}
 
 
 async def test_the_schedule_re_reads_its_times(tuning):
@@ -79,3 +80,22 @@ def test_extra_instructions_are_appended_never_substituted():
 
     assert _with_extra("ПРАВИЛА", "") == "ПРАВИЛА"
     assert _with_extra("ПРАВИЛА", "  и ещё  ") == "ПРАВИЛА\n\nи ещё"
+
+
+def test_the_never_open_list_starts_with_documents_and_banks(tuning):
+    from app.web.links import NEVER_OPEN_DEFAULT
+
+    assert tuning.never_open == NEVER_OPEN_DEFAULT
+    assert "docs.google.com" in tuning.never_open and "swedbank.ee" in tuning.never_open
+
+
+def test_the_never_open_list_is_edited_like_the_search_words(tuning):
+    assert tuning.save({"never_open": "mybank.ee, intranet.example.com"}) == 1
+    assert tuning.never_open == ("mybank.ee", "intranet.example.com")
+    assert tuning.save({"never_open": ""}) == 1
+    assert "notion.so" in tuning.never_open  # cleared: back to the defaults
+
+
+def test_a_pasted_link_in_the_never_open_list_counts_as_its_site(tuning):
+    tuning.save({"never_open": "https://www.MyBank.ee/login?x=1\nhttp://wiki.example.com:8080/a"})
+    assert tuning.never_open == ("mybank.ee", "wiki.example.com")
