@@ -16,9 +16,8 @@ import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Protocol
-from urllib.parse import urlsplit
 
-from app.web.reader import Page, PageUnreadable
+from app.web.reader import Page, PageUnreadable, is_private
 from app.web.trim import page_facts
 
 log = logging.getLogger(__name__)
@@ -60,15 +59,6 @@ def find_links(text: str) -> list[str]:
         if url not in out:
             out.append(url)
     return out
-
-
-def is_private(url: str, never_open: Iterable[str]) -> bool:
-    host = (urlsplit(url).hostname or "").lower()
-    for domain in never_open:
-        domain = domain.strip().lower().lstrip(".")
-        if domain and (host == domain or host.endswith("." + domain)):
-            return True
-    return False
 
 
 class LinkReader:

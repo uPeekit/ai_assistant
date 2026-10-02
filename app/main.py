@@ -392,7 +392,8 @@ def build(
                       max_searches=settings.research_max_searches,
                       max_reads=settings.research_max_reads,
                       soft_deadline_s=settings.research_soft_deadline_s,
-                      reader=Reader(jina_key=settings.jina_api_key.get_secret_value()),
+                      reader=Reader(jina_key=settings.jina_api_key.get_secret_value(),
+                                    never_open=lambda: tuning.never_open),
                       is_image=images.is_image,
                       search=ImageSearch(), extra=lambda: tuning.research_note,
                       deadline_s=settings.research_deadline_s, health=health)
@@ -437,7 +438,8 @@ def build(
     # A link in a message is data for whichever interpreter takes it, local or not; only
     # answering a question about the page needs Claude. Sites on the admin page's never-open
     # list are not read at all.
-    link_reader = Reader(jina_key=settings.jina_api_key.get_secret_value())
+    link_reader = Reader(jina_key=settings.jina_api_key.get_secret_value(),
+                         never_open=lambda: tuning.never_open)
     links = LinkReader(link_reader, never_open=lambda: tuning.never_open)
     answerer = (LinkAnswerer(settings.anthropic_api_key.get_secret_value(),
                              settings.claude_model, health=health)

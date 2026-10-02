@@ -159,7 +159,10 @@ class Tuning:
 
 
 def _site(entry: str) -> str:
-    host = urlsplit(entry).hostname if "://" in entry else entry.split("/")[0]
+    try:
+        host = urlsplit(entry).hostname if "://" in entry else entry.split("/")[0]
+    except ValueError:  # "http://[bad": kept as typed, and it matches nothing
+        host = entry
     host = (host or entry).lower()
     return host.removeprefix("www.")
 

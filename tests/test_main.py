@@ -223,6 +223,9 @@ def test_links_are_read_and_answered_about_with_claude(env):
     assert isinstance(orchestrator._answerer, LinkAnswerer)
     # The never-open list is the admin page's, read on every message.
     assert is_private("https://docs.google.com/d/1", orchestrator._links._never_open())
+    # And every page read obeys it, the research loop's included.
+    for reader in (orchestrator._links._reader, orchestrator._researcher._reader):
+        assert is_private("https://docs.google.com/d/1", reader._never_open())
 
 
 def test_links_are_still_read_without_claude_but_nothing_answers_about_them(env):

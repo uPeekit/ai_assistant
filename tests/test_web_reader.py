@@ -89,6 +89,35 @@ async def test_a_redirect_to_a_private_address_is_refused():
         await reader(jina=lambda r: httpx.Response(503), site=site).read("https://evil.ee/go")
 
 
+async def test_a_never_open_site_is_refused_without_any_request():
+    """The research loop reads through this too: a Docs link in the message must not reach
+    Jina because the model chose to read it."""
+    def boom(req):
+        raise AssertionError("no request may be made")
+
+    r = Reader(transport=transport(jina=boom, site=boom), is_public=public,
+               never_open=lambda: ["google.com"])
+    with pytest.raises(PageUnreadable, match="private"):
+        await r.read("https://docs.google.com/document/d/abc")
+
+
+async def test_a_redirect_to_a_never_open_site_is_refused():
+    def site(req):
+        return httpx.Response(302, headers={"location": "https://www.swedbank.ee/private"})
+
+    r = Reader(transport=transport(jina=lambda r: httpx.Response(503), site=site),
+               is_public=public, never_open=lambda: ["swedbank.ee"])
+    with pytest.raises(PageUnreadable, match="private"):
+        await r.read("https://bit.ly/x")
+
+
+def test_a_malformed_link_or_entry_is_simply_not_private():
+    from app.web.reader import is_private
+
+    assert not is_private("http://[bad/x", ["google.com"])
+    assert not is_private("https://kv.ee/1", ["http://[bad"])
+
+
 async def test_a_huge_page_is_cut_at_the_byte_cap(monkeypatch):
     monkeypatch.setattr(reader_mod, "MAX_BYTES", 10_000)
     big = "<html><body>" + "<p>rida 1,00 €</p>" * 20_000 + "</body></html>"

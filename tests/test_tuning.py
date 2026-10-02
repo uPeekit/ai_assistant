@@ -99,3 +99,9 @@ def test_the_never_open_list_is_edited_like_the_search_words(tuning):
 def test_a_pasted_link_in_the_never_open_list_counts_as_its_site(tuning):
     tuning.save({"never_open": "https://www.MyBank.ee/login?x=1\nhttp://wiki.example.com:8080/a"})
     assert tuning.never_open == ("mybank.ee", "wiki.example.com")
+
+
+def test_a_malformed_never_open_entry_breaks_nothing(tuning):
+    tuning.save({"never_open": "http://[bad, mybank.ee"})
+    assert "mybank.ee" in tuning.never_open
+    assert "never_open" in tuning.all()
