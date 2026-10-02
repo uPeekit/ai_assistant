@@ -51,6 +51,9 @@ class Settings(BaseSettings):
     # own knowledge fills the steps ("all of Pelevin's novels"): Haiku listed 8, one of them
     # wrong; Sonnet listed 15, all right.
     plan_model: str = "claude-sonnet-5"
+    # A message the interpreter did not understand (an unknown intent, or a question of its
+    # own) is read once more by this model before the user is asked. Empty: never.
+    escalate_model: str = "claude-sonnet-5"
 
     # Rewriting text the user already wrote (a page consolidated into one plan, a note
     # trimmed). Sonnet: this is their own writing, and Haiku loses facts while shortening.

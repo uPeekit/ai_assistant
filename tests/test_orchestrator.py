@@ -26,6 +26,7 @@ from app.config import Settings
 from app.conversation.orchestrator import MAX_PROMPT, Orchestrator
 from app.conversation.plan import StepField, StepSpec
 from app.conversation.session import SessionStore
+from app.interpretation.models import Interpretation
 from app.llm.base import LLMInvalidOutput, LLMUnavailable
 from app.llm.context import ContextBuilder
 from app.notion.errors import NotionError, NotionUnavailable
@@ -84,7 +85,8 @@ class Bot:
 
 
 def make_bot(tmp_path: Path, *, inbox: str | None = INBOX, inbox_mode: str = "auto",
-             researcher=None, planner=None, links=None, answerer=None) -> Bot:
+             researcher=None, planner=None, links=None, answerer=None,
+             escalation=None) -> Bot:
     snap = flagged(inbox)
     db = tmp_path / "bot.sqlite"
     store = AuditStore(db)
@@ -103,7 +105,7 @@ def make_bot(tmp_path: Path, *, inbox: str | None = INBOX, inbox_mode: str = "au
         settings, discovery, builder, llm, SemanticValidator(),
         Policy(Thresholds.from_settings(settings)), Executor(notion), store,
         SessionStore(store), clock=clock, researcher=researcher, planner=planner, links=links,
-        answerer=answerer,
+        answerer=answerer, escalation=escalation,
     )
     return Bot(orch, llm, notion, discovery, store, SessionStore(store), clock,
                builder.build(snap, now=NOW), snap, db)
@@ -2020,3 +2022,95 @@ async def test_the_pages_a_message_was_read_with_are_in_its_audit_row(make):
         {"url": "https://www.kv.ee/1", "title": "Müüa korter, 4 tuba",
          "text": "Hind 174 900 €", "error": ""},
         {"url": "https://docs.google.com/d/1", "title": "", "text": "", "error": "private"}]
+
+
+def strong_llm() -> FakeLLM:
+    strong = FakeLLM()
+    strong.model = "strong-model"
+    return strong
+
+
+def asking(interp: Interpretation, question: str) -> Interpretation:
+    return interp.model_copy(update={"clarify": question})
+
+
+async def test_a_message_the_interpreter_did_not_understand_is_read_again_by_the_strong_model(
+        make):
+    strong = strong_llm()
+    bot = make(escalation=strong)
+    bot.llm.queue(make_interp("unknown", cand(bot.ctx, "t2", 0.3)))
+    strong.queue(buy_milk(bot))
+    reply = await bot.orch.handle_text(CHAT, USER, "надо бы молока купить домой")
+
+    assert strong.calls == 1 and strong.seen[0][0] == "надо бы молока купить домой"
+    assert "Молоко" in reply.text
+    (event,) = closed_events(bot, ["text"])
+    assert event["llm_model"] == "fake-model, strong-model"
+
+
+async def test_a_question_the_interpreter_wanted_to_ask_goes_to_the_strong_model_first(make):
+    strong = strong_llm()
+    bot = make(escalation=strong)
+    bot.llm.queue(asking(make_interp("create", cand(bot.ctx, "t2", 0.5)), "Какие траты?"))
+    strong.queue(buy_milk(bot))
+    reply = await bot.orch.handle_text(CHAT, USER, "надо внести траты на молоко")
+    assert strong.calls == 1 and "Какие траты?" not in reply.text
+
+
+async def test_when_the_strong_model_does_not_understand_either_its_question_is_asked(make):
+    strong = strong_llm()
+    bot = make(escalation=strong)
+    bot.llm.queue(make_interp("unknown", cand(bot.ctx, "t2", 0.3)))
+    strong.queue(asking(make_interp("unknown", cand(bot.ctx, "t2", 0.3)), "Что сделать?"))
+    reply = await bot.orch.handle_text(CHAT, USER, "это задание в туду ли есть")
+    assert "Что сделать?" in reply.text
+
+
+async def test_an_understood_message_never_reaches_the_strong_model(make):
+    strong = strong_llm()
+    bot = make(escalation=strong)
+    bot.llm.queue(buy_milk(bot))
+    await bot.orch.handle_text(CHAT, USER, "купи молоко в Рими")
+    assert strong.calls == 0
+
+
+async def test_noise_of_a_word_or_two_is_not_worth_the_strong_model(make):
+    strong = strong_llm()
+    bot = make(escalation=strong)
+    for noise in ("трум трум", "Bonjour"):
+        bot.llm.queue(make_interp("unknown", cand(bot.ctx, "t2", 0.3)))
+        await bot.orch.handle_text(CHAT, USER, noise)
+    assert strong.calls == 0
+
+
+async def test_a_strong_model_failure_leaves_the_first_reading_standing(make):
+    strong = strong_llm()
+    bot = make(escalation=strong)
+    bot.llm.queue(asking(make_interp("create", cand(bot.ctx, "t2", 0.5)), "Какие траты?"))
+    strong.queue_error(LLMUnavailable("claude 529"))
+    reply = await bot.orch.handle_text(CHAT, USER, "надо внести траты на молоко")
+    assert "Какие траты?" in reply.text
+
+
+async def test_a_local_only_target_chosen_by_the_strong_model_is_not_trusted(make):
+    """The cloud model never saw a local-only target's items or description."""
+    strong = strong_llm()
+    bot = make(escalation=strong)
+    local = bot.ctx.ref("t2").target_id
+    snap = bot.discovery.snapshot
+    bot.discovery.snapshot = WorkspaceSnapshot(
+        snap.fetched_at, [replace(t, local_only=t.id == local) for t in snap.targets])
+    bot.llm.queue(asking(make_interp("create", cand(bot.ctx, "t2", 0.5)), "Какие траты?"))
+    strong.queue(buy_milk(bot))
+    reply = await bot.orch.handle_text(CHAT, USER, "надо внести траты на молоко")
+    assert strong.calls == 1 and "Какие траты?" in reply.text
+
+
+async def test_no_escalation_when_the_local_model_gave_the_first_reading(make):
+    """The local model answers only when Claude is down: asking Claude again would just fail."""
+    strong = strong_llm()
+    bot = make(escalation=strong)
+    bot.llm.model = bot.orch._s.llm_model
+    bot.llm.queue(make_interp("unknown", cand(bot.ctx, "t2", 0.3)))
+    await bot.orch.handle_text(CHAT, USER, "надо бы молока купить домой")
+    assert strong.calls == 0

@@ -442,6 +442,23 @@ Nothing in the 12B class fits an 8 GB card: measured on an RTX 4070 Laptop at `L
 
 `LLM_NUM_CTX=8192` is the default because 16384 costs ~1.6 GB more KV cache; on this card that pushed even `qwen3:8b` into a 20% CPU offload and ~35% more latency for no measurable accuracy gain. Prompts run 2-4k tokens, so 8k leaves ample headroom — `LLMContextOverflow` guards the rest. Because the 12B leaves no VRAM spare, `.env.example` ships `WHISPER_DEVICE=cpu`.
 
+**Escalation** (`Orchestrator._escalate`, `ESCALATE_MODEL`). The cloud interpreter is Haiku.
+The model is not chosen by a difficulty estimate up front: that would put a judgement on
+every message to help a few. The interpreter's own verdict decides instead. An `unknown` intent,
+or a `clarify` question of its own, sends the same prompt and context once to the strong model
+(Sonnet) before the user is asked. Its reading replaces the first, question included. There are
+three exceptions:
+- a prompt under `ESCALATE_MIN_WORDS` (3) is noise, so it is never escalated;
+- when the local model gave the first reading, Claude is down, so there is no retry;
+- a Sonnet answer that names a local-only target is set aside, because the cloud never saw that
+  target's contents.
+
+A failed retry leaves the first reading standing. Measured on the 20 prod messages Haiku did
+not understand (2026-09-18 to 10-01): today's prompts already settle 13 of them. Of the other 7,
+Sonnet settles one, three are noise and two are answers that need their conversation. The
+seventh failed on Sonnet's over-long reasoning notes, which are now cut instead
+(`claude.to_interpretation`). Sonnet takes 5 to 30 s. Both readings are in the event's `llm_response`.
+
 `tools/benchmark_llm.py` runs `tests/fixtures/ru_cases.yaml` against each model and reports schema-validity rate, target/field accuracy, the safety-weighted `safe`/`wrong` split, and p50/p95 latency; `think: false` is sent only to models that support it.
 
 ## 14. Security boundaries

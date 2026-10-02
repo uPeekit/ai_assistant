@@ -213,6 +213,21 @@ def test_llm_cloud_false_keeps_everything_local_even_with_a_key(env):
     assert isinstance(main._default_llm(Settings(), Health()), OllamaClient)
 
 
+def test_a_message_not_understood_is_read_again_by_sonnet(env):
+    env.setenv("ANTHROPIC_API_KEY", ANTHROPIC_KEY)
+    escalation = _build(env).orchestrator._escalation
+    assert isinstance(escalation, ClaudeClient) and escalation.model == "claude-sonnet-5"
+
+
+def test_escalation_is_off_without_claude_or_when_switched_off(env):
+    assert _build(env).orchestrator._escalation is None  # no key
+    env.setenv("ANTHROPIC_API_KEY", ANTHROPIC_KEY)
+    env.setenv("ESCALATE_MODEL", "")
+    assert _build(env).orchestrator._escalation is None
+    env.setenv("ESCALATE_MODEL", "claude-haiku-4-5")  # the interpreter itself: nothing to gain
+    assert _build(env).orchestrator._escalation is None
+
+
 def test_links_are_read_and_answered_about_with_claude(env):
     from app.llm.answer import LinkAnswerer
     from app.web.links import LinkReader, is_private

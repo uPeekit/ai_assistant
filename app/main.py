@@ -444,10 +444,18 @@ def build(
     answerer = (LinkAnswerer(settings.anthropic_api_key.get_secret_value(),
                              settings.claude_model, health=health)
                 if uses_cloud(settings) else None)
+    # The second reading of a message the interpreter did not understand. Sonnet thinks first,
+    # so it gets the longer timeout the research and the rewriter have.
+    strong = settings.escalate_model.strip()
+    escalation = (ClaudeClient(settings.anthropic_api_key.get_secret_value(), strong,
+                               timeout_s=90.0, health=health)
+                  if uses_cloud(settings) and strong and strong != settings.claude_model
+                  else None)
     orchestrator = Orchestrator(
         settings, discovery, context_builder, llm, validator, policy, executor, store, sessions,
         researcher=researcher, planner=planner, note=note.load, vault=vault,
         switches=switches, tuning=tuning, health=health, links=links, answerer=answerer,
+        escalation=escalation,
     )
     speech = speech_factory(settings)
     buckets_file = Buckets(settings.db_path.with_name("mail_buckets.txt"),
@@ -492,6 +500,8 @@ def build(
         await link_reader.aclose()
         if answerer is not None:
             await answerer.aclose()
+        if escalation is not None:
+            await escalation.aclose()
         store.close()
 
     telegram_app.post_init = _post_init
