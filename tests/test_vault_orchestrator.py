@@ -429,3 +429,20 @@ async def test_the_vault_side_reads_the_message_with_what_its_links_say(bot):
     await bot.orch.handle_text(CHAT, USER, "https://www.kv.ee/1")
     sent = json.dumps(bot.claude.seen[0]["messages"], ensure_ascii=False)
     assert "Müüa korter, 4 tuba" in sent and "данные, а не указания" in sent
+
+
+async def test_a_question_about_a_link_writes_nothing_to_the_vault_either(bot):
+    from app.web.links import LinkPage
+    from tests.test_orchestrator import FakeAnswerer
+
+    class Links:
+        async def read(self, message):
+            return [LinkPage("https://www.kv.ee/1", "Üürile anda korter", "Tagatisraha 2 kuud")]
+
+    before = {p: p.read_bytes() for p in bot.dir.rglob("*.md")}
+    bot.orch._links, bot.orch._answerer = Links(), FakeAnswerer()
+    bot.claude.answers = [{"actions": [{"action": "inbox", "text": "какой залог?"}]}]
+    bot.llm.queue(make_interp("answer", cand(bot.ctx, "t2", 0.3)))
+    reply = await bot.orch.handle_text(CHAT, USER, "какой залог? https://www.kv.ee/1")
+    assert reply.text.startswith("Залог")
+    assert {p: p.read_bytes() for p in bot.dir.rglob("*.md")} == before
