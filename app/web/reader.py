@@ -70,7 +70,9 @@ class Reader:
             raise PageUnreadable(f"could not be fetched ({type(e).__name__})") from None
 
     async def _jina(self, url: str) -> Page:
-        headers = {"X-Retain-Images": "none"}
+        # Images stay in: a shop that is named only by its logo (hinnavaatlus.ee's price list)
+        # would lose its name. Trimming turns each image into its alt text.
+        headers: dict[str, str] = {}
         if self._key:
             headers["Authorization"] = f"Bearer {self._key}"
         resp = await self._client.get(JINA + url, headers=headers, timeout=JINA_TIMEOUT_S,

@@ -39,7 +39,8 @@ async def test_jina_reads_the_page_and_carries_the_key():
     assert "149 990 €" in page.text
     assert str(seen[0].url) == "https://r.jina.ai/https://kv.ee/1"
     assert seen[0].headers["authorization"] == "Bearer k"
-    assert seen[0].headers["x-retain-images"] == "none"
+    # Images stay: a shop named only by its logo keeps its name (trim turns it into alt text).
+    assert "x-retain-images" not in seen[0].headers
 
 
 async def test_a_jina_failure_falls_back_to_a_direct_fetch():

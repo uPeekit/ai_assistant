@@ -60,3 +60,13 @@ def test_form_checkboxes_are_noise():
     out = relevant(page, "korrus hind", limit=6000)
     assert "[x]" not in out and "[ ]" not in out
     assert "159 000 €" in out
+
+
+def test_an_image_becomes_its_alt_text_so_a_shop_named_only_by_its_logo_keeps_its_name():
+    """hinnavaatlus.ee names each shop only by a logo: drop the images and the price list loses
+    who sells at that price."""
+    page = ("[![Image 16: TuruLiider.ee logo](https://i.hinnavaatlus.ee/f/mrliider.jpg)]"
+            "(https://www.hinnavaatlus.ee/dealer/336-mrliider)\n743,00 €")
+    out = relevant(page, "iphone", limit=6000)
+    assert "TuruLiider.ee logo" in out and "743,00 €" in out
+    assert "mrliider.jpg" not in out

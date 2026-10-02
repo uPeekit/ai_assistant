@@ -25,14 +25,19 @@ CHECKBOX = re.compile(r"^\s*[-*]\s*\[[ xX]\]")  # a search form's options, not p
 ONLY_LINK = re.compile(r"^\s*(?:[-*]\s*)?\[[^\]]*\]\([^)]*\)\s*$")
 BOILERPLATE = re.compile(r"cookie|küpsis|consent|privacy policy|nõustun|accept all", re.I)
 NUMBER = re.compile(r"\d{2,}")
+# An image as its alt text, without Jina's "Image 16:" numbering: a shop named only by its logo
+# keeps its name, and the long image address goes.
+IMAGE_ALT = re.compile(r"!\[(?:Image \d+:\s*)?([^\]]*)\]\([^)]*\)")
 
 
 def relevant(text: str, terms: str, limit: int = LIMIT) -> str:
     """The lines of `text` that matter for `terms`, in page order, at most `limit` characters."""
-    lines = [line.rstrip() for line in text.splitlines()]
+    lines = [IMAGE_ALT.sub(r"\1", line).rstrip() for line in text.splitlines()]
     want = words(terms)
     numbers = set(NUMBER.findall(terms))
-    useful = [i for i, line in enumerate(lines) if line.strip() and not _noise(line, want)]
+    priced = {i for i, line in enumerate(lines) if PRICE.search(line)}
+    useful = [i for i, line in enumerate(lines) if line.strip()
+              and not _noise(line, want, near_price=bool({i - 1, i + 1} & priced))]
     usable = set(useful)
     picked: set[int] = set()
     for i in useful:
@@ -65,11 +70,13 @@ def _mentions(line: str, want: set[str]) -> bool:
     return bool(want) and any(related(w, x) for x in words(line) for w in want)
 
 
-def _noise(line: str, want: set[str]) -> bool:
+def _noise(line: str, want: set[str], near_price: bool = False) -> bool:
     if IMAGE.match(line) or CHECKBOX.match(line) or BOILERPLATE.search(line):
         return True
-    # A bare link is a menu entry unless it names what is looked for or carries a price.
-    return bool(ONLY_LINK.match(line)) and not (PRICE.search(line) or _mentions(line, want))
+    # A bare link is a menu entry, unless it names what is looked for, carries a price, or sits
+    # right next to one — a results page puts the shop or product link beside its price.
+    return (bool(ONLY_LINK.match(line))
+            and not (near_price or PRICE.search(line) or _mentions(line, want)))
 
 
 def _fit(indexes: list[int], lines: list[str], limit: int) -> set[int]:
