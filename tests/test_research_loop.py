@@ -230,3 +230,13 @@ def test_site_search_offers_only_sites_with_a_working_search():
     assert enum == [s.name for s in SITES]
     assert not {s.name for s in KNOWN} & set(enum)
     assert all(not s.template for s in KNOWN)
+
+
+def test_where_is_it_cheapest_is_routed_to_the_price_comparison_where_the_tool_is_chosen():
+    """Told only in the system prompt, the model skipped hinnavaatlus.ee in one run of two and
+    missed the cheapest shop. The hint sits in the tool's own description, read when choosing."""
+    from app.llm.research import loop_tools
+
+    site_search = next(t for t in loop_tools(4) if t["name"] == "site_search")
+    assert "hinnavaatlus.ee" in site_search["description"]
+    assert "дешевле" in site_search["description"]
