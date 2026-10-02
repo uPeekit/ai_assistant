@@ -248,6 +248,22 @@ and `RESEARCH_DEADLINE_S` (3 minutes) is the backstop. `claude-haiku-4-5` is fas
 half the price, with shallower writing. Undo removes the whole written result, and its few minutes
 are counted from the moment the page appears — not from when you sent the message.
 
+## Links in a message
+
+A link you send is read, and what is on the page goes to the bot along with your message, so
+it acts on the page as well as on your words. «добавь в сравнение квартир» with a kv.ee link
+fills in the price, rooms and area. «в список книг» with a shop link writes the book's real
+title. «сохрани» summarises an article into the note. A question about the page («сколько тут
+этажей?») is answered from the page and nothing is written. The link itself is always kept.
+Up to three links per message are read, in parallel, for at most 12 seconds; a page that will
+not open just stays a plain link.
+
+Pages go through the same reader as web search (Jina Reader, or a direct fetch). Links to sites
+on the admin page's **Сайты, ссылки на которые бот не открывает** list are never read. By default
+that list holds Google Docs/Drive/Mail, Notion and the Estonian banks. Anything on a page is
+treated as data, never as instructions to the bot. Answering a question needs an Anthropic key;
+reading links does not.
+
 ## Teaching the bot your workspace
 
 The admin page (**`http://127.0.0.1:8787`**, on the machine the bot runs on) is where you tell
