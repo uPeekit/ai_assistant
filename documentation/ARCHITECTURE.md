@@ -642,6 +642,26 @@ eight questions the loop costs about an eighth and answers at least as well
 `tools/check_sites.py` checks the site table live; `tools/benchmark_research.py` measures a
 change.
 
+**Links as data** (`app/web/links.py`, `app/llm/answer.py`). Before a text message is
+interpreted, `LinkReader` reads up to three of its links in parallel through the research
+`Reader`, with a 12-second deadline. Each page is cut by `trim.page_facts` to its share of
+6 000 characters. The cut is not `relevant`'s: the page is the subject, and the message may
+share no word with it. So table rows, prices, sizes and headings come first wherever they sit,
+then prose; menus and other listings are dropped. A link whose host is on the tuning list `never_open` (admin
+page; defaults to `NEVER_OPEN_DEFAULT`: Google documents, Notion, the Estonian banks) is not
+read. Nor is one past the deadline. Either way it stays a plain link with a reason.
+
+The pages travel as `Context.links` / `VaultContext.links` and are rendered by
+`prompts.links_section`, after the user's message, under a header that calls them data and not
+instructions. Every interpreter gets them: the Notion one, the old `Filer` and every
+`StagedFiler` stage. Each uses them for the action it picks: fields, a real title, a summary.
+
+A question about a page is the `answer` intent. It is offered only when an answerer exists and
+at least one page was read. The orchestrator then holds the vault and `LinkAnswerer`
+(interpreter model, no tools) replies from the pages. With Notion off, the staged filer's
+question stage turns into a `link_answer` action that the pipeline answers the same way. Either
+way nothing is written.
+
 **Moving between notes** (`move`, vault only): the filer names the source, the destination
 and what to move; the editor marks lines with `delete` ops, and only a plan made of nothing
 but deletes counts. The code copies exactly those lines to the destination (appended, or a

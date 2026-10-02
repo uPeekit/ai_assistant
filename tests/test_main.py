@@ -213,6 +213,26 @@ def test_llm_cloud_false_keeps_everything_local_even_with_a_key(env):
     assert isinstance(main._default_llm(Settings(), Health()), OllamaClient)
 
 
+def test_links_are_read_and_answered_about_with_claude(env):
+    from app.llm.answer import LinkAnswerer
+    from app.web.links import LinkReader, is_private
+
+    env.setenv("ANTHROPIC_API_KEY", ANTHROPIC_KEY)
+    orchestrator = _build(env).orchestrator
+    assert isinstance(orchestrator._links, LinkReader)
+    assert isinstance(orchestrator._answerer, LinkAnswerer)
+    # The never-open list is the admin page's, read on every message.
+    assert is_private("https://docs.google.com/d/1", orchestrator._links._never_open())
+    # And every page read obeys it, the research loop's included.
+    for reader in (orchestrator._links._reader, orchestrator._researcher._reader):
+        assert is_private("https://docs.google.com/d/1", reader._never_open())
+
+
+def test_links_are_still_read_without_claude_but_nothing_answers_about_them(env):
+    orchestrator = _build(env).orchestrator
+    assert orchestrator._links is not None and orchestrator._answerer is None
+
+
 # ---- post_init_checks: warnings, not fatal ------------------------------------------------------
 
 

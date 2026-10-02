@@ -139,6 +139,7 @@ class FakeLLM:
         self.model = "fake-model"
         self.calls = 0
         self.seen: list[tuple[str, dict, dict]] = []
+        self.links: list[list] = []  # the link pages each call was given (Context.links)
         self._queue: list[Interpretation | Exception] = []
 
     def queue(self, interp: Interpretation) -> None:
@@ -152,6 +153,7 @@ class FakeLLM:
     ) -> tuple[Interpretation, LLMTrace]:
         self.calls += 1
         self.seen.append((text, copy.deepcopy(context.payload), schema))
+        self.links.append(list(getattr(context, "links", [])))
         if not self._queue:
             raise AssertionError("FakeLLM called with nothing queued")
         item = self._queue.pop(0)

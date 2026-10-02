@@ -73,6 +73,7 @@ from app.conversation.session import (
 from app.conversation.shared_research import SharedResearch
 from app.conversation.steps import to_interpretation
 from app.interpretation.models import Interpretation
+from app.llm.answer import LinkAnswerer, LinkAnswerError
 from app.llm.base import (
     LLMClient,
     LLMContextOverflow,
@@ -103,6 +104,7 @@ from app.validation.policy import Decision, Policy, Question
 from app.validation.semantic import SemanticValidator, ValidationResult
 from app.vault.pipeline import VaultPipeline, VaultTurn
 from app.vault.writer import VaultUndo
+from app.web.links import LinkReader
 
 log = logging.getLogger(__name__)
 
@@ -315,6 +317,8 @@ class _Turn:
     outcome: str = "failed"
     # This plan step comes right after one whose web search failed: it does not search.
     skip_web: bool = False
+    # The pages behind the links in this turn's message (app.web.links.LinkPage), read once.
+    links: list = field(default_factory=list)
     last_undo: str | None = None
     # Sends an intermediate message (a finished plan step) before the turn's own reply.
     progress: Callable[[Reply], Awaitable[None]] | None = None
@@ -365,11 +369,16 @@ class Orchestrator:
         researcher: WebResearcher | None = None, planner: Planner | None = None,
         note: Callable[[], str] | None = None, vault: VaultPipeline | None = None,
         switches: Switches | None = None, tuning: Tuning | None = None,
-        health: Health | None = None,
+        health: Health | None = None, links: LinkReader | None = None,
+        answerer: LinkAnswerer | None = None,
     ) -> None:
         self._s = settings
         self._health = health or Health()
         self._researcher = researcher
+        # Reads the links in a fresh message once, before either branch interprets it.
+        self._links = links
+        # Answers a question about a linked page; None: the "answer" intent is never offered.
+        self._answerer = answerer
         self._planner = planner
         self._vault = vault
         self._switches = switches
@@ -513,6 +522,8 @@ class Orchestrator:
         if not self._on("notion"):
             # Notion is switched off on the admin page: the vault answers on its own, which is
             # what this pipeline was built to be able to do.
+            if self._links is not None and self._vault_on():
+                turn.links = await self._links.read(text)
             return await self._vault_only(turn, text)
         try:
             snapshot = await self._discovery.get()
@@ -524,6 +535,16 @@ class Orchestrator:
         expired = self._sessions.pop_expired_one(turn.chat_id, turn.now)
         prefix = await self._expired_prefix(turn, expired) if expired is not None else ""
         session = None if expired is not None else self._sessions.get(turn.chat_id, turn.now)
+        # Trimmed from the *head*: the newest answer is the part that has to survive. Cutting
+        # the tail instead freezes the conversation once the concatenation reaches the cap —
+        # every further answer chopped off, the same bytes sent again, the same question asked
+        # forever, at one LLM call a turn and with nothing ever reaching Notion or the inbox.
+        prompt = (f"{session.original_text}\n{text}"[-MAX_PROMPT:] if session is not None
+                  else text)
+        if self._links is not None:
+            # Before either branch: both interpret the message with what its links say. An
+            # answer to a question reads them from the request it answers.
+            turn.links = await self._links.read(prompt)
         if self._vault_on() and session is None:
             # A fresh thought goes to both stores at once. An answer to a question does not:
             # it answers Notion, and the vault has already had the message it belongs to —
@@ -532,7 +553,8 @@ class Orchestrator:
             turn.vault_go = asyncio.get_running_loop().create_future()
             turn.vault = asyncio.create_task(
                 self._vault.handle(text, go=lambda: turn.vault_go,
-                                   research=self._vault_research(turn)))
+                                   research=self._vault_research(turn),
+                                   links=tuple(turn.links)))
 
         # A live session makes this message a free-text answer: the model sees the question it is
         # answering and both halves of the request, and its fresh interpretation replaces the
@@ -544,16 +566,14 @@ class Orchestrator:
             turn.plan.answers.append(text[:MAX_PROMPT])
             turn.asked_field = session.question.field_name
             pending = {**(pending or {}), **plan_context(turn.plan)}
-        # Trimmed from the *head*: the newest answer is the part that has to survive. Cutting
-        # the tail instead freezes the conversation once the concatenation reaches the cap —
-        # every further answer chopped off, the same bytes sent again, the same question asked
-        # forever, at one LLM call a turn and with nothing ever reaching Notion or the inbox.
-        prompt = (f"{session.original_text}\n{text}"[-MAX_PROMPT:] if session is not None
-                  else text)
         asked = list(session.asked) if session is not None else []
 
         ctx = self._builder.build(snapshot, turn.now, pending, allow_plan=turn.plan is None,
                                   recent=self._recent(turn, snapshot))
+        ctx.links = turn.links
+        # A fresh question only: an answer to the bot's own question is never one about a page.
+        ctx.answering = (self._answerer is not None and session is None
+                         and any(not page.error for page in turn.links))
         if not ctx.target_keys():
             return _prefixed(self._plain(turn, "DISCOVERY_FAILED"), prefix)
         turn.audit(llm_context=ctx.json())
@@ -565,6 +585,8 @@ class Orchestrator:
             return _prefixed(await self._inbox_or_error(turn, prompt, code), prefix)
 
         self._audit_llm(turn, interp, trace)
+        if interp.intent.value == "answer" and ctx.answering:
+            return _prefixed(await self._answer_link(turn, prompt), prefix)
         if interp.intent.value == "plan" and turn.plan is None:
             # Even with a clarifying question attached: a plan's side question ("which dates?")
             # is not worth stopping for, and each step can still ask what it really needs.
@@ -602,8 +624,12 @@ class Orchestrator:
             return self._plain(turn, "NOTHING_ENABLED")
         turn.audit(decision=_kind("VAULT"))
         turn.source_text = text
+        # Only here, with Notion off, may the vault answer a question about a link: with Notion
+        # on, its interpreter decides that, and the vault is held back.
+        answer = self._answerer.answer if self._answerer is not None else None
         turn.vault = asyncio.create_task(
-            self._vault.handle(text, research=self._vault_research(turn)))
+            self._vault.handle(text, research=self._vault_research(turn),
+                               links=tuple(turn.links), answer=answer))
         return Reply("")
 
     async def _dispatch(
@@ -674,6 +700,20 @@ class Orchestrator:
                 turn.vault_content.append(written)
         execution_id = self._record_execution(turn, executed)
         return Reply(text_reply, _undo_buttons(execution_id), undo_id=execution_id)
+
+    async def _answer_link(self, turn: _Turn, question: str) -> Reply:
+        """A question about a page the user sent: answered from the page, written nowhere —
+        the vault side, which read the same message, is held back too."""
+        assert self._answerer is not None
+        turn.let_vault_write(False)
+        turn.audit(decision=_kind("ANSWER"))
+        pages = [page for page in turn.links if not page.error]
+        try:
+            return Reply(await self._answerer.answer(question, pages))
+        except LinkAnswerError as e:
+            log.warning("link answer failed: %s", e)
+            turn.audit(error="LINK_ANSWER_FAILED")
+            return Reply(_error("LINK_ANSWER_FAILED"))
 
     @staticmethod
     def _web_failed(turn: _Turn) -> None:
@@ -829,6 +869,7 @@ class Orchestrator:
             log.warning("discovery failed: %s", e)
             return Reply(_error("DISCOVERY_FAILED"))
         ctx = self._builder.build(snapshot, turn.now, plan_context(turn.plan), allow_plan=False)
+        ctx.links = turn.links  # a step made from a message with a link still sees the page
         log.info("step %d/%d: %s", turn.plan.index + 1, len(turn.plan.steps), _short(step.text))
         interp = to_interpretation(step, ctx, turn.plan.field_answers)
         if interp is not None:
@@ -1348,7 +1389,8 @@ class Orchestrator:
             # failure is never left unretrieved and the two can never both write.
             with suppress(Exception):
                 await held
-            return await self._vault.handle(turn.vault_text, content=content)
+            return await self._vault.handle(turn.vault_text, content=content,
+                                            links=tuple(turn.links))
 
         turn.vault = asyncio.create_task(with_content())
 

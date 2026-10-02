@@ -84,7 +84,7 @@ class Bot:
 
 
 def make_bot(tmp_path: Path, *, inbox: str | None = INBOX, inbox_mode: str = "auto",
-             researcher=None, planner=None) -> Bot:
+             researcher=None, planner=None, links=None, answerer=None) -> Bot:
     snap = flagged(inbox)
     db = tmp_path / "bot.sqlite"
     store = AuditStore(db)
@@ -102,7 +102,8 @@ def make_bot(tmp_path: Path, *, inbox: str | None = INBOX, inbox_mode: str = "au
     orch = Orchestrator(
         settings, discovery, builder, llm, SemanticValidator(),
         Policy(Thresholds.from_settings(settings)), Executor(notion), store,
-        SessionStore(store), clock=clock, researcher=researcher, planner=planner,
+        SessionStore(store), clock=clock, researcher=researcher, planner=planner, links=links,
+        answerer=answerer,
     )
     return Bot(orch, llm, notion, discovery, store, SessionStore(store), clock,
                builder.build(snap, now=NOW), snap, db)
@@ -1884,3 +1885,118 @@ async def test_after_a_failed_web_step_only_the_next_step_skips_searching(make):
                                progress=collect([]))
 
     assert [query for _, query in researcher.asked] == ["kv.ee квартира", "рецепт борща"]
+
+
+# ---- links in a message -------------------------------------------------------------------------
+
+
+class FakeLinks:
+    def __init__(self, pages):
+        self.pages, self.asked = pages, []
+
+    async def read(self, message):
+        self.asked.append(message)
+        return self.pages if "http" in message else []
+
+
+async def test_the_pages_behind_a_messages_links_reach_the_interpreter(make):
+    from app.web.links import LinkPage
+
+    page = LinkPage("https://www.kv.ee/1", "Müüa korter, 4 tuba", "Hind 174 900 €")
+    links = FakeLinks([page])
+    bot = make(links=links)
+    bot.llm.queue(make_interp("create", cand(bot.ctx, "t2", 0.95,
+                                             fields={"t2.f1": val("Квартира", 1.0)})))
+    await bot.orch.handle_text(CHAT, USER, "добавь https://www.kv.ee/1 в покупки")
+
+    assert links.asked == ["добавь https://www.kv.ee/1 в покупки"]
+    assert bot.llm.links == [[page]]
+
+
+async def test_a_message_without_links_gives_the_interpreter_none(make):
+    bot = make(links=FakeLinks([]))
+    bot.llm.queue(make_interp("create", cand(bot.ctx, "t2", 0.95,
+                                             fields={"t2.f1": val("Молоко", 1.0)})))
+    await bot.orch.handle_text(CHAT, USER, "добавь молоко в покупки")
+    assert bot.llm.links == [[]]
+
+
+class FakeAnswerer:
+    def __init__(self, reply="Залог — две месячные платы.", fail=False):
+        self.reply, self.fail, self.asked = reply, fail, []
+
+    async def answer(self, question, pages):
+        from app.llm.answer import LinkAnswerError
+
+        self.asked.append((question, [p.url for p in pages]))
+        if self.fail:
+            raise LinkAnswerError("no answer")
+        return self.reply
+
+
+def offered_intents(bot) -> list[str]:
+    return bot.llm.seen[-1][2]["properties"]["intent"]["properties"]["value"]["enum"]
+
+
+async def test_a_question_about_a_link_is_answered_from_the_page_and_nothing_is_written(make):
+    from app.web.links import LinkPage
+
+    page = LinkPage("https://www.kv.ee/1", "Üürile anda korter", "Tagatisraha: 2 kuu üür")
+    answerer = FakeAnswerer()
+    bot = make(links=FakeLinks([page]), answerer=answerer)
+    bot.llm.queue(make_interp("answer", cand(bot.ctx, "t2", 0.3)))
+    reply = await bot.orch.handle_text(CHAT, USER, "какой залог? https://www.kv.ee/1")
+
+    assert "answer" in offered_intents(bot)
+    assert reply.text == "Залог — две месячные платы."
+    assert answerer.asked == [("какой залог? https://www.kv.ee/1", ["https://www.kv.ee/1"])]
+    assert bot.notion.calls == []
+
+
+async def test_answer_is_offered_only_when_a_link_was_actually_read(make):
+    from app.web.links import LinkPage
+
+    bot = make(links=FakeLinks([LinkPage("https://docs.google.com/1", error="private")]),
+               answerer=FakeAnswerer())
+    bot.llm.queue(make_interp("unknown", cand(bot.ctx, "t2", 0.3)))
+    await bot.orch.handle_text(CHAT, USER, "что тут? https://docs.google.com/1")
+    assert "answer" not in offered_intents(bot)
+
+
+async def test_an_answer_that_fails_says_so(make):
+    from app.web.links import LinkPage
+
+    bot = make(links=FakeLinks([LinkPage("https://kv.ee/1", "T", "текст")]),
+               answerer=FakeAnswerer(fail=True))
+    bot.llm.queue(make_interp("answer", cand(bot.ctx, "t2", 0.3)))
+    reply = await bot.orch.handle_text(CHAT, USER, "сколько стоит? https://kv.ee/1")
+    assert reply.text == texts.ERRORS["LINK_ANSWER_FAILED"]
+
+
+async def test_an_answer_to_a_question_still_has_the_page_from_the_request(make):
+    """The link is in the request, not in the answer: the page must not drop out between them."""
+    from app.web.links import LinkPage
+
+    page = LinkPage("https://www.kv.ee/1", "Müüa korter, 4 tuba", "Hind 174 900 €")
+    bot = make(links=FakeLinks([page]))
+    bot.llm.queue(make_interp("create", cand(bot.ctx, "t2", 0.95)))  # no title -> asks
+    await bot.orch.handle_text(CHAT, USER, "добавь https://www.kv.ee/1 в покупки")
+    bot.llm.queue(make_interp("create", cand(bot.ctx, "t2", 0.95,
+                                             fields={"t2.f1": val("Квартира", 1.0)})))
+    await bot.orch.handle_text(CHAT, USER, "квартира")
+    assert bot.llm.links == [[page], [page]]
+
+
+async def test_an_answer_to_a_question_is_never_taken_for_a_question_about_the_page(make):
+    """Otherwise the bot's own question would be left pending under a reply about the page."""
+    from app.web.links import LinkPage
+
+    page = LinkPage("https://www.kv.ee/1", "Müüa korter, 4 tuba", "Hind 174 900 €")
+    bot = make(links=FakeLinks([page]), answerer=FakeAnswerer())
+    bot.llm.queue(make_interp("create", cand(bot.ctx, "t2", 0.95)))  # no title -> asks
+    await bot.orch.handle_text(CHAT, USER, "добавь https://www.kv.ee/1 в покупки")
+    assert "answer" in offered_intents(bot)
+    bot.llm.queue(make_interp("create", cand(bot.ctx, "t2", 0.95,
+                                             fields={"t2.f1": val("Квартира", 1.0)})))
+    await bot.orch.handle_text(CHAT, USER, "квартира")
+    assert "answer" not in offered_intents(bot)

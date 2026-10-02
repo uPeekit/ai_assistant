@@ -4,7 +4,8 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-IntentName = Literal["create", "update", "append", "rewrite", "search", "unknown", "plan"]
+IntentName = Literal["create", "update", "append", "rewrite", "search", "unknown", "plan",
+                     "answer"]
 WebMedia = Literal["text", "text_and_images", "images"]
 WEB_MEDIA: tuple[str, ...] = ("text", "text_and_images", "images")
 

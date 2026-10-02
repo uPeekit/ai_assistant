@@ -12,10 +12,10 @@ from __future__ import annotations
 
 import logging
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from html.parser import HTMLParser
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 import httpx
 
@@ -47,17 +47,36 @@ class PageUnreadable(Exception):
     """The page could not be read. The message goes to the model: "protected", "not public"."""
 
 
+def is_private(url: str, never_open: Iterable[str]) -> bool:
+    """Whether `url` is on a site the user never wants read: a domain covers its subdomains."""
+    try:
+        host = (urlsplit(url).hostname or "").lower()
+    except ValueError:  # a malformed address is not a site on the list; reading it fails anyway
+        return False
+    for domain in never_open:
+        domain = domain.strip().lower().lstrip(".")
+        if domain and (host == domain or host.endswith("." + domain)):
+            return True
+    return False
+
+
 class Reader:
     def __init__(self, *, jina_key: str = "", transport: httpx.AsyncBaseTransport | None = None,
-                 is_public: Callable[[str], Awaitable[bool]] = is_public_url) -> None:
+                 is_public: Callable[[str], Awaitable[bool]] = is_public_url,
+                 never_open: Callable[[], Iterable[str]] = tuple) -> None:
         self._key = jina_key
         self._is_public = is_public
+        # The admin page's never-open list, checked on every read: the research loop reads
+        # whatever link the model picks, including one the user pasted.
+        self._never_open = never_open
         self._client = httpx.AsyncClient(transport=transport, follow_redirects=False)
 
     async def aclose(self) -> None:
         await self._client.aclose()
 
     async def read(self, url: str) -> Page:
+        if is_private(url, self._never_open()):
+            raise PageUnreadable("private: on the never-open list")
         if not await self._is_public(url):
             raise PageUnreadable("not a public web address")
         # httpx.InvalidURL is not an httpx.HTTPError: an address the model made up (a newline in
@@ -92,6 +111,8 @@ class Reader:
                                            timeout=FETCH_TIMEOUT_S) as resp:
                 if resp.is_redirect:
                     target = urljoin(current, resp.headers.get("location", ""))
+                    if is_private(target, self._never_open()):
+                        raise PageUnreadable("private: redirected to the never-open list")
                     if not await self._is_public(target):
                         raise PageUnreadable("redirected to an address that is not public")
                     current = target

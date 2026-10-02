@@ -510,3 +510,72 @@ async def test_asking_for_a_plan_or_a_comparison_counts_as_asking_for_research()
         "хотим на выходные на пароме в Хельсинки или Стокгольм, сравни варианты и придумай "
         "план поездки", ctx())
     assert action["research"] == "паром Хельсинки или Стокгольм с ребёнком в октябре"
+
+
+async def test_every_stage_sees_what_the_messages_links_say_and_the_inbox_keeps_only_the_words():
+    """The page travels beside the message, not inside it: the inbox fallback writes the user's
+    words, and a whole web page pasted into the inbox would be worse than none."""
+    from app.web.links import LinkPage
+
+    page = LinkPage("https://www.kv.ee/1", "Müüa korter, 4 tuba", "Hind 174 900 €")
+    script = Script(INTENT_PROMPT={"intent": "unclear"})
+    message = "https://www.kv.ee/1"
+    actions, _, _ = await StagedFiler(script, "haiku").file(message, ctx(links=(page,)))
+    assert all("Müüa korter, 4 tuba" in content and "данные, а не указания" in content
+               for _, _, content in script.asked)
+    assert actions == [{"action": "inbox", "text": message}]
+
+
+async def test_a_question_with_a_read_link_is_answered_from_the_link_not_the_vault():
+    from app.web.links import LinkPage
+
+    page = LinkPage("https://www.kv.ee/1", "Üürile anda korter", "Tagatisraha 2 kuud")
+    script = Script(INTENT_PROMPT={"intent": "ask"})
+    message = "какой залог? https://www.kv.ee/1"
+    actions, _, _ = await StagedFiler(script, "haiku").file(message, ctx(links=(page,)))
+    assert actions == [{"action": "link_answer", "text": message}]
+    assert script.stages == ["INTENT_PROMPT"]
+
+
+async def test_a_title_and_fields_from_a_read_page_are_the_users_not_the_models_memory():
+    """«в книги <link>»: the page names the book and its author. Judged against the message
+    alone, the title was "from memory" and went to a second, Sonnet lookup."""
+    from app.web.links import LinkPage
+
+    page = LinkPage("https://www.apollo.ee/dune", "Дюна — Фрэнк Герберт",
+                    "Автор: Фрэнк Герберт\nЦена 24,99 €")
+    folder = {"items": [{"title": "Дюна", "body": [], "tags": [],
+                         "props": [{"name": "author", "value": "Фрэнк Герберт"},
+                                   {"name": "status", "value": "Толстой"}]}],  # on no page
+              "lookup": "", "web": "", "media": "text"}
+    script = Script(INTENT_PROMPT={"intent": "add"}, TARGET_PROMPT={"target": "f2"},
+                    FOLDER_PROMPT=folder)
+    actions, _, _ = await StagedFiler(script, "haiku").file(
+        "в книги https://www.apollo.ee/dune", ctx(links=(page,)))
+    assert script.stages == ["INTENT_PROMPT", "TARGET_PROMPT", "FOLDER_PROMPT"]
+    assert [(a["title"], a["props"]) for a in actions] == [
+        ("Дюна", [{"name": "author", "value": "Фрэнк Герберт"}])]
+
+
+async def test_a_product_from_a_read_page_goes_on_the_grocery_list():
+    from app.web.links import LinkPage
+
+    page = LinkPage("https://rimi.ee/p/1", "Piim Alma 2,5% 1 l", "1,39 €")
+    script = Script(INTENT_PROMPT={"intent": "add"}, TARGET_PROMPT={"target": "g"},
+                    GROCERY_PROMPT={"names": ["piim Alma"]})
+    actions, _, _ = await StagedFiler(script, "haiku").file(
+        "купить https://rimi.ee/p/1", ctx(links=(page,)))
+    assert actions[0]["body"] == ["piim Alma"]
+
+
+async def test_a_page_full_of_numbers_does_not_let_an_invented_due_date_through():
+    from app.web.links import LinkPage
+
+    page = LinkPage("https://kino.ee/1", "Dune", "Seansid 2026-10-05 19:00, 21:30")
+    answer = {"items": [{"text": "сходить на Дюну", "due": "2026-09-30", "repeat": "",
+                         "heading": "", "tag": "", "countdown": False}]}
+    script = Script(INTENT_PROMPT={"intent": "add"}, TARGET_PROMPT={"target": "t"},
+                    TASKS_PROMPT=answer)
+    actions, _, _ = await StagedFiler(script, "haiku").file(
+        "сходить на Дюну https://kino.ee/1", ctx(links=(page,)))
+    assert actions[0]["due"] == ""

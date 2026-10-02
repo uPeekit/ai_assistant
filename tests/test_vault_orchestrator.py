@@ -414,3 +414,65 @@ async def test_nothing_to_change_is_not_reported_as_a_failure(tmp_path):
     assert turn.writes == []
     assert texts.VAULT_NOTHING_TO_CHANGE in turn.reply_line()
     assert "no changes" not in turn.reply_line()
+
+
+async def test_the_vault_side_reads_the_message_with_what_its_links_say(bot):
+    from app.web.links import LinkPage
+
+    class Links:
+        async def read(self, message):
+            return [LinkPage("https://www.kv.ee/1", "Müüa korter, 4 tuba", "Hind 174 900 €")]
+
+    bot.orch._links = Links()
+    bot.claude.answers = [{"actions": [{"action": "inbox", "text": "https://www.kv.ee/1"}]}]
+    bot.llm.queue(make_interp("unknown", cand(bot.ctx, "t2", 0.3)))
+    await bot.orch.handle_text(CHAT, USER, "https://www.kv.ee/1")
+    sent = json.dumps(bot.claude.seen[0]["messages"], ensure_ascii=False)
+    assert "Müüa korter, 4 tuba" in sent and "данные, а не указания" in sent
+
+
+async def test_a_question_about_a_link_writes_nothing_to_the_vault_either(bot):
+    from app.web.links import LinkPage
+    from tests.test_orchestrator import FakeAnswerer
+
+    class Links:
+        async def read(self, message):
+            return [LinkPage("https://www.kv.ee/1", "Üürile anda korter", "Tagatisraha 2 kuud")]
+
+    before = {p: p.read_bytes() for p in bot.dir.rglob("*.md")}
+    bot.orch._links, bot.orch._answerer = Links(), FakeAnswerer()
+    bot.claude.answers = [{"actions": [{"action": "inbox", "text": "какой залог?"}]}]
+    bot.llm.queue(make_interp("answer", cand(bot.ctx, "t2", 0.3)))
+    reply = await bot.orch.handle_text(CHAT, USER, "какой залог? https://www.kv.ee/1")
+    assert reply.text.startswith("Залог")
+    assert {p: p.read_bytes() for p in bot.dir.rglob("*.md")} == before
+
+
+async def test_notion_off_a_question_about_a_link_is_answered_from_the_page(bot, tmp_path):
+    from app.web.links import LinkPage
+    from tests.test_orchestrator import FakeAnswerer
+
+    class Links:
+        async def read(self, message):
+            return [LinkPage("https://www.kv.ee/1", "Üürile anda korter", "Tagatisraha 2 kuud")]
+
+    bot.orch._switches = Switches(tmp_path / "switches.json", {"notion": False})
+    bot.orch._links, bot.orch._answerer = Links(), FakeAnswerer()
+    bot.claude.answers = [{"actions": [{"action": "link_answer", "text": "какой залог?"}]}]
+    before = {p: p.read_bytes() for p in bot.dir.rglob("*.md")}
+
+    reply = await bot.orch.handle_text(CHAT, USER, "какой залог? https://www.kv.ee/1")
+
+    assert "Залог — две месячные платы." in reply.text
+    assert {p: p.read_bytes() for p in bot.dir.rglob("*.md")} == before
+
+
+async def test_with_both_sides_off_no_link_is_read(bot, tmp_path):
+    """Nothing would use the page, and the reader is a third party."""
+    from tests.test_orchestrator import FakeLinks
+
+    bot.orch._switches = Switches(tmp_path / "switches.json",
+                                  {"notion": False, "obsidian": False})
+    bot.orch._links = links = FakeLinks([])
+    reply = await bot.orch.handle_text(CHAT, USER, "https://www.kv.ee/1")
+    assert reply.text == texts.ERRORS["NOTHING_ENABLED"] and links.asked == []

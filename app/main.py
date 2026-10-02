@@ -59,6 +59,7 @@ from app.conversation.orchestrator import Orchestrator
 from app.conversation.session import SessionStore
 from app.daily import DailyMessage, parse_times
 from app.instance_lock import AlreadyRunning, InstanceLock
+from app.llm.answer import LinkAnswerer
 from app.llm.base import LLMClient, LLMError
 from app.llm.claude import ClaudeClient
 from app.llm.context import ContextBuilder
@@ -97,6 +98,7 @@ from app.vault.linker import Linker
 from app.vault.pipeline import VaultPipeline
 from app.vault.staged import StagedFiler
 from app.vault.writer import VaultWriter
+from app.web.links import LinkReader
 from app.web.reader import Reader
 
 log = logging.getLogger(__name__)
@@ -390,7 +392,8 @@ def build(
                       max_searches=settings.research_max_searches,
                       max_reads=settings.research_max_reads,
                       soft_deadline_s=settings.research_soft_deadline_s,
-                      reader=Reader(jina_key=settings.jina_api_key.get_secret_value()),
+                      reader=Reader(jina_key=settings.jina_api_key.get_secret_value(),
+                                    never_open=lambda: tuning.never_open),
                       is_image=images.is_image,
                       search=ImageSearch(), extra=lambda: tuning.research_note,
                       deadline_s=settings.research_deadline_s, health=health)
@@ -432,10 +435,19 @@ def build(
         countdown_tag=texts.VAULT_COUNTDOWN_TAG, date_props=texts.VAULT_DATE_PROPS,
     ))
     vault = _vault_pipeline(settings, switches, tuning, health, rewriter, editor)
+    # A link in a message is data for whichever interpreter takes it, local or not; only
+    # answering a question about the page needs Claude. Sites on the admin page's never-open
+    # list are not read at all.
+    link_reader = Reader(jina_key=settings.jina_api_key.get_secret_value(),
+                         never_open=lambda: tuning.never_open)
+    links = LinkReader(link_reader, never_open=lambda: tuning.never_open)
+    answerer = (LinkAnswerer(settings.anthropic_api_key.get_secret_value(),
+                             settings.claude_model, health=health)
+                if uses_cloud(settings) else None)
     orchestrator = Orchestrator(
         settings, discovery, context_builder, llm, validator, policy, executor, store, sessions,
         researcher=researcher, planner=planner, note=note.load, vault=vault,
-        switches=switches, tuning=tuning, health=health,
+        switches=switches, tuning=tuning, health=health, links=links, answerer=answerer,
     )
     speech = speech_factory(settings)
     buckets_file = Buckets(settings.db_path.with_name("mail_buckets.txt"),
@@ -477,6 +489,9 @@ def build(
             await mail.aclose()
         if vault is not None:
             await vault.aclose()
+        await link_reader.aclose()
+        if answerer is not None:
+            await answerer.aclose()
         store.close()
 
     telegram_app.post_init = _post_init

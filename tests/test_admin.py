@@ -460,6 +460,33 @@ def test_tuning_is_served_and_saved(settings, discovery, descriptions, tmp_path)
         s.stop()
 
 
+def test_the_never_open_list_is_on_the_page(settings, discovery, descriptions, tmp_path):
+    """Sites whose links the bot never reads: served, editable, and shown in both lists the
+    page loads and saves from."""
+    import re
+    from pathlib import Path
+
+    from app.tuning import Defaults, Tuning
+
+    html = (Path(__file__).resolve().parents[1] / "app" / "admin" / "page.html").read_text(
+        encoding="utf-8")
+    lists = re.findall(r'\["bot_name",(.*?)\]', html, re.S)
+    assert len(lists) == 2 and all('"never_open"' in names for names in lists)
+    assert 'id="tuning-never_open"' in html
+
+    tuning = Tuning(tmp_path / "tuning.json", Defaults(
+        bot_name="", agenda_at="09:00", mail_at="12:00,19:00",
+        web_words=("найди",), countdown_tag="отсчёт", date_props=("date",)))
+    s = AdminServer(settings, discovery, descriptions, None, None, None, tuning)
+    s.start()
+    try:
+        assert "swedbank.ee" in json.loads(_get(s, "/api/targets")[1])["tuning"]["never_open"]
+        _post(s, "/api/descriptions", {"targets": {}, "tuning": {"never_open": "mybank.ee"}})
+        assert tuning.never_open == ("mybank.ee",)
+    finally:
+        s.stop()
+
+
 def test_workspace_note_is_served_and_saved(settings, discovery, descriptions, tmp_path):
     note = WorkspaceNote(tmp_path / "workspace_note.md")
     s = AdminServer(settings, discovery, descriptions, note)

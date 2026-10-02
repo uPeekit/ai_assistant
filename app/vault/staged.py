@@ -33,9 +33,10 @@ import anthropic
 from app import texts
 from app.llm import staged_prompts as P
 from app.llm.health import Health, describe
-from app.llm.prompts import WEB_WORDS
+from app.llm.prompts import WEB_WORDS, links_section
 from app.vault.filer import GROCERY_LIST, GUIDE_LINK, MEDIA, FilerError, VaultContext
 from app.vault.index import related
+from app.web.links import URL
 
 log = logging.getLogger(__name__)
 
@@ -185,13 +186,18 @@ class _Gate:
 
     message: str
     guide: str
+    # What the message's read links say: a source for a title, a field or a product, as the
+    # user sent it. Never for a date: a page is full of numbers the user did not mean.
+    pages: str = ""
 
     def __post_init__(self) -> None:
-        self._tokens = tokens(self.message)
+        self._tokens = tokens(f"{self.message}\n{self.pages}")
+        # A link's digits are an address, not a time.
+        spoken = URL.sub(" ", self.message)
         # Whole words that *begin* with a cue: as a substring, the cue for "morning" is
         # inside the word for "inside".
-        said = _WORD.findall(self.message.casefold())
-        self._timed = any(c.isdigit() for c in self.message) or any(
+        said = _WORD.findall(spoken.casefold())
+        self._timed = any(c.isdigit() for c in spoken) or any(
             word.startswith(cue) for word in said for cue in texts.VAULT_DATE_CUES)
         self._guide = self.guide.casefold()
 
@@ -313,6 +319,9 @@ class _Run:
 
     async def _ask(self, system: str, schema: dict, content: str, *,
                    model: Ask | None = None, max_tokens: int = MAX_TOKENS) -> dict:
+        links = links_section(list(self.ctx.links))
+        if links:  # every stage sees the pages, whatever it decides from them
+            content = f"{content}\n\n{links}"
         data, prompt_tokens, output_tokens = await (model or self._ask_model)(
             system, schema, content, max_tokens)
         self.prompt_tokens += prompt_tokens
@@ -324,6 +333,10 @@ class _Run:
 
     def _guide(self) -> str:
         return P.section(P.H_GUIDE, self.ctx.guide)
+
+    def _pages(self) -> str:
+        return "\n".join(f"{page.title}\n{page.text}" for page in self.ctx.links
+                         if not page.error)
 
     def _today(self) -> str:
         return P.section(P.H_TODAY, f"{self.ctx.today} ({self.ctx.weekday})")
@@ -470,7 +483,7 @@ class _Run:
             P.TASKS_PROMPT, schema,
             P.message(self._guide(), self._today(),
                       P.section(P.H_AREAS, ", ".join(ctx.tags)), text=text))
-        gate = _Gate(text, ctx.guide)
+        gate = _Gate(text, ctx.guide, self._pages())
         items = [i for i in answer.get("items") or []
                  if isinstance(i, dict) and str(i.get("text", "")).strip()]
         lookup = str(answer.get("lookup", "")).strip()
@@ -488,7 +501,7 @@ class _Run:
     async def _groceries(self, text: str, *, done: bool) -> list[dict]:
         answer = await self._ask(P.GROCERY_PROMPT, _obj({"names": _STRINGS}),
                                  P.message(text=text))
-        gate = _Gate(text, "")
+        gate = _Gate(text, "", self._pages())
         names = [n.strip() for n in answer.get("names") or []
                  if isinstance(n, str) and n.strip() and gate.said(n)]
         # No names left: filer.check takes the product from the message itself.
@@ -505,7 +518,7 @@ class _Run:
             P.message(self._guide(), self._today(), P.section(P.H_FOLDER, folder),
                       P.section(P.H_PROPS, props_of),
                       P.section(P.H_TAGS, ", ".join(ctx.tags)), text=text))
-        gate = _Gate(text, ctx.guide)
+        gate = _Gate(text, ctx.guide, self._pages())
         known_tags = {t.casefold() for t in ctx.tags}
         out: list[dict] = []
         recalled: list[str] = []
@@ -654,7 +667,7 @@ class _Run:
                       P.section(P.H_NOTE_PROPS, ", ".join(ctx.note_props.get(note, []))),
                       P.section(P.H_HEADINGS, "\n".join(headings)), text=text))
         if answer.get("kind") == "props":
-            gate = _Gate(text, ctx.guide)
+            gate = _Gate(text, ctx.guide, self._pages())
             props = []
             for prop in answer.get("props") or []:
                 name = str((prop or {}).get("name", "")).strip()
@@ -696,6 +709,9 @@ class _Run:
 
     async def _question(self, text: str) -> list[dict]:
         ctx = self.ctx
+        if any(not page.error for page in ctx.links):
+            # A question that comes with a page is about the page, not about the vault.
+            return [{"action": "link_answer", "text": text}]
         schema = _obj({"kind": _enum(ASK_KINDS), "due_from": _STRING, "due_to": _STRING,
                        "text": _STRING, "folder": _enum(["", *ctx.folders]), "tag": _STRING,
                        "props": _PROPS})
