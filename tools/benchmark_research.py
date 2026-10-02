@@ -1,6 +1,7 @@
 """The research loop against the old server-side search, on the same questions.
 
     uv run python -m tools.benchmark_research [--model claude-sonnet-5] [--only kv,milk]
+        [--engines server,loop]
 
 Needs ANTHROPIC_API_KEY, read from the production .env and never printed. Costs real money:
 about $1-3 for the full set, mostly the old path's. The table goes to stdout; the answers go to
@@ -13,7 +14,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import time
-from datetime import date
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -75,6 +76,20 @@ class Meter:
         await self._client.close()
 
 
+ENGINES = ("server", "loop")
+
+
+def engines(arg: str) -> list[str]:
+    """Which paths to run, in order; both when nothing is said."""
+    chosen = [e.strip() for e in arg.split(",") if e.strip()]
+    return [e for e in ENGINES if e in chosen] if chosen else list(ENGINES)
+
+
+def answer_file(now: datetime, which: list[str]) -> Path:
+    """One file per run: a later run must never overwrite answers an earlier one paid for."""
+    return OUT_DIR / f"benchmark-{now:%Y-%m-%d-%H%M}-{'-'.join(which)}.md"
+
+
 async def ask(researcher: Any, request: str, query: str) -> tuple[str, str]:
     """(answer, outcome): "ok", "asked" (it put a question to the user) or "failed". A question
     back is a real outcome of a lookup, not a crash of the benchmark."""
@@ -101,10 +116,11 @@ async def run(args: argparse.Namespace) -> int:
         raise SystemExit(f"ANTHROPIC_API_KEY is not set ({args.env})")
     only = set(args.only.split(",")) if args.only else None
     rows = []
+    which = engines(args.engines)
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    out = OUT_DIR / f"benchmark-{date.today().isoformat()}.md"
+    out = answer_file(datetime.now(), which)
     out.write_text("", encoding="utf-8")  # each answer is added as it arrives
-    for engine in ("server", "loop"):
+    for engine in which:
         meter = Meter(anthropic.AsyncAnthropic(api_key=key, max_retries=0, timeout=600))
         researcher = build(engine, key, args.model, meter)
         try:
@@ -131,7 +147,7 @@ async def run(args: argparse.Namespace) -> int:
           "|---|---|---|---|---|---|---|")
     for name, engine, outcome, s, tin, tout, cost in rows:
         print(f"| {name} | {engine} | {outcome} | {s:.0f} | {tin:,} | {tout:,} | {cost:.3f} |")
-    for engine in ("server", "loop"):
+    for engine in which:
         mine = [r for r in rows if r[1] == engine]
         print(f"{engine}: {sum(r[2] == 'ok' for r in mine)}/{len(mine)} answered, "
               f"{sum(r[3] for r in mine):.0f} s, ~${sum(r[6] for r in mine):.2f}")
@@ -143,6 +159,7 @@ def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--model", default="claude-sonnet-5")
     p.add_argument("--only", default="", help="comma-separated question keys")
+    p.add_argument("--engines", default="", help="server, loop, or both (the default)")
     p.add_argument("--env", default="C:/apps/ai_assistant/.env")
     return asyncio.run(run(p.parse_args()))
 

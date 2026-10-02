@@ -47,3 +47,21 @@ async def test_a_question_back_or_a_failure_is_an_outcome_not_a_crash():
     assert await ask(Answers("ok"), "r", "q") == ("## Ответ", "ok")
     assert await ask(Answers("asked"), "r", "q") == ("[asked: какой город?]", "asked")
     assert await ask(Answers("failed"), "r", "q") == ("[ResearchError: no answer]", "failed")
+
+
+def test_engines_are_chosen_from_the_command_line():
+    from tools.benchmark_research import engines
+
+    assert engines("") == ["server", "loop"]
+    assert engines("loop") == ["loop"]
+    assert engines(" server , loop ") == ["server", "loop"]
+
+
+def test_each_run_writes_its_own_answer_file():
+    from datetime import datetime
+
+    from tools.benchmark_research import answer_file
+
+    first = answer_file(datetime(2026, 10, 2, 9, 5), ["loop"])
+    assert first.name == "benchmark-2026-10-02-0905-loop.md"
+    assert answer_file(datetime(2026, 10, 2, 9, 6), ["loop"]) != first
