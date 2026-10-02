@@ -49,3 +49,14 @@ def test_a_number_in_the_request_finds_its_line():
 
 def test_a_page_with_nothing_matching_is_filled_from_its_start():
     assert relevant("first line\nsecond\nthird", "zzzz", limit=100) == "first line\nsecond\nthird"
+
+
+def test_form_checkboxes_are_noise():
+    """kv.ee pages carry their whole search form; its ticked boxes say "korrus" and "elamumaa"
+    and crowded the listing's own price out of the page."""
+    page = "\n".join(["- [x] Mitte viimane - [x] Viimane korrus",
+                      "- [ ] ärimaa - [x] elamumaa (korterelamu)",
+                      "# Kalevipoja põik 3, Lasnamäe", "Hind 159 000 €"])
+    out = relevant(page, "korrus hind", limit=6000)
+    assert "[x]" not in out and "[ ]" not in out
+    assert "159 000 €" in out

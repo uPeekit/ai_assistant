@@ -21,6 +21,7 @@ UNITS = re.compile(r"\d+(?:[.,]\d+)?\s?(?:m²|m2|tuba|toa|korrus|rooms?)\b|ehitu
                    re.I)
 HEADING = re.compile(r"^#{1,6}\s")
 IMAGE = re.compile(r"^\s*!\[")
+CHECKBOX = re.compile(r"^\s*[-*]\s*\[[ xX]\]")  # a search form's options, not page content
 ONLY_LINK = re.compile(r"^\s*(?:[-*]\s*)?\[[^\]]*\]\([^)]*\)\s*$")
 BOILERPLATE = re.compile(r"cookie|küpsis|consent|privacy policy|nõustun|accept all", re.I)
 NUMBER = re.compile(r"\d{2,}")
@@ -65,7 +66,7 @@ def _mentions(line: str, want: set[str]) -> bool:
 
 
 def _noise(line: str, want: set[str]) -> bool:
-    if IMAGE.match(line) or BOILERPLATE.search(line):
+    if IMAGE.match(line) or CHECKBOX.match(line) or BOILERPLATE.search(line):
         return True
     # A bare link is a menu entry unless it names what is looked for or carries a price.
     return bool(ONLY_LINK.match(line)) and not (PRICE.search(line) or _mentions(line, want))

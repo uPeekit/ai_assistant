@@ -34,11 +34,24 @@ SITES: tuple[Site, ...] = (
     Site("selver.ee", "groceries", "https://www.selver.ee/search?q={q}", probe="piim"),
     Site("k-rauta.ee", "building", "https://www.k-rauta.ee/otsing?q={q}", probe="liimpuit"),
     Site("kaup24.ee", "goods", "https://kaup24.ee/et/search?q={q}", probe="iphone"),
-    Site("euronics.ee", "electronics", "https://www.euronics.ee/search?q={q}", probe="iphone"),
+    Site("euronics.ee", "goods", "https://www.euronics.ee/search?q={q}", probe="iphone"),
     Site("hinnavaatlus.ee", "prices",
          "https://www.hinnavaatlus.ee/search/?Type=products&Query={q}", probe="iphone"),
 )
 BY_NAME = {s.name: s for s in SITES}
+
+# Estonian sites worth knowing that have no working direct search here: their results render in
+# the browser after the page is captured, or the search address is unknown. The model is told
+# about them so it looks for them with web_search and reads their pages with read.
+KNOWN: tuple[Site, ...] = (
+    Site("city24.ee", "real_estate", ""),
+    Site("kinnisvara24.ee", "real_estate", ""),
+    Site("prismamarket.ee", "groceries", ""),
+    Site("ecoop.ee", "groceries", ""),
+    Site("ehituseabc.ee", "building", ""),
+    Site("bauhof.ee", "building", ""),
+    Site("espak.ee", "building", ""),
+)
 
 
 class SiteError(ValueError):

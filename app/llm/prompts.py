@@ -249,6 +249,18 @@ def research_loop_prompt(searches: int, reads: int) -> str:
 - read — прочитать страницу по адресу из результатов поиска или со страницы, которую ты уже \
 прочитал; страница приходит сокращённой до нужного.
 
+Пользователь живёт в Таллине, Эстония. Ищи и выбирай эстонские источники: сайты .ee, а если \
+таких нет — на эстонском языке или с /ee/ или /et/ в адресе. Цены — в евро, в эстонских \
+магазинах.
+
+{site_guide()}
+
+Как искать:
+- если в сообщении есть ссылка — сначала прочитай её через read;
+- конкретный адрес или объявление ищи и через web_search: поиск на сайте показывает только \
+активные объявления, а снятые находит поисковик;
+- «где дешевле» — смотри сравнение цен на hinnavaatlus.ee.
+
 Бюджет на весь поиск: до {searches} вызовов web_search и до {reads} вызовов site_search и read \
 вместе. После каждого вызова видно, сколько осталось. Когда бюджет кончится или поиск \
 затянется, инструменты отключатся — тогда сразу пиши ответ из того, что нашёл. Никогда не жди \
@@ -273,9 +285,23 @@ SITE_KINDS = {
     "groceries": "продукты",
     "building": "стройматериалы и товары для дома",
     "goods": "товары и техника",
-    "electronics": "техника",
     "prices": "сравнение цен в разных магазинах",
 }
+
+
+def site_guide() -> str:
+    """The Estonian sites the user's lookups go to, by category. Those marked * have a direct
+    search (site_search); the rest are found with web_search and read with read."""
+    from app.web.sites import KNOWN, SITES
+
+    lines = ["Эстонские сайты по категориям (* — есть site_search):"]
+    for kind, label in SITE_KINDS.items():
+        names = [f"{s.name}*" + (" (продажа и аренда)" if s.rent_template else "")
+                 for s in SITES if s.kind == kind]
+        names += [s.name for s in KNOWN if s.kind == kind]
+        if names:
+            lines.append(f"- {label}: {', '.join(names)}")
+    return "\n".join(lines)
 
 
 def site_search_tool(sites) -> str:

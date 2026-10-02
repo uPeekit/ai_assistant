@@ -207,3 +207,26 @@ async def test_one_log_line_per_lookup_and_no_urls_at_info(caplog):
     assert len([m for m in info if m.startswith("research:")]) == 1
     assert "kv.ee" in next(m for m in info if m.startswith("research:"))
     assert not any("http" in m for m in info)
+
+
+def test_the_prompt_says_where_the_user_is_and_lists_estonian_sites_by_category():
+    from app.llm.prompts import SITE_KINDS, research_loop_prompt
+    from app.web.sites import KNOWN, SITES
+
+    prompt = research_loop_prompt(4, 8)
+    assert "Таллин" in prompt and ".ee" in prompt
+    for site in (*SITES, *KNOWN):
+        assert site.name in prompt
+        assert SITE_KINDS[site.kind] in prompt
+    assert "hinnavaatlus.ee" in prompt  # "where is it cheapest" goes to the price comparison
+
+
+def test_site_search_offers_only_sites_with_a_working_search():
+    from app.llm.research import loop_tools
+    from app.web.sites import KNOWN, SITES
+
+    site_search = next(t for t in loop_tools(4) if t["name"] == "site_search")
+    enum = site_search["input_schema"]["properties"]["site"]["enum"]
+    assert enum == [s.name for s in SITES]
+    assert not {s.name for s in KNOWN} & set(enum)
+    assert all(not s.template for s in KNOWN)
