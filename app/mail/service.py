@@ -17,6 +17,7 @@ from pathlib import Path
 from app import texts
 from app.mail.classify import OTHER, Classifier, Sorted
 from app.mail.imap import GmailIMAP, MailboxError, Message
+from app.mail.local import LocalClassifier
 
 log = logging.getLogger(__name__)
 
@@ -109,7 +110,8 @@ def shadow_digest(shadow: ShadowRun, buckets: list[str]) -> str:
 
 
 class MailService:
-    def __init__(self, mailbox: GmailIMAP, classifier: Classifier, state: MailState,
+    def __init__(self, mailbox: GmailIMAP, classifier: Classifier | LocalClassifier,
+                 state: MailState,
                  *, buckets: list[str] | None = None, max_per_run: int = 40,
                  source: Callable[[], tuple[list[str], dict[str, str]]] | None = None,
                  shadows: list | None = None) -> None:
@@ -161,6 +163,14 @@ class MailService:
             log.info("mail: nothing new")
             return MailRun()
         sorted_, prompt_tokens, output_tokens = await self._classifier.sort(messages)
+        if not sorted_:
+            # Nothing came back for mail that is there: a local model whose Ollama is not
+            # running. The bookmark stays put, so the next run fetches this mail again; moving
+            # it on would leave the mail out of every digest.
+            error = getattr(self._classifier, "last_error", "") or "no answer"
+            log.warning("mail: the classifier answered nothing (%s); kept for the next run",
+                        error)
+            return MailRun(error=error)
         self._state.write(newest, now_validity)
         log.info("mail: %d message(s), buckets %s", len(sorted_),
                  ", ".join(sorted({s.bucket for s in sorted_})))

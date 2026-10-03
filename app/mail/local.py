@@ -4,9 +4,9 @@ Same prompt, same JSON schema, same `gate` — so a digest written from this is 
 the real one line for line, and a small model that answers off-list is as harmless here as a
 large one: the only things it can produce are a configured bucket and a line of text.
 
-It exists to be compared. `MailService` runs it beside Claude and the bot sends both digests,
-so the user can read the two side by side and decide whether the local model is good enough to
-take the job over.
+It started as a comparison: `MailService` runs it beside the real classifier as a shadow, and
+the bot sends both digests to be read side by side (MAIL_SHADOW_MODEL). After a week of that,
+qwen3:8b took the job over: MAIL_MODEL set to a non-Claude name makes this the real classifier.
 """
 
 from __future__ import annotations
