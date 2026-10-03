@@ -242,6 +242,20 @@ def test_a_single_option_for_a_list_field_is_wrapped_in_a_list(ctx):
     assert check(answer, build_schema(ctx)) == ""
 
 
+def test_ambiguous_options_for_a_list_field_are_each_wrapped_in_a_list(ctx):
+    """Prod event 124: Haiku named two tags it could not choose between as bare options; for a
+    multi-select each alternative is itself a list, so the whole answer was rejected twice and
+    the message waited 53 s for the local model."""
+    project = ctx.field_key("ds-todo", "project")  # relation
+    tk = ctx.target_key("ds-todo")
+    first, second = ctx.option_keys(project)[:2]
+    answer = to_interpretation(flat(ctx, target=tk, fields=[
+        {"key": project, "status": "ambiguous", "value_json": json.dumps([first, second]),
+         "confidence": 0.5, "source_text": ""}]), ctx)
+    assert answer["candidates"][0]["fields"][project]["candidates"] == [[first], [second]]
+    assert check(answer, build_schema(ctx)) == ""
+
+
 def test_schema_errors_name_the_field_not_just_the_candidate(ctx):
     tk = ctx.target_key("ds-todo")
     due = ctx.field_key("ds-todo", "due")

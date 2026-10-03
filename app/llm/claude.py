@@ -94,6 +94,10 @@ def to_interpretation(flat: dict, ctx: Context) -> dict:
                                "confidence": f.get("confidence", 0),
                                "source_text": f.get("source_text", "")}
             elif status == "ambiguous":
+                if ref is not None and ref.field_type in LIST_TYPES and isinstance(value, list):
+                    # Each alternative of a list field is itself a list: two tags it could not
+                    # choose between come as bare options, and failed the whole answer.
+                    value = [v if isinstance(v, list) else [v] for v in value]
                 fields[key] = {"status": "ambiguous", "candidates": value,
                                "source_text": f.get("source_text", "")}
             else:
