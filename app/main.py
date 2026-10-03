@@ -316,10 +316,18 @@ def _mail_digest(settings: Settings, switches: Switches, buckets_file: Buckets, 
     buckets, and send one message. Off unless both the address and the app password are set."""
     key = settings.anthropic_api_key.get_secret_value()
     password = settings.gmail_app_password.get_secret_value()
-    if not (settings.gmail_address and password and key and settings.allowed_user_ids
-            and parse_times(tuning.mail_at)):
+    # A claude-... model sorts through the API; any other name is a local Ollama model, which
+    # took the job over after a week of side-by-side digests (qwen3:8b) and needs no key.
+    cloud = settings.mail_model.startswith("claude")
+    if not (settings.gmail_address and password and (key or not cloud)
+            and settings.allowed_user_ids and parse_times(tuning.mail_at)):
         return None, None
     buckets, meanings = buckets_file.parsed()
+    classifier = (Classifier(key, settings.mail_model, buckets, meanings=meanings, health=health)
+                  if cloud else
+                  LocalClassifier(settings.ollama_base_url, settings.mail_model, buckets,
+                                  meanings=meanings, batch=settings.mail_shadow_batch,
+                                  num_ctx=settings.llm_num_ctx))
     shadows = [LocalClassifier(settings.ollama_base_url, model, buckets, meanings=meanings,
                                batch=settings.mail_shadow_batch, num_ctx=settings.llm_num_ctx)
                for model in settings.mail_shadow_models]
@@ -327,8 +335,7 @@ def _mail_digest(settings: Settings, switches: Switches, buckets_file: Buckets, 
         log.info("mail: comparison digests will be written by %s",
                  ", ".join(settings.mail_shadow_models))
     service = MailService(
-        GmailIMAP(settings.gmail_address, password),
-        Classifier(key, settings.mail_model, buckets, meanings=meanings, health=health),
+        GmailIMAP(settings.gmail_address, password), classifier,
         MailState(settings.db_path.with_name("mail_state.json")),
         max_per_run=settings.mail_max_per_run, source=buckets_file.parsed, shadows=shadows,
     )

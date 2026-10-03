@@ -98,6 +98,7 @@ class Settings(BaseSettings):
     # what the classifier follows — a bare name leaves it guessing. Empty falls back to
     # texts.MAIL_BUCKETS_DEFAULT.
     mail_buckets: str = ""
+    # claude-... sorts through the API; any other name is a local Ollama model (no key needed).
     mail_model: str = "claude-haiku-4-5"
     mail_max_per_run: int = Field(40, ge=1, le=200)
     # Local Ollama models, comma-separated, that each sort the same mail again, so their

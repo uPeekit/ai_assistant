@@ -330,3 +330,27 @@ def test_bare_names_are_still_buckets():
     names, meanings = parse_buckets("bills, shopping:заказы, доставка")
     assert names == ["bills", "shopping"]
     assert meanings == {"shopping": "заказы, доставка"}
+
+
+async def test_a_classifier_that_never_answered_keeps_the_mail_for_the_next_run(tmp_path):
+    """The local model returns nothing when Ollama is not running. As the real classifier that
+    must not move the bookmark on: the mail would be in no digest at all."""
+    class Silent:
+        buckets, meanings, last_error = list(BUCKETS), {}, "ollama: connection refused"
+
+        async def sort(self, messages):
+            return [], 0, 0
+
+        async def aclose(self) -> None:
+            pass
+
+    mail = [message("10"), message("11")]
+    box = FakeMailbox([(mail, "1"), (mail, "1")])
+    svc = MailService(box, Silent(), MailState(tmp_path / "mail_state.json"), buckets=BUCKETS)
+
+    run = await svc.run()
+    assert run.error == "ollama: connection refused" and not run.sorted
+    assert not (tmp_path / "mail_state.json").exists()  # the bookmark stayed where it was
+    assert "connection refused" in digest(run, BUCKETS)  # the user hears why
+    await svc.run()
+    assert box.asked == [None, None]  # the same mail is asked for again

@@ -307,6 +307,56 @@ async def test_the_digest_sender_sends_the_real_digest_before_any_local_model_ru
 
 
 @pytest.mark.asyncio
+async def test_a_local_mail_model_writes_the_digest_itself_with_no_claude_needed(
+        env, tmp_path, monkeypatch):
+    """MAIL_MODEL=qwen3:8b: after a week of side-by-side digests the user chose the local model
+    for the real one. No Anthropic key is needed, and Claude is never asked."""
+    from types import SimpleNamespace
+
+    from app import main
+    from app.config import Settings
+    from app.llm.health import Health
+    from app.mail.buckets import Buckets
+    from app.mail.classify import Sorted
+
+    env.setenv("GMAIL_ADDRESS", "me@example.com")
+    env.setenv("GMAIL_APP_PASSWORD", "pw")
+    env.setenv("ANTHROPIC_API_KEY", "")
+    env.setenv("MAIL_MODEL", "qwen3:8b")
+    built: list[str] = []
+    sent: list[str] = []
+
+    class FakeLocal:
+        def __init__(self, base_url, model, buckets, **kw) -> None:
+            built.append(model)
+            self.model, self.buckets, self.meanings = model, buckets, {}
+
+        async def sort(self, messages):
+            return [Sorted(m, "bills", "счёт за свет") for m in messages], 0, 0
+
+        async def aclose(self) -> None:
+            pass
+
+    def no_claude(*a, **kw):
+        raise AssertionError("Claude must not be built for a local mail model")
+
+    async def send_message(chat_id, body):
+        sent.append(body)
+
+    monkeypatch.setattr(main, "GmailIMAP", lambda *a: FakeMailbox([([message("10")], "1")]))
+    monkeypatch.setattr(main, "Classifier", no_claude)
+    monkeypatch.setattr(main, "LocalClassifier", FakeLocal)
+    _, daily = main._mail_digest(
+        Settings(_env_file=None), SimpleNamespace(get=lambda name: True),
+        Buckets(tmp_path / "b.txt", "bills: pay\nother: rest"),
+        SimpleNamespace(mail_at="12:00"), Health(),
+        lambda: SimpleNamespace(bot=SimpleNamespace(send_message=send_message)))
+    assert daily is not None and built == ["qwen3:8b"]
+    await daily._send()
+    assert sent and all("счёт за свет" in body for body in sent)
+
+
+@pytest.mark.asyncio
 async def test_a_summary_is_capped_in_the_schema_so_a_looping_model_still_closes_its_json():
     """gemma3:1b on real mail: one summary repeated «если вы уже оплатили… позвоните…» until
     the context was full, and the half-written answer was "not JSON" — three runs in four.
