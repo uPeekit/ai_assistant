@@ -123,6 +123,9 @@ OPEN = "OPEN"
 # inbox put on a single piece of text; without it a stuck loop ends in LLMContextOverflow. What
 # the cap drops is the oldest end of that concatenation (see _text), never the newest answer.
 MAX_PROMPT = 4000
+# Fewer words than this is noise (a hum, a stray "Bonjour"): the strong model does not
+# understand it either, so it is never asked.
+ESCALATE_MIN_WORDS = 3
 # /undo and /cancel arrive without the sender's id (see Orchestrator.undo/cancel), and so does
 # the expired-session sweeper; the events row still needs a non-null user column.
 NO_USER = 0
@@ -370,11 +373,13 @@ class Orchestrator:
         note: Callable[[], str] | None = None, vault: VaultPipeline | None = None,
         switches: Switches | None = None, tuning: Tuning | None = None,
         health: Health | None = None, links: LinkReader | None = None,
-        answerer: LinkAnswerer | None = None,
+        answerer: LinkAnswerer | None = None, escalation: LLMClient | None = None,
     ) -> None:
         self._s = settings
         self._health = health or Health()
         self._researcher = researcher
+        # Reads a message again when the interpreter did not understand it; None: never.
+        self._escalation = escalation
         # Reads the links in a fresh message once, before either branch interprets it.
         self._links = links
         # Answers a question about a linked page; None: the "answer" intent is never offered.
@@ -585,6 +590,7 @@ class Orchestrator:
             return _prefixed(await self._inbox_or_error(turn, prompt, code), prefix)
 
         self._audit_llm(turn, interp, trace)
+        interp = await self._escalate(turn, prompt, ctx, interp, trace)
         if interp.intent.value == "answer" and ctx.answering:
             return _prefixed(await self._answer_link(turn, prompt), prefix)
         if interp.intent.value == "plan" and turn.plan is None:
@@ -616,6 +622,32 @@ class Orchestrator:
             return ""
         target = snapshot.target(page_id)
         return target.name if target is not None and target.kind == "page" else ""
+
+    async def _escalate(self, turn: _Turn, prompt: str, ctx: Context, interp: Interpretation,
+                        trace: LLMTrace) -> Interpretation:
+        """A message the interpreter did not understand, read once more by the strong model
+        before the user is asked. "Did not understand" is the interpreter's own verdict, an
+        unknown intent or a question of its own, so the messages it reads fine never pay for
+        the stronger model or wait for it. A word or two of noise is not worth it either. When
+        the local model gave the first reading, Claude is down and asking it again is pointless.
+        Measured on the prod messages Haiku could not read: Sonnet settles some of them, asks a
+        better question about others, and takes 5 to 30 seconds."""
+        if (self._escalation is None or trace.model == self._s.llm_model
+                or len(prompt.split()) < ESCALATE_MIN_WORDS
+                or not (interp.intent.value == "unknown" or interp.clarify)):
+            return interp
+        try:
+            again, again_trace = await self._escalation.interpret(prompt, ctx, build_schema(ctx))
+        except Exception as e:  # the first reading stands; a failed retry costs nothing more
+            log.warning("escalation failed (%s); the first reading stands", type(e).__name__)
+            return interp
+        self._audit_llm(turn, again, again_trace)
+        if any(c.target in ctx.local_only for c in again.candidates):
+            # The cloud model never saw a local-only target's items or description.
+            log.info("escalation chose a local-only target; the first reading stands")
+            turn.audit(interpretation=interp.model_dump_json())
+            return interp
+        return again
 
     async def _vault_only(self, turn: _Turn, text: str) -> Reply:
         """A message when Notion is off. There is nothing to ask about — the vault never asks —

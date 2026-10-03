@@ -160,6 +160,7 @@ API key, which is billed separately, per use.
 | `ANTHROPIC_API_KEY` | (empty) | Empty: local model only. Like the other tokens, it is never logged. |
 | `CLAUDE_MODEL` | `claude-haiku-4-5` | `claude-sonnet-5` is smarter and about twice the price. |
 | `LLM_CLOUD` | `true` | `false` keeps everything on this machine even with a key set. |
+| `ESCALATE_MODEL` | `claude-sonnet-5` | When the interpreter did not understand a message, it is read once more by this model before you are asked. Costs 5–30 s, and only on those messages. Empty: never. |
 
 **What Claude sees.** Each message's text, plus your workspace's structure: page and database
 names, the descriptions you wrote on the admin page, field names and options, and up to

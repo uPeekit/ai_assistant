@@ -23,7 +23,7 @@ from app.interpretation.models import WEB_MEDIA, Interpretation
 from app.llm.base import LLMInvalidOutput, LLMTrace, LLMUnavailable
 from app.llm.context import Context
 from app.llm.health import Health, describe
-from app.llm.output_schema import intents
+from app.llm.output_schema import NOTES_MAX_CHARS, intents
 from app.llm.prompts import FLAT_FORMAT_NOTE, build_messages, retry_message
 
 MAX_ATTEMPTS = 2
@@ -115,7 +115,10 @@ def to_interpretation(flat: dict, ctx: Context) -> dict:
             # A thinking aid only; the key is what counts, so the label follows it.
             candidate = {"target_name": ctx.target_labels[tk], **candidate}
         candidates.append(candidate)
-    return {"notes": flat.get("notes", ""), "clarify": text_or_none(flat.get("clarify", "")),
+    # The notes are a thinking aid nobody reads, and the flat schema cannot limit them: Sonnet
+    # reasons at length, and a whole correct answer was being rejected over its notes.
+    notes = str(flat.get("notes", ""))[:NOTES_MAX_CHARS]
+    return {"notes": notes, "clarify": text_or_none(flat.get("clarify", "")),
             "intent": flat.get("intent"), "candidates": candidates}
 
 
