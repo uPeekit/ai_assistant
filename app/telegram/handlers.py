@@ -56,6 +56,7 @@ from app.notion.snapshot import WorkspaceSnapshot
 from app.speech.base import SpeechEmpty, SpeechError, SpeechToText
 from app.telegram.auth import allowed_filter, deny, is_allowed
 from app.telegram.keyboards import to_markup
+from app.telegram.sending import send_text
 
 log = logging.getLogger(__name__)
 
@@ -110,9 +111,7 @@ async def _send(
     the message to edit; a failure to record it must not take back a reply already on its way
     to the user, so it is only logged."""
     chat_id = update.effective_chat.id
-    sent = await context.bot.send_message(
-        chat_id=chat_id, text=reply.text, reply_markup=to_markup(reply)
-    )
+    sent = await send_text(context.bot, chat_id, reply.text, to_markup(reply))
     if reply.undo_id is not None:
         try:
             store.set_reply_message_id(reply.undo_id, sent.message_id)
@@ -227,7 +226,11 @@ async def _on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if user_id is None:
         return
     query = update.callback_query
-    await query.answer()  # Telegram's 10-second budget; never carries text
+    # Only stops the button's spinner. Telegram refuses it for a press it considers too old —
+    # one that waited behind a long turn — and that refusal used to be raised from here, before
+    # the orchestrator was ever called: the press was lost and the user was told the bot broke.
+    with contextlib.suppress(TelegramError):
+        await query.answer()
     orch: Orchestrator = context.bot_data[_ORCH]
     async with _typing(context, update.effective_chat.id):
         reply = await orch.handle_callback(update.effective_chat.id, user_id, query.data,

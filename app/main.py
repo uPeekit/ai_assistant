@@ -89,6 +89,7 @@ from app.speech.base import SpeechToText
 from app.speech.whisper_local import WhisperLocal
 from app.switches import Switches
 from app.telegram.handlers import register
+from app.telegram.sending import send_text
 from app.tuning import Defaults, Tuning
 from app.validation.policy import Policy, Thresholds
 from app.validation.semantic import SemanticValidator
@@ -300,7 +301,7 @@ def _daily_digest(settings: Settings, vault: VaultPipeline | None, switches: Swi
         text = f"{text}\n\n{warning}".strip() if warning else text
         for chat_id in sorted(settings.allowed_user_ids):
             try:
-                await application().bot.send_message(chat_id, text)
+                await send_text(application().bot, chat_id, text)
             except Exception:  # one blocked chat must not stop the others
                 log.exception("could not send the daily digest to a chat")
         # Without this line a digest sent twice left no trace in the log at all.
@@ -354,7 +355,7 @@ def _mail_digest(settings: Settings, switches: Switches, buckets_file: Buckets, 
         async def to_everyone(body: str) -> None:
             for chat_id in sorted(settings.allowed_user_ids):
                 try:
-                    await application().bot.send_message(chat_id, body)
+                    await send_text(application().bot, chat_id, body)
                 except Exception:
                     log.exception("could not send the mail digest to a chat")
 
