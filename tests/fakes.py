@@ -89,7 +89,8 @@ class FakeNotionProvider:
 
     async def block_children(self, block_id, limit: int = 100) -> list[dict]:
         self.calls.append(("block_children", block_id))
-        return list(self.page_blocks.get(block_id, []))
+        # As DirectNotionProvider reads: whole pages of 100 until `limit` is reached.
+        return list(self.page_blocks.get(block_id, []))[:-(-limit // 100) * 100]
 
     async def append_blocks(self, block_id, children, after=None) -> dict:
         """As Notion really answers: an insert *after* a block reports the new blocks **and
