@@ -299,3 +299,72 @@ def test_the_writer_refuses_to_write_into_a_sync_folder(tmp_path):
             writer._path(rel)
     # Its own bin is the one exception: that is where undo puts a created note.
     assert writer._path(".trash/что-то.md").name == "что-то.md"
+
+
+
+# ---- undo takes back one write, not the file ---------------------------------------------------
+
+def test_undo_of_an_older_write_keeps_the_newer_one(writer, index):
+    """Two tasks a minute apart, then Undo on the first: restoring the file's whole previous
+    text also erased the second task."""
+    first = writer.run(VaultAction(action="task", text="купить лампочки", heading="дом"))
+    writer.run(VaultAction(action="task", text="позвонить маме", heading="дом"))
+
+    assert writer.undo(first.undo) is True
+
+    text = index.read(first.path)
+    assert "купить лампочки" not in text
+    assert "- [ ] позвонить маме" in text
+    assert "- [ ] платить счета" in text  # what was there before either is untouched
+
+
+def test_undo_leaves_a_file_alone_when_its_own_line_was_changed_since(writer, index):
+    first = writer.run(VaultAction(action="task", text="купить лампочки", heading="дом"))
+    edited = index.read(first.path).replace("- [ ] купить лампочки", "- [x] купить лампочки")
+    (index.root / first.path).write_text(edited, encoding="utf-8", newline="\n")
+
+    assert writer.undo(first.undo) is False
+    assert index.read(first.path) == edited
+
+
+def test_undo_of_the_write_that_made_a_file_keeps_what_came_after(writer, index, vault):
+    """The inbox note did not exist; the first message made it, the second added a line. Undo
+    of the first used to move the whole file — second line included — to the trash."""
+    first = writer.run(VaultAction(action="inbox", text="первое"))
+    writer.run(VaultAction(action="inbox", text="второе"))
+
+    assert writer.undo(first.undo) is True
+
+    assert index.read(first.path).strip() == "- второе"
+    assert not (vault / ".trash" / f"{texts.VAULT_INBOX_NOTE}.md").exists()
+
+
+def test_undo_survives_the_links_the_linker_added(writer, index):
+    """The linker rewrites a line the bot wrote a moment later: `[[note|phrase]]` around a
+    phrase. That is still the line this write added."""
+    write = writer.run(VaultAction(action="append", note="дом", heading="Заметки",
+                                    body=["спросить про Чапаев и Пустота"]))
+    linked = index.read(write.path).replace("Чапаев и Пустота", "[[Чапаев и Пустота]]")
+    (index.root / write.path).write_text(linked, encoding="utf-8", newline="\n")
+
+    assert writer.undo(write.undo) is True
+    assert "спросить про" not in index.read(write.path)
+
+
+def test_undo_of_a_note_that_is_gone_is_not_an_error(writer, vault):
+    created = writer.run(VaultAction(action="note", folder=texts.VAULT_NOTES_DIR, title="Идея",
+                                      body=["текст"]))
+    (vault / created.path).unlink()
+    assert writer.undo(created.undo) is True
+
+
+def test_undo_reads_through_line_endings_another_program_wrote(writer, index):
+    """Obsidian on the phone, through Syncthing, can write the file back with CRLF endings.
+    The lines are the same lines."""
+    first = writer.run(VaultAction(action="task", text="купить лампочки", heading="дом"))
+    text = index.read(first.path) + "- [ ] позвонить маме\n"
+    (index.root / first.path).write_bytes(text.replace("\n", "\r\n").encode("utf-8"))
+
+    assert writer.undo(first.undo) is True
+    after = index.read(first.path)
+    assert "купить лампочки" not in after and "позвонить маме" in after

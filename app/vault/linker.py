@@ -136,7 +136,7 @@ class Linker:
         if linked == body:
             return 0
         added = linked.count("[[") - body.count("[[")
-        self._writer.replace(write.path, text.replace(body, linked, 1))
+        self._writer.amend(write.path, lambda _current: text.replace(body, linked, 1))
         log.info("linker added %d link(s) to %s", added, write.note)
         return added
 
