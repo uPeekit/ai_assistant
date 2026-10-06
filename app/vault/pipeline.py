@@ -148,6 +148,40 @@ class VaultTurn:
         return "\n".join(lines)
 
 
+@dataclass
+class FixTurn:
+    """What a fix did: the writes it made, the turn's writes it left as they were, and the
+    phrases the reply is made of."""
+
+    writes: list[VaultWrite] = field(default_factory=list)
+    kept: list[VaultUndo] = field(default_factory=list)
+    said: list[str] = field(default_factory=list)
+    # Something was actually changed on disk: the old row is done with.
+    applied: bool = False
+    error: str = ""
+    reason: str = ""
+    left: list[str] = field(default_factory=list)
+    model: str = ""
+    prompt_tokens: int = 0
+    output_tokens: int = 0
+
+    @property
+    def undos(self) -> list[VaultUndo]:
+        return [*self.kept, *(w.undo for w in self.writes if w.undo is not None)]
+
+    def reply_line(self) -> str:
+        if self.left:
+            notes = ", ".join(f"«{name}»" for name in self.left)
+            return texts.VAULT_UNDO_LEFT.format(notes=notes)
+        if not self.applied:
+            why = texts.LLM_DOWN_SHORT.get(self.reason) or self.error or texts.FIX_UNCLEAR
+            return texts.FIX_FAILED.format(error=why)
+        what = "; ".join(self.said) or ", ".join(w.what for w in self.writes)
+        if self.error:
+            what += f" — {self.error}"
+        return texts.FIX_DONE.format(what=what)
+
+
 class VaultPipeline:
     def __init__(self, index: VaultIndex, writer: VaultWriter, filer: Filer,
                  linker: Linker | None = None, *, now=datetime.now,
@@ -295,6 +329,60 @@ class VaultPipeline:
                             # that did nothing at all, which is how the overdue bug hid.
                             *([f"answered:{len(turn.answer.splitlines())} lines"]
                               if turn.answer else [])]) or "-")
+        self._link_later(turn.writes)
+        return turn
+
+    async def fix(self, original: str, correction: str,
+                  undos: list[VaultUndo]) -> FixTurn:
+        """Change part of what one turn wrote (app/vault/fix.py). `undos` are that turn's
+        writes, each carrying the action it did. Never raises, never asks."""
+        turn = FixTurn(model=self._filer.model)
+        fix = getattr(self._filer, "fix", None)
+        previous = [VaultAction(**u.action) for u in undos if u.action is not None]
+        if fix is None or len(previous) != len(undos) or not previous:
+            turn.error = texts.FIX_UNCLEAR
+            return turn
+        try:
+            await asyncio.to_thread(self._index.refresh)
+            ctx = context(self._index, f"{original}\n{correction}", self._now())
+            plan, turn.prompt_tokens, turn.output_tokens = await fix(
+                original, correction, previous, ctx)
+        except FilerError as e:
+            log.warning("fix failed: %s", e)
+            turn.error, turn.reason = str(e), e.reason
+            return turn
+        except OSError as e:
+            log.warning("vault unreadable: %s", e)
+            turn.error = type(e).__name__
+            return turn
+        if plan.unclear:
+            return turn
+        # What the fix writes is checked like any answer; a web search is not part of a fix.
+        actions = [a.model_copy(update={"research": "", "media": ""})
+                   for a in check(plan.write, self._index, correction)]
+        scratch = VaultTurn()
+        prepared: list[VaultAction] = []
+        for action in actions:
+            if action.action == "rewrite":
+                rewritten = await self._rewritten(action, scratch)
+                prepared += [rewritten] if rewritten is not None else []
+            else:
+                prepared.append(action)
+        if not prepared and not plan.take_back:
+            turn.error = scratch.error
+            return turn
+        old = [undos[i] for i in plan.take_back]
+        turn.writes, failed, turn.left = await asyncio.to_thread(
+            self._writer.replace_writes, old, prepared)
+        if turn.left:
+            return turn
+        turn.applied = True
+        turn.kept = [u for i, u in enumerate(undos) if i not in set(plan.take_back)]
+        turn.said = plan.said
+        if failed:
+            turn.error = texts.VAULT_SOME_FAILED.format(n=len(failed))
+        log.info("vault fix %s: took back %d, wrote %d", turn.model, len(old),
+                 len(turn.writes))
         self._link_later(turn.writes)
         return turn
 

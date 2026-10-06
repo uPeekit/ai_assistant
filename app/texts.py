@@ -18,6 +18,7 @@ BTN_CONFIRM = "Да"
 BTN_OTHER = "Другое"
 BTN_ADD_NEW = "Добавить как новое"
 BTN_UNDO_ALL = "Отменить всё"
+BTN_FIX = "Поправить"
 
 # ---- values -------------------------------------------------------------------------------
 
@@ -427,6 +428,22 @@ VAULT_SOME_FAILED = "ещё {n} записать не удалось"
 # A note (or the section named) is longer than the editing model may read in one go.
 VAULT_TOO_LONG = "заметка слишком длинная, чтобы менять её целиком — назовите раздел"
 VAULT_MOVE_UNCLEAR = "не понял, какие строки переносить — ничего не тронул"
+# Fixing part of what was just written (app/vault/fix.py).
+FIX_ASK = "✏️ Что поправить? Напишите или надиктуйте."
+FIX_EXPIRED = "Поправить уже нельзя (прошло больше {minutes} минут)."
+FIX_UNCLEAR = "не понял, что поправить — ничего не менял"
+FIX_DONE = "✏️ Obsidian — поправлено: {what}"
+FIX_FAILED = "⚠️ Obsidian — не поправил: {error}"
+FIX_MOVED = "«{item}» → «{place}»"
+FIX_SET = "«{item}» — {value}"
+FIX_DROPPED = "«{item}» убрано"
+FIX_ADDED = "+ «{item}»"
+FIX_NOT_MOVED = "«{item}» не перенёс"
+FIX_NOTE = "«{note}» ещё раз"
+# A fix may drop something only when the correction says to: whole words, and word starts.
+# Found live: «ну это» made the model drop the task it was shown.
+FIX_DROP_WORDS = ("не", "нет", "без", "ненадо")
+FIX_DROP_STEMS = ("убер", "убра", "удал", "лишн", "отмен", "ненуж", "выкин", "вычеркн")
 VAULT_WHAT = {
     "task": "задача в «{note}»",
     "note": "заметка «{note}»",

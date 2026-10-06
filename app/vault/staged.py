@@ -37,8 +37,10 @@ from app import texts
 from app.llm import staged_prompts as P
 from app.llm.health import Health, describe
 from app.llm.prompts import WEB_WORDS, links_section
+from app.vault import fix as fixing
 from app.vault.filer import GROCERY_LIST, GUIDE_LINK, MEDIA, FilerError, VaultContext
 from app.vault.index import related
+from app.vault.writer import VaultAction
 from app.web.links import URL
 
 log = logging.getLogger(__name__)
@@ -301,6 +303,25 @@ class StagedFiler:
         if self._close is not None:
             await self._close()
 
+    async def fix(self, original: str, correction: str, previous: list[VaultAction],
+                  ctx: VaultContext) -> tuple[fixing.FixPlan, int, int]:
+        """What a correction changes in what a turn wrote (app/vault/fix.py)."""
+        run = _Run(self._ask_model, f"{original}\n{correction}", ctx, lookup=self._lookup)
+        started = monotonic()
+        rewritten = next((a for a in previous if a.action == "rewrite"), None)
+        if rewritten is not None:
+            # A note that was rewritten or moved from is changed again, from what it says
+            # now: the edit is not something a field can describe.
+            raw = await run._change_note(correction, rewritten.note)
+            plan = fixing.FixPlan(write=[a for a in raw if a.get("action") != "inbox"],
+                                  said=[texts.FIX_NOTE.format(note=rewritten.note)])
+            plan.unclear = not plan.write
+        else:
+            plan = await run.patch(original, correction, previous)
+        log.info("fix %s: %s | %d call(s), %.1fs", self.model, " > ".join(run.trail) or "-",
+                 run.calls, monotonic() - started)
+        return plan, run.prompt_tokens, run.output_tokens
+
     async def file(self, message: str, ctx: VaultContext) -> tuple[list[dict], int, int]:
         run = _Run(self._ask_model, message, ctx, lookup=self._lookup)
         started = monotonic()
@@ -372,6 +393,47 @@ class _Run:
                  if name not in hubs and name not in own and _names(self.message, name)]
         return {f"n{i}": name
                 for i, name in enumerate([*hubs, *named][:MAX_NOTES_SHOWN], start=1)}
+
+    async def patch(self, original: str, correction: str,
+                    previous: list[VaultAction]) -> fixing.FixPlan:
+        """One question about the difference: which written thing changes, and how."""
+        ctx = self.ctx
+        places = self._places()
+        its = fixing.items(previous)
+        keyed = {f"a{i}": fixing.describe(item.action, ctx.tasks_note)
+                 for i, item in enumerate(its, start=1)}
+        answer = await self._ask(
+            P.FIX_PROMPT, fixing.schema(list(keyed), list(places)),
+            P.message(self._today(), P.section(P.H_ORIGINAL, original),
+                      P.section(P.H_FIX_DONE, P.keyed(keyed)),
+                      P.section(P.H_PLACES, P.keyed(places)), text=correction))
+        self.trail.append("fix")
+        if answer.get("unclear") and not answer.get("changes") and not answer.get("add"):
+            return fixing.FixPlan(unclear=True)
+        # What was written already passed the gate once: its words are a source too.
+        written = "\n".join(fixing.words(item.action) for item in its)
+        gate = _Gate(f"{self.message}\n{written}", ctx.guide, self._pages())
+        notes = self._notes()
+        folders = {f"f{i}": folder for i, folder in enumerate(ctx.folders, start=1)}
+        names = {TASKS: ctx.tasks_note, GROCERIES: texts.VAULT_GROCERIES_NOTE,
+                 DIARY: texts.VAULT_DAILY_DIR, INBOX: texts.VAULT_INBOX_NOTE,
+                 **folders, **notes}
+
+        async def move(action: VaultAction, key: str) -> list[dict]:
+            simple = fixing.simple_move(action, key, tasks=TASKS, groceries=GROCERIES,
+                                        diary=DIARY, inbox=INBOX, notes=notes)
+            if simple is not None:
+                return simple
+            if key in folders:
+                # A book note needs what a task never had: that folder's own question, for
+                # this one thing, in its own words and the correction's.
+                return await self._add_notes(f"{fixing.words(action)}\n{correction}",
+                                             folders[key])
+            return []
+
+        return await fixing.plan(previous, answer, gate, tags=ctx.tags, places=places,
+                                 place_names=names, move=move,
+                                 dropping=fixing.may_drop(correction))
 
     def _tasks(self) -> dict[str, str]:
         return {f"o{i}": line for i, line in enumerate(self.ctx.open_tasks, start=1)}
