@@ -411,9 +411,10 @@ class Orchestrator:
         # long-lived process does not accumulate one per chat it has ever seen.
         self._locks: dict[int, asyncio.Lock] = {}
         self._waiting: dict[int, int] = {}
-        # Chats whose next message is a fix, after the Fix button: chat -> execution id. In
-        # memory on purpose: a restart forgets it, and pressing the button again costs nothing.
-        self._fixing: dict[int, int] = {}
+        # Chats whose next message is a fix, after the Fix button: chat -> (execution id, when
+        # the button was pressed). In memory on purpose: a restart forgets it, and pressing the
+        # button again costs nothing.
+        self._fixing: dict[int, tuple[int, datetime]] = {}
 
     @asynccontextmanager
     async def _chat_lock(self, chat_id: int) -> AsyncIterator[None]:
@@ -530,15 +531,22 @@ class Orchestrator:
     async def _message(self, turn: _Turn, text: str, reply_to: int | None) -> Reply:
         """A fix, when the message replies to a vault write's reply (the reply wins: it is the
         more specific, more recent gesture) or the Fix button was pressed and its write can
-        still be fixed; otherwise an ordinary message. So are a pending fix whose window has
-        closed, and a reply to a write Notion was part of."""
+        still be fixed; otherwise an ordinary message. A pending fix whose write's window has
+        closed is too late while the press itself is younger than the window — the message is
+        meant as a correction, and filing it would turn "to groceries" into a grocery line; an
+        older press is forgotten. A reply to a write Notion was part of is an ordinary
+        message."""
         pending = self._fixing.pop(turn.chat_id, None)
         if reply_to is not None:
             row = self._store.execution_by_reply(turn.chat_id, reply_to)
             if row is not None and UndoRecord.model_validate_json(row["undo"]).kind == "vault":
                 return await self._fix(turn, text, row["id"])
-        if pending is not None and self._fixable(turn, pending) is not None:
-            return await self._fix(turn, text, pending)
+        if pending is not None:
+            execution_id, pressed_at = pending
+            if self._fixable(turn, execution_id) is not None:
+                return await self._fix(turn, text, execution_id)
+            if turn.now - pressed_at < timedelta(seconds=self._s.undo_window_s):
+                return self._fix_too_late(turn)
         return await self._text(turn, text)
 
     async def _text(self, turn: _Turn, text: str) -> Reply:
@@ -1145,7 +1153,7 @@ class Orchestrator:
     def _fix_ask(self, turn: _Turn, execution_id: int) -> Reply:
         if self._fixable(turn, execution_id) is None:
             return self._fix_too_late(turn)
-        self._fixing[turn.chat_id] = execution_id
+        self._fixing[turn.chat_id] = (execution_id, turn.now)
         turn.audit(decision=_kind("FIX_ASK"))
         return Reply(texts.FIX_ASK)
 
@@ -1169,7 +1177,10 @@ class Orchestrator:
                       output_tokens=result.output_tokens)
         line = result.reply_line()
         if not result.applied:
-            return Reply(line)
+            # The row stays valid and the user can try again; pressing Fix took the
+            # buttons off the write's message, so they come back here. No undo_id: the write's
+            # own message stays the one its row points to.
+            return Reply(line, _vault_buttons(execution_id))
         self._store.mark_undone(execution_id)
         undos = result.undos
         if not undos:  # everything was dropped: nothing is left to take back
@@ -1200,7 +1211,10 @@ class Orchestrator:
                 left = await self._vault.undo(vault_undos)
             except Exception:  # Notion is already back: say so rather than fail the undo
                 log.exception("undoing the vault side failed")
-        self._store.mark_undone(row["id"])
+        # A vault-only write whose every line was left alone was not undone at all: the row
+        # stays, so the user can revert their hand edit and press Undo again.
+        if not (record.kind == "vault" and left and len(left) == len(vault_undos)):
+            self._store.mark_undone(row["id"])
         turn.audit(decision=_kind("UNDO"))
         if not left:
             return Reply(texts.UNDONE)

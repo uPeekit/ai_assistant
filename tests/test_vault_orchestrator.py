@@ -637,6 +637,10 @@ async def test_a_fix_the_model_cannot_place_changes_nothing_and_can_be_tried_aga
 
     assert reply.text == texts.FIX_FAILED.format(error=texts.FIX_UNCLEAR)
     assert "- [ ] молоко" in bot.index.read(f"{texts.VAULT_TASKS_NOTE}.md")
+    # Pressing Поправить took the buttons off the write's message: the answer gives them
+    # back, without claiming the message (the write's own message stays the one recorded).
+    assert [b.id for b in reply.buttons[0]] == [f"u:{first.undo_id}", f"f:{first.undo_id}"]
+    assert reply.undo_id is None
     assert (await bot.orch.handle_callback(CHAT, USER, f"f:{first.undo_id}")).text \
         == texts.FIX_ASK
 
@@ -669,6 +673,48 @@ async def test_a_fix_asked_for_and_left_is_forgotten_when_the_window_closes(stag
     assert reply.text.startswith("✅ Obsidian —")
     assert "FIX_PROMPT" not in bot.script.stages
     assert "хлеб" in bot.index.read(f"{texts.VAULT_GROCERIES_NOTE}.md")
+
+
+async def test_a_correction_typed_just_after_the_window_is_too_late_not_a_new_note(staged_bot):
+    """Поправить pressed at 4 minutes, the correction sent at 6: the write's window (5) has
+    closed, but the press is fresh — «в продукты» is a correction, not a grocery line."""
+    bot = staged_bot
+    _milk_task(bot.script)
+    first = await bot.orch.handle_text(CHAT, USER, "надо молоко")
+    bot.orch._clock = Clock(NOW + timedelta(minutes=4))
+    assert (await bot.orch.handle_callback(CHAT, USER, f"f:{first.undo_id}")).text \
+        == texts.FIX_ASK
+    bot.orch._clock = Clock(NOW + timedelta(minutes=6))
+    bot.script.answers.update(TARGET_PROMPT={"target": "g"},
+                              GROCERY_PROMPT={"names": ["продукты"]})
+
+    reply = await bot.orch.handle_text(CHAT, USER, "в продукты")
+
+    assert reply.text == texts.FIX_EXPIRED.format(minutes=5)
+    assert "FIX_PROMPT" not in bot.script.stages
+    assert not (bot.dir / f"{texts.VAULT_GROCERIES_NOTE}.md").exists()
+    assert "в продукты" not in bot.index.read(f"{texts.VAULT_TASKS_NOTE}.md")
+
+
+async def test_undo_that_undid_nothing_can_be_pressed_again(bot, tmp_path):
+    """The line was edited by hand, so Undo left it. Once the edit is reverted, Undo works:
+    the row was not spent on a take-back that did nothing."""
+    bot.orch._switches = Switches(tmp_path / "switches.json", {"notion": False})
+    bot.claude.answers = [{"actions": [{"action": "task", "text": "лампочки",
+                                         "heading": "дом"}]}]
+    reply = await bot.orch.handle_text(CHAT, USER, "лампочки")
+    path = bot.dir / f"{texts.VAULT_TASKS_NOTE}.md"
+    original = path.read_text(encoding="utf-8")
+    path.write_text(original.replace("- [ ] лампочки", "- [x] лампочки"), encoding="utf-8",
+                    newline="\n")
+
+    left = await bot.orch.handle_callback(CHAT, USER, f"u:{reply.undo_id}")
+    assert left.text == texts.VAULT_UNDO_LEFT.format(notes=f"«{texts.VAULT_TASKS_NOTE}»")
+
+    path.write_text(original, encoding="utf-8", newline="\n")
+    undone = await bot.orch.handle_callback(CHAT, USER, f"u:{reply.undo_id}")
+    assert undone.text == texts.UNDONE
+    assert "лампочки" not in path.read_text(encoding="utf-8")
 
 
 async def test_a_reply_wins_over_a_pending_button_fix(staged_bot):
