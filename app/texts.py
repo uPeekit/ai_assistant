@@ -170,6 +170,8 @@ ERRORS: dict[str, str] = {
     "REWRITE_NOTHING": "Не нашёл на «{target_name}», что именно поправить — ничего не изменил.",
     "REWRITE_UNAVAILABLE": "Переписать текст сейчас не могу: для этого нужен Claude.",
     "REWRITE_FAILED": "Не удалось переписать текст ({error}). Ничего не изменил.",
+    "REWRITE_TOO_LONG": "«{target_name}» слишком длинная, чтобы менять её за один раз. "
+                        "Ничего не изменил.",
     # Both stores are switched off on the admin page: there is nowhere to write.
     "NOTHING_ENABLED": "Обе стороны выключены — включите Notion или Obsidian на странице "
                         "настроек.",
@@ -422,6 +424,8 @@ VAULT_NOTHING_TO_MOVE = "не нашёл, что переносить — нич
 VAULT_UNDO_LEFT = "↩️ Не отменил в {notes}: там с тех пор что-то изменили, и я не стал трогать."
 # Some of a message's writes failed after others were already on disk.
 VAULT_SOME_FAILED = "ещё {n} записать не удалось"
+# A note (or the section named) is longer than the editing model may read in one go.
+VAULT_TOO_LONG = "заметка слишком длинная, чтобы менять её целиком — назовите раздел"
 VAULT_MOVE_UNCLEAR = "не понял, какие строки переносить — ничего не тронул"
 VAULT_WHAT = {
     "task": "задача в «{note}»",

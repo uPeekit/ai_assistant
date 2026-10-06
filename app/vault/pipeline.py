@@ -19,9 +19,11 @@ from pathlib import PurePosixPath
 
 from app import texts
 from app.llm.edits import EditError, Editor, NothingToChange
+from app.llm.edits import TooLong as EditTooLong
 from app.llm.prompts import MOVE_INSTRUCTION
 from app.llm.research import ResearchError, ResearchQuestion
 from app.llm.rewrite import RewriteError, Rewriter
+from app.llm.rewrite import TooLong as RewriteTooLong
 from app.vault import agenda as agenda_mod
 from app.vault import frontmatter, mdedit
 from app.vault.filer import GROCERY_LIST, Filer, FilerError, check, context, doubtful
@@ -399,6 +401,9 @@ class VaultPipeline:
                 # to anything in it. The "not written" wording made it look like a breakage.
                 turn.error = turn.error or texts.VAULT_NOTHING_TO_CHANGE
                 return None
+            except EditTooLong:
+                turn.error = turn.error or texts.VAULT_TOO_LONG
+                return None
             except EditError as e:
                 return self._failed(name, e, turn)
             turn.prompt_tokens += prompt_tokens
@@ -415,6 +420,9 @@ class VaultPipeline:
         try:
             new_text, prompt_tokens, output_tokens = await self._rewriter.rewrite(
                 current, instruction)
+        except RewriteTooLong:
+            turn.error = turn.error or texts.VAULT_TOO_LONG
+            return None
         except RewriteError as e:
             return self._failed(name, e, turn)
         turn.prompt_tokens += prompt_tokens
@@ -449,6 +457,9 @@ class VaultPipeline:
                 mdedit.numbered(lines), MOVE_INSTRUCTION.format(to=action.to, what=action.text))
         except NothingToChange:
             turn.error = turn.error or texts.VAULT_NOTHING_TO_MOVE
+            return []
+        except EditTooLong:
+            turn.error = turn.error or texts.VAULT_TOO_LONG
             return []
         except EditError as e:
             self._failed(note.name, e, turn)

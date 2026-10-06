@@ -538,3 +538,37 @@ async def test_an_added_picture_is_counted_once_not_with_the_lines_below_it():
     assert result.added == 1
     assert result.undo is not None
     assert [len(e.block_ids) for e in result.undo.edits] == [1]
+
+
+# ---- a page too long to show the model -------------------------------------------------------
+
+async def test_the_editor_refuses_a_page_it_could_only_read_the_top_of():
+    from app.llm.edits import MAX_INPUT, TooLong
+
+    client = FakeAnthropic({"edits": [], "full": "короче"})
+    with pytest.raises(TooLong):
+        await Editor("", "m", client=client).plan("[1] " + "я" * MAX_INPUT, "сократи")
+    assert client.seen == []  # nothing was sent, so nothing can come back to be written
+
+
+async def test_a_note_too_long_to_edit_is_left_exactly_as_it_is(tmp_path):
+    from app.llm.edits import MAX_INPUT
+    from app.vault.index import VaultIndex
+    from app.vault.pipeline import VaultPipeline, VaultTurn
+    from app.vault.writer import VaultAction, VaultWriter
+
+    long_text = "\n".join(f"строка {i} " + "я" * 80 for i in range(MAX_INPUT // 80))
+    (tmp_path / "Длинная.md").write_text(long_text, encoding="utf-8", newline="\n")
+    index = VaultIndex(tmp_path)
+    index.refresh()
+    client = FakeAnthropic({"edits": [], "full": "короче"})
+    pipe = VaultPipeline(index, VaultWriter(index), filer=None,  # type: ignore[arg-type]
+                         editor=Editor("", "m", client=client))
+    turn = VaultTurn()
+
+    action = await pipe._rewritten(VaultAction(action="rewrite", note="Длинная",
+                                               text="сократи"), turn)
+
+    assert action is None and turn.error == texts.VAULT_TOO_LONG
+    assert client.seen == []
+    assert (tmp_path / "Длинная.md").read_text(encoding="utf-8") == long_text

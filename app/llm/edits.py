@@ -72,6 +72,11 @@ class EditError(Exception):
         self.reason = reason
 
 
+class TooLong(EditError):
+    """The page is longer than one call may read. The model would be shown the top of it, and
+    a whole new text written from that would delete the rest unread."""
+
+
 class NothingToChange(EditError):
     """The model read the page and found nothing the instruction applies to. Not a failure:
     the user asked for something that is not there, and telling them so is the answer."""
@@ -209,11 +214,13 @@ class Editor:
         """What to change, and what it cost. Raises EditError."""
         if not page.strip():
             raise EditError("nothing to edit")
+        if len(page) > MAX_INPUT:
+            raise TooLong(f"{len(page)} characters, the limit is {MAX_INPUT}")
         try:
             resp = await self._client.messages.create(
                 model=self.model, max_tokens=MAX_TOKENS, system=EDIT_PROMPT,
                 messages=[{"role": "user",
-                           "content": edit_message(page[:MAX_INPUT], instruction)}],
+                           "content": edit_message(page, instruction)}],
                 output_config={"format": {"type": "json_schema", "schema": PLAN_SCHEMA}},
             )
         except anthropic.APIError as e:

@@ -22,8 +22,10 @@ from app.commands.models import (
     UpdateItem,
 )
 from app.llm.edits import Edit, EditError, Editor, EditPlan, NothingToChange
+from app.llm.edits import TooLong as EditTooLong
 from app.llm.edits import check as check_edits
 from app.llm.rewrite import RewriteError, Rewriter
+from app.llm.rewrite import TooLong as RewriteTooLong
 from app.llm.sections import SectionPicker
 from app.notion import props, titles
 from app.notion.errors import NotionError
@@ -464,6 +466,8 @@ class Executor:
             plan, _, _ = await self._editor.plan(numbered(lines), cmd.instruction)
         except NothingToChange:
             raise Refused("REWRITE_NOTHING", target_name=cmd.page_title) from None
+        except EditTooLong:
+            raise Refused("REWRITE_TOO_LONG", target_name=cmd.page_title) from None
         except EditError as e:
             raise Refused("REWRITE_FAILED", error=str(e)) from None
         return check_edits(plan, lines)
@@ -546,6 +550,8 @@ class Executor:
             raise Refused("REWRITE_EMPTY", target_name=cmd.page_title)
         try:
             new_text, _, _ = await self._rewriter.rewrite(current, cmd.instruction)
+        except RewriteTooLong:
+            raise Refused("REWRITE_TOO_LONG", target_name=cmd.page_title) from None
         except RewriteError as e:
             raise Refused("REWRITE_FAILED", error=str(e)) from None
         return await self._replace_text(cmd, children, new_text)

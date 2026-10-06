@@ -402,3 +402,14 @@ async def test_a_failed_rewrite_leaves_the_note_exactly_as_it_was(tmp_path):
     assert (tmp_path / "Шведская стенка.md").read_text(encoding="utf-8") == before
     assert turn.writes == []
     assert texts.LLM_DOWN_SHORT["credit"] in turn.reply_line()
+
+
+async def test_the_rewriter_refuses_a_text_it_could_only_read_the_top_of():
+    """It used to send the first 20 000 characters and hand back a text the caller then wrote
+    in place of the whole: everything past the cut was deleted without ever being read."""
+    from app.llm.rewrite import MAX_INPUT, TooLong
+
+    client = FakeAnthropic("короче")
+    with pytest.raises(TooLong):
+        await Rewriter("", "m", client=client).rewrite("я" * (MAX_INPUT + 1), "сократи")
+    assert client.seen == []
