@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Close the data-loss and lost-message gaps found in the 0.6.17 review — vault Undo that erases newer writes, partial writes and linker races, messages dropped when Claude is down, long notes truncated by a rewrite, Telegram messages over 4 096 characters, mail skipped past the cap, the agenda re-sent on restart, the Notion undo on long pages — plus one speed-up of the staged reader and one admin-page guard.
+**Goal:** Close the data-loss and lost-message gaps found in the 0.6.17 review — vault Undo that erases newer writes, partial writes and linker races, messages dropped when Claude is down, long notes truncated by a rewrite, Telegram messages over 4 096 characters, mail skipped past the cap, the agenda re-sent on restart, the Notion undo on long pages — plus one speed-up of the staged reader and one admin-page guard (Part 1, Tasks 1–16); then let the user fix part of a vault write with a Поправить button or a reply (Part 2, Tasks 17–21).
 
 **Architecture:** Every fix is a guard in the deterministic layer; no prompt changes. The one new module is `app/vault/revert.py` (a pure line-level reverse diff) that `VaultWriter.undo` uses instead of restoring a whole file, and `app/telegram/sending.py` (message splitting) that replies and digests share. Each task is independently shippable and ends with the full suite green.
 
@@ -17,7 +17,7 @@
 - No Cyrillic in `app/` outside `app/texts.py`, `app/llm/prompts.py`, `app/llm/context.py`, `app/llm/staged_prompts.py` (`tests/test_reply.py` enforces it). Every user-facing string goes in `app/texts.py`.
 - No message text and no URLs in logs above DEBUG (`tests/test_security.py`).
 - The vault pipeline never asks a question and never raises to the orchestrator.
-- Commit messages end with a second `-m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"`.
+- Commit messages end with a second `-m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"`.
 - Work on a branch from `main` (`reliability-fixes`); merge to main and push when green (standing instruction). Releases and prod updates are the user's.
 
 ## Review Focus
@@ -206,7 +206,7 @@ Expected: 11 passed
 
 ```bash
 git add app/vault/revert.py tests/test_vault_revert.py
-git commit -m "feat(vault): a write can be taken back out of a text that changed since" -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+git commit -m "feat(vault): a write can be taken back out of a text that changed since" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -417,7 +417,7 @@ Expected: all pass.
 
 ```bash
 git add app/vault/writer.py app/vault/linker.py tests/test_vault_writer.py
-git commit -m "fix(vault): undo takes back one write, not the file; one lock for every write" -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+git commit -m "fix(vault): undo takes back one write, not the file; one lock for every write" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -498,7 +498,7 @@ Expected: all pass.
 
 ```bash
 git add app/conversation/orchestrator.py tests/test_vault_orchestrator.py
-git commit -m "feat: a vault-only reply carries the Undo button its row already had" -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+git commit -m "feat: a vault-only reply carries the Undo button its row already had" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -632,7 +632,7 @@ Expected: all pass.
 
 ```bash
 git add app/vault/pipeline.py app/conversation/orchestrator.py app/texts.py tests/test_vault_orchestrator.py
-git commit -m "fix: undo names the note it left alone instead of overwriting a later change" -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+git commit -m "fix: undo names the note it left alone instead of overwriting a later change" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -796,7 +796,7 @@ Expected: all pass.
 
 ```bash
 git add app/vault/pipeline.py app/texts.py tests/test_vault_filer.py
-git commit -m "fix(vault): a write that fails no longer hides the ones already on disk" -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+git commit -m "fix(vault): a write that fails no longer hides the ones already on disk" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -926,7 +926,7 @@ Expected: all pass.
 
 ```bash
 git add app/vault/linker.py app/vault/index.py tests/test_vault_filer.py
-git commit -m "fix(vault): the linker amends the note as it is now, never the text it read" -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+git commit -m "fix(vault): the linker amends the note as it is now, never the text it read" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -1037,7 +1037,7 @@ Expected: all pass (the orchestrator tests that assert "Obsidian —" on a down 
 
 ```bash
 git add app/vault/pipeline.py app/texts.py tests/test_vault_filer.py
-git commit -m "fix(vault): when Claude cannot be asked the words are kept in the inbox note" -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+git commit -m "fix(vault): when Claude cannot be asked the words are kept in the inbox note" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -1261,7 +1261,7 @@ Expected: all pass.
 
 ```bash
 git add app/llm/rewrite.py app/llm/edits.py app/vault/pipeline.py app/commands/executor.py app/texts.py documentation/ERRORS.md tests/test_rewrite.py tests/test_edits.py tests/test_texts.py
-git commit -m "fix: a text longer than one rewrite may read is refused instead of cut" -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+git commit -m "fix: a text longer than one rewrite may read is refused instead of cut" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -1437,7 +1437,7 @@ Expected: all pass.
 
 ```bash
 git add app/telegram/sending.py app/telegram/handlers.py app/main.py tests/test_handlers.py
-git commit -m "fix(telegram): long replies and digests are split; a late button press is still handled" -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+git commit -m "fix(telegram): long replies and digests are split; a late button press is still handled" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -1566,7 +1566,7 @@ Expected: all pass.
 
 ```bash
 git add app/mail/imap.py app/mail/local.py documentation/GMAIL_PLAN.md tests/test_mail.py tests/test_mail_local.py
-git commit -m "fix(mail): mail past the cap waits for the next run; a non-JSON answer is a classifier error" -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+git commit -m "fix(mail): mail past the cap waits for the next run; a non-JSON answer is a classifier error" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -1797,7 +1797,7 @@ Expected: all pass, `test_a_timer_that_wakes_a_little_early_still_sends_once` in
 
 ```bash
 git add app/daily.py app/main.py tests/test_vault_agenda.py
-git commit -m "fix(daily): a restart does not resend the agenda; a moved time is honoured at once" -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+git commit -m "fix(daily): a restart does not resend the agenda; a moved time is honoured at once" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -1932,7 +1932,7 @@ Expected: all pass (`test_undoing_an_added_line_does_not_delete_the_lines_after_
 
 ```bash
 git add app/commands/executor.py tests/fakes.py tests/test_edits.py
-git commit -m "fix(notion): undo of an added line never claims blocks past the page read" -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+git commit -m "fix(notion): undo of an added line never claims blocks past the page read" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -2011,7 +2011,7 @@ Expected: all pass.
 
 ```bash
 git add app/conversation/resolver.py tests/test_resolver.py
-git commit -m "fix: a required multi-select answered by a button no longer crashes the rebuild" -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+git commit -m "fix: a required multi-select answered by a button no longer crashes the rebuild" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -2223,7 +2223,7 @@ Expected: all pass — the existing `stages == ["INTENT_PROMPT", "TARGET_PROMPT"
 
 ```bash
 git add app/vault/staged.py tests/test_vault_staged.py
-git commit -m "perf(vault): the staged reader asks the target alongside the intent and logs each call's time" -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+git commit -m "perf(vault): the staged reader asks the target alongside the intent and logs each call's time" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -2327,7 +2327,7 @@ Expected: all pass (the page itself sends `Content-Type: application/json`, `app
 
 ```bash
 git add app/admin/server.py documentation/ARCHITECTURE.md tests/test_admin.py
-git commit -m "fix(admin): a POST from another site is refused" -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+git commit -m "fix(admin): a POST from another site is refused" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -2411,7 +2411,1577 @@ Expected: all pass.
 
 ```bash
 git add documentation/ARCHITECTURE.md README.md
-git commit -m "docs: undo semantics, the kept inbox line and the admin guard" -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+git commit -m "docs: undo semantics, the kept inbox line and the admin guard" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
-Then merge `reliability-fixes` into `main` and push (standing instruction: finished green branches are merged and pushed without asking; the release is the user's).
+Do not merge yet: Part 2 continues on the same branch.
+
+---
+
+## Part 2: Fixing part of a vault write (Tasks 17–21)
+
+**Spec:** `docs/superpowers/specs/2026-10-06-vault-fix-design.md`. Needs Tasks 2, 3 and 5 of Part 1. Prototyped on the same throwaway clone on top of Part 1 (1 372 tests, ruff clean) and checked live: seven real corrections with Haiku against a copy of the vault, all right after the drop guard in Task 19 (without it, «ну это» dropped the task it was shown). A fix costs one call of about 1 550 prompt tokens; a move into a folder adds that folder's question (about 4 000 in all).
+
+### Review Focus (Part 2)
+
+1. **A correction that says nothing** («ну это») must change nothing, whatever the model answers — `test_nothing_is_dropped_unless_the_correction_says_so`.
+2. **One product of three dropped** from a grocery write that is one file change — the other two stay unticked, the dropped one is ticked again as before: `test_one_product_of_three_is_dropped_and_the_others_stay`.
+3. **A fix on a turn where one of two lines was edited by hand** — nothing at all is touched, the note is named: `test_a_line_edited_by_hand_since_leaves_every_file_untouched`, `test_replace_touches_nothing_when_one_line_was_edited_since`.
+4. **A reply to an expired write** — "too late", nothing written, no model call: `test_a_reply_to_an_expired_write_is_too_late_and_writes_nothing`.
+5. **Fix, fix again, Undo** — nothing of any version is left, including a page the fix itself created: `test_a_reply_to_the_writes_message_is_a_fix_and_undo_then_removes_everything`.
+
+---
+
+### Task 17: A one-letter word no longer vouches for every word it begins
+
+Found while building the fix: the staged gate's `_close` let «и» ("and") match any word starting with и, so a product nobody named («икра») passed as said. Fresh messages have the same hole.
+
+**Files:**
+- Modify: `app/vault/staged.py` (`_close`)
+- Test: `tests/test_vault_staged.py`
+
+- [ ] **Step 1: Write the failing test**
+
+Append to `tests/test_vault_staged.py`:
+
+```python
+
+
+def test_a_one_letter_word_does_not_vouch_for_every_word_it_begins():
+    """«и» (and) began «икра»: a product nobody named passed the gate as said. A short word
+    still matches its own longer form: «сыр» and «сыра»."""
+    gate = _Gate("купить молоко и яйца", "")
+    assert not gate.said("икра")
+    assert gate.said("яйца")
+    assert _Gate("купить сыр", "").said("сыра")
+```
+
+- [ ] **Step 2: Run it to see it fail**
+
+Run: `uv run pytest tests/test_vault_staged.py -q -k one_letter`
+Expected: FAIL on `assert not gate.said("икра")`.
+
+- [ ] **Step 3: The fix**
+
+In `app/vault/staged.py`, `_close`, replace:
+
+```python
+    short, other = sorted((one, two), key=len)
+    return len(short) < 4 and other.startswith(short)
+```
+
+with:
+
+```python
+    short, other = sorted((one, two), key=len)
+    # Three letters at least: a one-letter word ("and") began every word that shares its
+    # letter, so a product nobody named passed as said.
+    return 3 <= len(short) < 4 and other.startswith(short)
+```
+
+- [ ] **Step 4: Run the suite**
+
+Run: `uv run pytest -q && uv run ruff check .`
+Expected: all pass.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add app/vault/staged.py tests/test_vault_staged.py
+git commit -m "fix(vault): a one-letter word no longer passes the gate for every word it begins" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+---
+
+### Task 18: Each write remembers what it did; a write is found by its message
+
+**Files:**
+- Modify: `app/vault/writer.py` (`VaultUndo.action`, `_as_written`, `run`, new `replace_writes`)
+- Modify: `app/audit/store.py` (`execution_by_reply`)
+- Test: `tests/test_vault_writer.py`, `tests/test_audit_store.py`
+
+**Interfaces:**
+- Consumes: `VaultWriter._lock`, `undo`, `revert.take_back` (Part 1, Tasks 1–2).
+- Produces: `VaultUndo.action: dict | None` (a `VaultAction.model_dump(exclude_defaults=True)`); `VaultWriter.replace_writes(old: list[VaultUndo], new: list[VaultAction]) -> tuple[list[VaultWrite], list[str], list[str]]` — (writes, failed, left); `AuditStore.execution_by_reply(chat_id: int, reply_message_id: int) -> dict | None` (expired rows included).
+
+- [ ] **Step 1: Write the failing tests**
+
+Append to `tests/test_vault_writer.py`:
+
+```python
+
+
+# ---- each write remembers what it did --------------------------------------------------------
+
+def test_a_write_remembers_the_action_it_carried_out(writer):
+    write = writer.run(VaultAction(action="task", text="лампочки", heading="дом", due="2026-10-09"))
+    assert write.undo.action == {"action": "task", "text": "лампочки", "heading": "дом",
+                                 "due": "2026-10-09"}
+
+
+def test_an_append_that_became_an_inbox_line_remembers_the_inbox_line(writer):
+    write = writer.run(VaultAction(action="append", note="нет такой", body=["строка"]))
+    assert write.kind == "inbox"
+    assert write.undo.action == {"action": "inbox", "text": "строка"}
+
+
+def test_a_grocery_write_remembers_its_products(writer):
+    write = writer.run(VaultAction(action="grocery", body=["молоко", "хлеб"]))
+    assert write.undo.action == {"action": "grocery", "body": ["молоко", "хлеб"]}
+
+
+def test_replace_takes_back_old_writes_and_makes_new_ones_as_one_step(writer, index):
+    old = writer.run(VaultAction(action="task", text="молоко", heading="дом"))
+    writes, failed, left = writer.replace_writes(
+        [old.undo], [VaultAction(action="grocery", body=["молоко"])])
+
+    assert left == [] and failed == [] and [w.kind for w in writes] == ["grocery"]
+    assert "молоко" not in index.read(old.path)
+    assert "- [ ] молоко" in index.read(f"{texts.VAULT_GROCERIES_NOTE}.md")
+
+
+def test_replace_touches_nothing_when_one_line_was_edited_since(writer, index, vault):
+    a = writer.run(VaultAction(action="task", text="молоко", heading="дом"))
+    b = writer.run(VaultAction(action="task", text="позвонить", heading="дом"))
+    edited = index.read(b.path).replace("- [ ] позвонить", "- [x] позвонить")
+    (vault / b.path).write_text(edited, encoding="utf-8", newline="\n")
+
+    writes, failed, left = writer.replace_writes(
+        [a.undo, b.undo], [VaultAction(action="log", text="сходил")])
+
+    assert writes == [] and left == [texts.VAULT_TASKS_NOTE]
+    assert index.read(a.path) == edited  # the milk task is still there too
+    assert not (vault / texts.VAULT_DAILY_DIR).exists()  # and nothing new was written
+```
+
+Append to `tests/test_audit_store.py`:
+
+```python
+
+
+def test_a_write_is_found_by_the_message_that_reported_it(tmp_path):
+    from datetime import UTC, datetime, timedelta
+
+    from app.audit.store import AuditStore
+
+    store = AuditStore(tmp_path / "bot.sqlite")
+    store.migrate()
+    then = datetime(2026, 10, 6, 12, 0, tzinfo=UTC)
+    event = store.new_event(telegram_user_id=1, chat_id=7, kind="text")
+    first = store.add_execution(event, 7, None, "{}", then + timedelta(minutes=5))
+    store.set_reply_message_id(first, 501)
+
+    assert store.execution_by_reply(7, 501)["id"] == first
+    assert store.execution_by_reply(8, 501) is None  # another chat's message
+    assert store.execution_by_reply(7, 502) is None
+    store.close()
+```
+
+- [ ] **Step 2: Run them to see them fail**
+
+Run: `uv run pytest tests/test_vault_writer.py tests/test_audit_store.py -q`
+Expected: the six new tests FAIL (`action` is not a field; no `replace_writes`; no `execution_by_reply`).
+
+- [ ] **Step 3: The writer**
+
+In `app/vault/writer.py`, add a field at the end of `VaultUndo`:
+
+```python
+    # What the write did, as a VaultAction dump, so a later message can fix part of it
+    # (app/vault/fix.py) without the model reading the message again. None on old records.
+    action: dict | None = None
+```
+
+Above `class VaultWriter:` add:
+
+```python
+def _as_written(action: VaultAction, write: VaultWrite) -> VaultAction:
+    """The action the write really carried out. A note that was not there turns an append or
+    an update into an inbox line; a fix must see that line, not the append that never
+    happened."""
+    if write.kind.split("_")[0] == action.action:
+        return action
+    words = action.text or action.title or " ".join(action.body)
+    return VaultAction(action="inbox", text=words.strip()[:MAX_LINE])
+
+
+```
+
+Replace `run` (the two-line version from Part 1, Task 2) with:
+
+```python
+    def run(self, action: VaultAction) -> VaultWrite:
+        with self._lock:
+            write = self._run(action)
+        if write.undo is not None:
+            write.undo.action = _as_written(action, write).model_dump(exclude_defaults=True)
+        return write
+```
+
+and directly above it add:
+
+```python
+    def replace_writes(self, old: list[VaultUndo], new: list[VaultAction]
+                       ) -> tuple[list[VaultWrite], list[str], list[str]]:
+        """Take `old` writes back and write `new` in their place, as one step: a fix.
+
+        First a dry run of every take-back on the files as they are now. If any write's lines
+        were changed by hand since, nothing at all is touched and their notes are returned —
+        half a fix would leave the old and the new side by side. Returns (writes, failed,
+        left): the new writes, the error of each new action that could not be written, and
+        the notes left alone."""
+        with self._lock:
+            now: dict[str, str | None] = {}
+            left: list[str] = []
+            for undo in reversed(old):
+                current = now[undo.path] if undo.path in now else self._read(undo.path)
+                if current is None:
+                    if undo.previous is not None:
+                        left.append(PurePosixPath(undo.path).stem)
+                    continue
+                if undo.written is None:
+                    restored: str | None = undo.previous or ""
+                else:
+                    restored = revert.take_back(undo.previous or "", undo.written, current)
+                if restored is None:
+                    left.append(PurePosixPath(undo.path).stem)
+                now[undo.path] = restored
+            if left:
+                return [], [], list(dict.fromkeys(left))
+            for undo in reversed(old):
+                self.undo(undo)
+            writes: list[VaultWrite] = []
+            failed: list[str] = []
+            for action in new:
+                try:
+                    writes.append(self.run(action))
+                except (OSError, ValueError) as e:
+                    log.warning("fix write failed (%s): %s", action.action, e)
+                    failed.append(type(e).__name__)
+            return writes, failed, []
+
+```
+
+- [ ] **Step 4: The store**
+
+In `app/audit/store.py`, directly above `def latest_execution` add:
+
+```python
+    def execution_by_reply(self, chat_id: int, reply_message_id: int) -> dict | None:
+        """The write whose reply is this Telegram message, expired or not: the caller says
+        "too late" for an expired one, rather than treating the reply as a new message."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM executions WHERE chat_id = ? AND reply_message_id = ? "
+                "ORDER BY id DESC LIMIT 1",
+                (chat_id, reply_message_id),
+            ).fetchone()
+            return dict(row) if row else None
+
+```
+
+- [ ] **Step 5: Run the suite**
+
+Run: `uv run pytest -q && uv run ruff check .`
+Expected: all pass.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add app/vault/writer.py app/audit/store.py tests/test_vault_writer.py tests/test_audit_store.py
+git commit -m "feat(vault): each write remembers its action; a write is found by its reply message" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+---
+
+### Task 19: The fix stage and applying a fix
+
+**Files:**
+- Create: `app/vault/fix.py`
+- Modify: `app/llm/staged_prompts.py` (`FIX_PROMPT`, `FIX_LINES`, line suffixes, two headers)
+- Modify: `app/texts.py` (`BTN_FIX`, the `FIX_*` strings, `FIX_DROP_WORDS`, `FIX_DROP_STEMS`)
+- Modify: `app/vault/staged.py` (`StagedFiler.fix`, `_Run.patch`, imports)
+- Modify: `app/vault/pipeline.py` (`FixTurn`, `VaultPipeline.fix`)
+- Create: `tests/test_vault_fix.py`
+
+**Interfaces:**
+- Consumes: `VaultUndo.action`, `VaultWriter.replace_writes` (Task 18); `staged._Gate`, `_Run._places`, `_notes`, `_add_notes`, `_change_note`; `filer.check`; `VaultPipeline._rewritten`, `_link_later`.
+- Produces: `StagedFiler.fix(original: str, correction: str, previous: list[VaultAction], ctx: VaultContext) -> tuple[FixPlan, int, int]`; `VaultPipeline.fix(original: str, correction: str, undos: list[VaultUndo]) -> FixTurn` with `applied: bool`, `undos` (untouched + new), `reply_line()`, `model`, `prompt_tokens`, `output_tokens`, `writes`, `error`. Task 20 calls `VaultPipeline.fix`; Task 20's tests import `Script` from `tests/test_vault_fix.py`.
+
+- [ ] **Step 1: Write the failing tests**
+
+Create `tests/test_vault_fix.py`:
+
+```python
+"""Fixing part of what a turn wrote (app/vault/fix.py): one question about the difference, code
+that turns the answer into writes to take back and writes to make, and a gate on every value."""
+
+from __future__ import annotations
+
+from datetime import datetime
+
+import pytest
+
+from app import texts
+from app.llm import staged_prompts as P
+from app.vault.filer import context
+from app.vault.index import VaultIndex
+from app.vault.pipeline import VaultPipeline
+from app.vault.staged import StagedFiler
+from app.vault.writer import VaultAction, VaultWriter
+
+NOW = datetime(2026, 10, 6, 18, 30)  # a Tuesday
+
+
+class Script:
+    """Answers each stage by its prompt, and records what each was shown."""
+
+    def __init__(self, **answers) -> None:
+        self.answers = answers
+        self.asked: list[tuple[str, dict, str]] = []
+
+    async def __call__(self, system: str, schema: dict, content: str, max_tokens: int = 0):
+        name = next(k for k, v in vars(P).items() if k.endswith("_PROMPT") and v == system)
+        self.asked.append((name, schema, content))
+        answer = self.answers[name]
+        if isinstance(answer, Exception):
+            raise answer
+        return answer, 100, 10
+
+    @property
+    def stages(self) -> list[str]:
+        return [name for name, _, _ in self.asked]
+
+
+@pytest.fixture
+def vault(tmp_path):
+    (tmp_path / "Книги").mkdir()
+    for name, status in (("Дюна", "Read"), ("Солярис", "To read")):
+        (tmp_path / f"Книги/{name}.md").write_text(
+            f"---\nstatus: {status}\nauthor: x\n---\n", encoding="utf-8")
+    (tmp_path / f"{texts.VAULT_TASKS_NOTE}.md").write_text(
+        "## дом\n\n- [ ] счета #home\n", encoding="utf-8")
+    (tmp_path / f"{texts.VAULT_GROCERIES_NOTE}.md").write_text(
+        "- [x] молоко\n- [x] хлеб\n- [x] яйца\n", encoding="utf-8")
+    (tmp_path / "_bot.md").write_text("## Области\n- [[дом]] `#home`\n", encoding="utf-8")
+    return tmp_path
+
+
+@pytest.fixture
+def index(vault):
+    index = VaultIndex(vault)
+    index.refresh()
+    return index
+
+
+def pipe(index, script: Script) -> VaultPipeline:
+    return VaultPipeline(index, VaultWriter(index, now=lambda: NOW),
+                         StagedFiler(script, "haiku"), now=lambda: NOW)
+
+
+def write(index, *actions: VaultAction):
+    writer = VaultWriter(index, now=lambda: NOW)
+    return [writer.run(a).undo for a in actions]
+
+
+# ---- the question ------------------------------------------------------------------------------
+
+async def test_the_model_is_shown_what_was_written_and_the_places_but_not_the_guide(index):
+    undos = write(index, VaultAction(action="task", text="молоко", heading="дом"))
+    script = Script(FIX_PROMPT={"changes": [], "add": [], "unclear": True})
+    turn = await pipe(index, script).fix("молоко", "в продукты", undos)
+
+    [(name, schema, content)] = script.asked
+    assert name == "FIX_PROMPT"
+    assert "a1: " + P.FIX_LINES["task"].format(words="молоко", note=texts.VAULT_TASKS_NOTE,
+                                              folder="") in content
+    assert texts.VAULT_GROCERIES_NOTE in content  # the place list
+    assert "Области" not in content  # the guide is not sent
+    assert schema["properties"]["changes"]["items"]["properties"]["key"]["enum"] == ["a1"]
+    assert not turn.applied and texts.FIX_UNCLEAR in turn.reply_line()
+
+
+# ---- applying it -------------------------------------------------------------------------------
+
+async def test_a_task_moved_to_groceries(index):
+    undos = write(index, VaultAction(action="task", text="молоко", heading="дом"))
+    script = Script(FIX_PROMPT={"changes": [{"key": "a1", "op": "move", "field": "",
+                                             "prop": "", "value": "", "to": "g"}],
+                                "add": [], "unclear": False})
+    turn = await pipe(index, script).fix("надо молоко", "не в задачи, а в продукты", undos)
+
+    assert turn.applied and script.stages == ["FIX_PROMPT"]  # one call, nothing else
+    assert "молоко" not in index.read(f"{texts.VAULT_TASKS_NOTE}.md")
+    assert "- [ ] молоко" in index.read(f"{texts.VAULT_GROCERIES_NOTE}.md")
+    assert turn.reply_line() == texts.FIX_DONE.format(what=texts.FIX_MOVED.format(
+        item="молоко", place=texts.VAULT_GROCERIES_NOTE))
+
+
+async def test_a_due_date_is_set_only_when_the_correction_names_a_day(index):
+    undos = write(index, VaultAction(action="task", text="позвонить маме", heading="дом"))
+    change = {"key": "a1", "op": "set", "field": "due", "prop": "", "value": "2026-10-09",
+              "to": ""}
+    script = Script(FIX_PROMPT={"changes": [change], "add": [], "unclear": False})
+    turn = await pipe(index, script).fix("позвонить маме", "на пятницу", undos)
+    assert turn.applied
+    assert "- [ ] позвонить маме 📅 2026-10-09" in index.read(f"{texts.VAULT_TASKS_NOTE}.md")
+
+    undos = write(index, VaultAction(action="task", text="полить цветы", heading="дом"))
+    turn = await pipe(index, Script(FIX_PROMPT={"changes": [change], "add": [],
+                                                "unclear": False})).fix(
+        "полить цветы", "это важно", undos)
+    assert not turn.applied  # no day was said: the date has no source
+    assert "- [ ] полить цветы\n" in index.read(f"{texts.VAULT_TASKS_NOTE}.md") + "\n"
+
+
+async def test_one_product_of_three_is_dropped_and_the_others_stay(index):
+    undos = write(index, VaultAction(action="grocery", body=["молоко", "хлеб", "яйца"]))
+    assert "- [ ] хлеб" in index.read(f"{texts.VAULT_GROCERIES_NOTE}.md")
+    script = Script(FIX_PROMPT={"changes": [{"key": "a2", "op": "drop", "field": "",
+                                             "prop": "", "value": "", "to": ""}],
+                                "add": [], "unclear": False})
+    turn = await pipe(index, script).fix("купить молоко хлеб яйца", "хлеб не надо", undos)
+
+    page = index.read(f"{texts.VAULT_GROCERIES_NOTE}.md")
+    assert "- [x] хлеб" in page  # back as it was before the first message
+    assert "- [ ] молоко" in page and "- [ ] яйца" in page
+    assert turn.reply_line() == texts.FIX_DONE.format(
+        what=texts.FIX_DROPPED.format(item="хлеб"))
+
+
+async def test_an_item_is_added_in_the_same_place(index):
+    undos = write(index, VaultAction(action="grocery", body=["молоко"]))
+    script = Script(FIX_PROMPT={"changes": [], "add": ["яйца", "икра"], "unclear": False})
+    turn = await pipe(index, script).fix("купить молоко", "и ещё яйца", undos)
+
+    page = index.read(f"{texts.VAULT_GROCERIES_NOTE}.md")
+    assert "- [ ] яйца" in page and "икра" not in page  # nobody said caviar
+    assert turn.applied and turn.kept == undos  # the milk write was not touched
+
+
+async def test_a_task_moved_into_a_folder_asks_that_folders_question_once(index):
+    undos = write(index, VaultAction(action="task", text="Пикник на обочине", heading="дом"))
+    books = next(k for k, f in enumerate(context(index, "", NOW).folders, start=1)
+                 if f == "Книги")
+    script = Script(
+        FIX_PROMPT={"changes": [{"key": "a1", "op": "move", "field": "", "prop": "",
+                                 "value": "", "to": f"f{books}"}], "add": [],
+                    "unclear": False},
+        FOLDER_PROMPT={"items": [{"title": "Пикник на обочине", "body": [], "tags": [],
+                                  "props": [{"name": "status", "value": "To read"}]}],
+                       "lookup": "", "web": "", "media": "text"})
+    turn = await pipe(index, script).fix("надо Пикник на обочине", "это книга", undos)
+
+    assert script.stages == ["FIX_PROMPT", "FOLDER_PROMPT"]
+    assert turn.applied
+    assert "Пикник" not in index.read(f"{texts.VAULT_TASKS_NOTE}.md")
+    note = index.by_name("Пикник на обочине")
+    assert note is not None and note.folder == "Книги"
+
+
+async def test_a_line_edited_by_hand_since_leaves_every_file_untouched(index):
+    undos = write(index, VaultAction(action="task", text="молоко", heading="дом"),
+                  VaultAction(action="task", text="позвонить", heading="дом"))
+    path = index.root / f"{texts.VAULT_TASKS_NOTE}.md"
+    edited = path.read_text(encoding="utf-8").replace("- [ ] молоко", "- [x] молоко")
+    path.write_text(edited, encoding="utf-8", newline="\n")
+    script = Script(FIX_PROMPT={"changes": [{"key": "a1", "op": "move", "field": "",
+                                             "prop": "", "value": "", "to": "g"}],
+                                "add": [], "unclear": False})
+    turn = await pipe(index, script).fix("молоко, позвонить", "молоко в продукты", undos)
+
+    assert not turn.applied and turn.left == [texts.VAULT_TASKS_NOTE]
+    assert path.read_text(encoding="utf-8") == edited
+    assert "- [ ] молоко" not in index.read(f"{texts.VAULT_GROCERIES_NOTE}.md")
+
+
+async def test_nothing_is_dropped_unless_the_correction_says_so(index):
+    """Found live: «ну это» made the model drop the task it was shown. A drop loses words, so
+    it takes a word of the user's that asks for it."""
+    drop = {"changes": [{"key": "a1", "op": "drop", "field": "", "prop": "", "value": "",
+                         "to": ""}], "add": [], "unclear": False}
+    undos = write(index, VaultAction(action="task", text="забрать посылку", heading="дом"))
+    turn = await pipe(index, Script(FIX_PROMPT=drop)).fix("забрать посылку", "ну это", undos)
+    assert not turn.applied
+    assert "- [ ] забрать посылку" in index.read(f"{texts.VAULT_TASKS_NOTE}.md")
+
+    turn = await pipe(index, Script(FIX_PROMPT=drop)).fix("забрать посылку", "убери это",
+                                                         undos)
+    assert turn.applied
+    assert "забрать посылку" not in index.read(f"{texts.VAULT_TASKS_NOTE}.md")
+
+
+def test_the_words_that_may_drop_something():
+    from app.vault.fix import may_drop
+
+    for said in ("кефир не надо", "нет, без хлеба", "убери кефир", "удали это",
+                 "лишнее", "отмени вторую"):
+        assert may_drop(said), said
+    for said in ("ну это", "на пятницу", "в продукты", "нечто другое"):
+        assert not may_drop(said), said
+
+
+async def test_a_rewritten_note_is_changed_again_rather_than_patched(index, vault):
+    (vault / "Идеи.md").write_text("старый текст\n", encoding="utf-8")
+    index.refresh()
+    undos = write(index, VaultAction(action="rewrite", note="Идеи", text="перепиши",
+                                     body=["новый текст"]))
+    script = Script(CHANGE_NOTE_PROMPT={"kind": "rewrite", "props": [], "heading": "",
+                                        "web": "", "media": "text"})
+    plan, _, _ = await StagedFiler(script, "haiku").fix(
+        "перепиши идеи", "верни первую строку", [VaultAction(**undos[0].action)],
+        context(index, "идеи", NOW))
+
+    assert script.stages == ["CHANGE_NOTE_PROMPT"]
+    assert plan.take_back == [] and plan.write[0]["action"] == "rewrite"
+    assert plan.write[0]["note"] == "Идеи"
+
+
+async def test_claude_down_changes_nothing_and_says_why(index):
+    import anthropic
+
+    from app.vault.staged import claude_ask
+
+    undos = write(index, VaultAction(action="task", text="молоко", heading="дом"))
+
+    class Down:
+        def __init__(self) -> None:
+            self.messages = self
+
+        async def create(self, **kwargs):
+            raise anthropic.APIError("down", request=None, body=None)  # type: ignore[arg-type]
+
+    filer = StagedFiler(claude_ask(Down(), "haiku"), "haiku")  # type: ignore[arg-type]
+    turn = await VaultPipeline(index, VaultWriter(index), filer, now=lambda: NOW).fix(
+        "молоко", "в продукты", undos)
+    assert not turn.applied and turn.error
+    assert "- [ ] молоко" in index.read(f"{texts.VAULT_TASKS_NOTE}.md")
+```
+
+- [ ] **Step 2: Run them to see them fail**
+
+Run: `uv run pytest tests/test_vault_fix.py -q`
+Expected: ERROR at collection — `FIX_LINES` / `VaultPipeline.fix` do not exist.
+
+- [ ] **Step 3: The texts**
+
+In `app/texts.py`, after `BTN_UNDO_ALL = "Отменить всё"` add `BTN_FIX = "Поправить"`. Directly above `VAULT_WHAT = {` add:
+
+```python
+# Fixing part of what was just written (app/vault/fix.py).
+FIX_ASK = "✏️ Что поправить? Напишите или надиктуйте."
+FIX_EXPIRED = "Поправить уже нельзя (прошло больше {minutes} минут)."
+FIX_UNCLEAR = "не понял, что поправить — ничего не менял"
+FIX_DONE = "✏️ Obsidian — поправлено: {what}"
+FIX_FAILED = "⚠️ Obsidian — не поправил: {error}"
+FIX_MOVED = "«{item}» → «{place}»"
+FIX_SET = "«{item}» — {value}"
+FIX_DROPPED = "«{item}» убрано"
+FIX_ADDED = "+ «{item}»"
+FIX_NOT_MOVED = "«{item}» не перенёс"
+FIX_NOTE = "«{note}» ещё раз"
+# A fix may drop something only when the correction says to: whole words, and word starts.
+# Found live: «ну это» made the model drop the task it was shown.
+FIX_DROP_WORDS = ("не", "нет", "без", "ненадо")
+FIX_DROP_STEMS = ("убер", "убра", "удал", "лишн", "отмен", "ненуж", "выкин", "вычеркн")
+```
+
+- [ ] **Step 4: The prompt**
+
+In `app/llm/staged_prompts.py`, directly above `def section(` add:
+
+```python
+FIX_PROMPT = f"""Пользователь поправляет то, что ассистент только что записал. {DICTATED}
+
+Даны исходное сообщение, записанное (ключи a1, a2 …), список мест и поправка. Верни changes —
+только для записанного, что поправка меняет; остальное не упоминай:
+- drop — убрать совсем («хлеб не надо», «это не надо было»);
+- set — поменять одно поле. field: text — сами слова (для заметки — её название), due — срок \
+ГГГГ-ММ-ДД (считай от «сегодня»), repeat — правило повтора по-английски ("every week"), \
+heading — раздел, tag — тэг без решётки, prop — свойство заметки (prop — его имя, value — \
+значение). value — новое значение;
+- move — перенести в другое место: to — ключ места из списка.
+add — новые вещи того же рода и туда же, если поправка их добавляет («и ещё яйца» → \
+["яйца"]), каждая отдельно, словами пользователя.
+unclear — true, если непонятно, что именно поправить: поправка не говорит, что не так \
+(«ну это», «не то»), — тогда ничего не меняй."""
+
+# One line per written thing, as the fix stage shows it.
+FIX_LINES = {
+    "task": "задача «{words}» в «{note}»",
+    "grocery": "продукт «{words}» в «{note}»",
+    "note": "заметка «{words}» в папке «{folder}»",
+    "append": "дописано в «{note}»: {words}",
+    "log": "запись в дневнике: {words}",
+    "inbox": "строка в «{note}»: {words}",
+    "update": "изменено «{note}»: {words}",
+    "rewrite": "переписано «{note}»",
+}
+FIX_DUE = ", срок {due}"
+FIX_HEADING = ", раздел «{heading}»"
+FIX_TAGS = ", тэги {tags}"
+FIX_PROPS = ", свойства: {props}"
+H_FIX_DONE = "Что записано"
+H_ORIGINAL = "Исходное сообщение"
+
+
+```
+
+- [ ] **Step 5: The fix module**
+
+Create `app/vault/fix.py` (no Cyrillic: `tests/test_reply.py` checks `app/` outside the four text modules):
+
+```python
+"""Fixing part of what a turn wrote: one question about the difference, not the whole message
+again.
+
+The bot already knows what it did — each write keeps the action it carried out
+(`VaultUndo.action`). The model is shown those actions as short keyed lines, the place list and
+the correction, and answers only what changes: drop this one, set that field, move this one
+elsewhere, add these. Code turns that into the writes to take back and the actions to write in
+their place; actions the correction does not name are not touched at all.
+
+Every value passes the same gate as a fresh message (`staged._Gate`), over the original message,
+the correction and the words already written: a date only when one of them names a time, a
+title only when its words are there. Moving to a folder is the one case that asks a second
+question — that folder's details stage, for that one action — because a book note needs the
+properties a task never had."""
+
+from __future__ import annotations
+
+import re
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
+
+from app import texts
+from app.llm import staged_prompts as P
+from app.vault.writer import VaultAction
+
+OPS = ("drop", "set", "move")
+FIELDS = ("text", "title", "due", "repeat", "heading", "tag", "prop")
+MAX_BODY_SHOWN = 3
+_STRING = {"type": "string"}
+
+
+def _obj(props: dict) -> dict:
+    return {"type": "object", "additionalProperties": False, "required": list(props),
+            "properties": props}
+
+
+@dataclass(frozen=True)
+class Item:
+    """One thing the turn wrote, as the model is shown it. A grocery write of three products
+    is three items, so "no bread after all" can drop one of them; `write` is the write it
+    came from."""
+
+    write: int
+    action: VaultAction
+
+
+@dataclass
+class FixPlan:
+    take_back: list[int] = field(default_factory=list)  # indexes of the turn's writes
+    write: list[dict] = field(default_factory=list)  # raw actions, checked like any answer
+    said: list[str] = field(default_factory=list)  # one reply phrase per change
+    unclear: bool = False
+
+
+def words(action: VaultAction) -> str:
+    """The words an action is about: a task's text, a note's title, a list's lines."""
+    return (action.text or action.title or ", ".join(action.body[:MAX_BODY_SHOWN])).strip()
+
+
+def items(previous: list[VaultAction]) -> list[Item]:
+    out: list[Item] = []
+    for i, action in enumerate(previous):
+        if action.action == "grocery" and len(action.body) > 1:
+            out += [Item(i, action.model_copy(update={"body": [name]})) for name in action.body]
+        else:
+            out.append(Item(i, action))
+    return out
+
+
+def may_drop(correction: str) -> bool:
+    """Does the correction ask for something to go? A drop is the one change that loses words,
+    so it takes a word of the user's that says so, whatever the model answered."""
+    words_said = re.findall(r"\w+", correction.casefold())
+    return any(w in texts.FIX_DROP_WORDS or w.startswith(texts.FIX_DROP_STEMS)
+               for w in words_said)
+
+
+def describe(action: VaultAction, tasks_note: str) -> str:
+    """One line of what was written, for the model."""
+    note = {"task": tasks_note, "grocery": texts.VAULT_GROCERIES_NOTE,
+            "inbox": texts.VAULT_INBOX_NOTE}.get(action.action, action.note)
+    line = P.FIX_LINES.get(action.action, P.FIX_LINES["inbox"]).format(
+        words=words(action), note=note, folder=action.folder)
+    if action.due:
+        line += P.FIX_DUE.format(due=action.due)
+    if action.heading:
+        line += P.FIX_HEADING.format(heading=action.heading)
+    if action.tags:
+        line += P.FIX_TAGS.format(tags=", ".join(action.tags))
+    if action.props:
+        line += P.FIX_PROPS.format(props=", ".join(f"{k}: {v}" for k, v in action.props.items()))
+    return line
+
+
+def schema(keys: list[str], places: list[str]) -> dict:
+    return _obj({
+        "changes": {"type": "array", "items": _obj({
+            "key": {"enum": keys}, "op": {"enum": list(OPS)},
+            "field": {"enum": [*FIELDS, ""]}, "prop": _STRING, "value": _STRING,
+            "to": {"enum": [*places, ""]},
+        })},
+        "add": {"type": "array", "items": _STRING},
+        "unclear": {"type": "boolean"},
+    })
+
+
+def _set(action: VaultAction, change: dict, gate, tags: list[str]) -> VaultAction | None:
+    """The action with one field changed, or None when the new value has no source."""
+    name, value = str(change.get("field", "")), str(change.get("value", "")).strip()
+    kind = action.action
+    if name in ("text", "title") and value:
+        if kind == "note":
+            return action.model_copy(update={"title": value}) if gate.named(value) else None
+        if not gate.said(value):
+            return None
+        if kind in ("grocery", "append"):
+            return action.model_copy(update={"body": [value]})
+        return action.model_copy(update={"text": value})
+    if name == "due":
+        due = gate.date(value)
+        return action.model_copy(update={"due": due}) if due or not value else None
+    if name == "repeat":
+        ok = value.lower().startswith("every") or not value
+        return action.model_copy(update={"repeat": value}) if ok else None
+    if name == "heading":
+        heading = gate.heading(value)
+        return action.model_copy(update={"heading": heading}) if heading else None
+    if name == "tag":
+        tag = value.lstrip("#")
+        known = {t.casefold(): t for t in tags}
+        return action.model_copy(update={"tags": [known[tag.casefold()]]}) \
+            if tag.casefold() in known else None
+    if name == "prop":
+        prop = str(change.get("prop", "")).strip()
+        checked = gate.prop(value)
+        if not prop or checked is None:
+            return None
+        return action.model_copy(update={"props": {**action.props, prop: checked}})
+    return None
+
+
+async def plan(previous: list[VaultAction], answer: dict, gate, *, tags: list[str],
+               places: dict[str, str], place_names: dict[str, str],
+               move: Callable[[VaultAction, str], Awaitable[list[dict]]],
+               dropping: bool = True) -> FixPlan:
+    """What the model's answer means for the files. `move(action, key)` returns the raw actions
+    that put `action` in place `key` — none when it could not be done."""
+    its = items(previous)
+    by_key = {f"a{i}": i for i in range(1, len(its) + 1)}
+    out = FixPlan()
+    changed: dict[int, list[dict] | None] = {}  # item index -> its raw actions now (None: gone)
+    for change in answer.get("changes") or []:
+        if not isinstance(change, dict) or change.get("key") not in by_key:
+            continue
+        i = by_key[change["key"]] - 1
+        current = changed.get(i, [its[i].action.model_dump(exclude_defaults=True)])
+        if current is None:  # already dropped
+            continue
+        what = words(its[i].action)
+        op = change.get("op")
+        if op == "drop" and dropping:
+            changed[i] = None
+            out.said.append(texts.FIX_DROPPED.format(item=what))
+        elif op == "set" and len(current) == 1:
+            new = _set(VaultAction(**current[0]), change, gate, tags)
+            if new is not None:
+                changed[i] = [new.model_dump(exclude_defaults=True)]
+                out.said.append(texts.FIX_SET.format(item=what, value=change.get("value")))
+        elif op == "move" and change.get("to") in places:
+            key = change["to"]
+            moved = await move(its[i].action, key)
+            if moved:
+                changed[i] = moved
+                out.said.append(texts.FIX_MOVED.format(item=what, place=place_names[key]))
+            else:
+                out.said.append(texts.FIX_NOT_MOVED.format(item=what))
+    touched = sorted({its[i].write for i in changed})
+    for w in touched:
+        for i, item in enumerate(its):
+            if item.write != w:
+                continue
+            if i in changed:
+                out.write += changed[i] or []
+            else:  # an untouched item of a write that is taken back is written again as it was
+                out.write.append(item.action.model_dump(exclude_defaults=True))
+    first = previous[0] if previous else None
+    for name in answer.get("add") or []:
+        name = str(name).strip()
+        if first is None or not name or not gate.said(name):
+            continue
+        added = _like(first, name)
+        if added is not None:
+            out.write.append(added)
+            out.said.append(texts.FIX_ADDED.format(item=name))
+    out.take_back = touched
+    out.unclear = not out.take_back and not out.write
+    return out
+
+
+def _like(model: VaultAction, name: str) -> dict | None:
+    """A new item of the same kind, in the same place, as the turn's first action."""
+    if model.action == "grocery":
+        return {"action": "grocery", "body": [name]}
+    if model.action in ("task", "log", "inbox"):
+        return {"action": model.action, "text": name,
+                **({"heading": model.heading} if model.heading else {})}
+    if model.action == "note":
+        return {"action": "note", "folder": model.folder, "title": name}
+    if model.action == "append":
+        return {"action": "append", "note": model.note, "heading": model.heading,
+                "body": [name]}
+    return None
+
+
+def simple_move(action: VaultAction, key: str, *, tasks: str, groceries: str, diary: str,
+                inbox: str, notes: dict[str, str]) -> list[dict] | None:
+    """Moving between places whose shape is one line: the words carry over. None for a place
+    that needs details (a folder)."""
+    text = words(action)
+    if key == tasks:
+        return [{"action": "task", "text": text, **({"due": action.due} if action.due else {})}]
+    if key == groceries:
+        return [{"action": "grocery", "body": [text]}]
+    if key == diary:
+        return [{"action": "log", "text": text}]
+    if key == inbox:
+        return [{"action": "inbox", "text": text}]
+    if key in notes:
+        return [{"action": "append", "note": notes[key], "body": [text]}]
+    return None
+```
+
+- [ ] **Step 6: The staged reader asks it**
+
+In `app/vault/staged.py`, add to the imports (ruff orders them: `from app.vault import fix as fixing` before the `filer` import, `from app.vault.writer import VaultAction` after the `index` import):
+
+```python
+from app.vault import fix as fixing
+from app.vault.writer import VaultAction
+```
+
+In `StagedFiler`, after `aclose` add:
+
+```python
+    async def fix(self, original: str, correction: str, previous: list[VaultAction],
+                  ctx: VaultContext) -> tuple[fixing.FixPlan, int, int]:
+        """What a correction changes in what a turn wrote (app/vault/fix.py)."""
+        run = _Run(self._ask_model, f"{original}\n{correction}", ctx, lookup=self._lookup)
+        started = monotonic()
+        rewritten = next((a for a in previous if a.action == "rewrite"), None)
+        if rewritten is not None:
+            # A note that was rewritten or moved from is changed again, from what it says
+            # now: the edit is not something a field can describe.
+            raw = await run._change_note(correction, rewritten.note)
+            plan = fixing.FixPlan(write=[a for a in raw if a.get("action") != "inbox"],
+                                  said=[texts.FIX_NOTE.format(note=rewritten.note)])
+            plan.unclear = not plan.write
+        else:
+            plan = await run.patch(original, correction, previous)
+        log.info("fix %s: %s | %d call(s), %.1fs", self.model, " > ".join(run.trail) or "-",
+                 run.calls, monotonic() - started)
+        return plan, run.prompt_tokens, run.output_tokens
+```
+
+In `_Run`, directly above `def _tasks(self)` add:
+
+```python
+    async def patch(self, original: str, correction: str,
+                    previous: list[VaultAction]) -> fixing.FixPlan:
+        """One question about the difference: which written thing changes, and how."""
+        ctx = self.ctx
+        places = self._places()
+        its = fixing.items(previous)
+        keyed = {f"a{i}": fixing.describe(item.action, ctx.tasks_note)
+                 for i, item in enumerate(its, start=1)}
+        answer = await self._ask(
+            P.FIX_PROMPT, fixing.schema(list(keyed), list(places)),
+            P.message(self._today(), P.section(P.H_ORIGINAL, original),
+                      P.section(P.H_FIX_DONE, P.keyed(keyed)),
+                      P.section(P.H_PLACES, P.keyed(places)), text=correction))
+        self.trail.append("fix")
+        if answer.get("unclear") and not answer.get("changes") and not answer.get("add"):
+            return fixing.FixPlan(unclear=True)
+        # What was written already passed the gate once: its words are a source too.
+        written = "\n".join(fixing.words(item.action) for item in its)
+        gate = _Gate(f"{self.message}\n{written}", ctx.guide, self._pages())
+        notes = self._notes()
+        folders = {f"f{i}": folder for i, folder in enumerate(ctx.folders, start=1)}
+        names = {TASKS: ctx.tasks_note, GROCERIES: texts.VAULT_GROCERIES_NOTE,
+                 DIARY: texts.VAULT_DAILY_DIR, INBOX: texts.VAULT_INBOX_NOTE,
+                 **folders, **notes}
+
+        async def move(action: VaultAction, key: str) -> list[dict]:
+            simple = fixing.simple_move(action, key, tasks=TASKS, groceries=GROCERIES,
+                                        diary=DIARY, inbox=INBOX, notes=notes)
+            if simple is not None:
+                return simple
+            if key in folders:
+                # A book note needs what a task never had: that folder's own question, for
+                # this one thing, in its own words and the correction's.
+                return await self._add_notes(f"{fixing.words(action)}\n{correction}",
+                                             folders[key])
+            return []
+
+        return await fixing.plan(previous, answer, gate, tags=ctx.tags, places=places,
+                                 place_names=names, move=move,
+                                 dropping=fixing.may_drop(correction))
+
+```
+
+- [ ] **Step 7: The pipeline applies it**
+
+In `app/vault/pipeline.py`, directly above `class VaultPipeline:` add:
+
+```python
+@dataclass
+class FixTurn:
+    """What a fix did: the writes it made, the turn's writes it left as they were, and the
+    phrases the reply is made of."""
+
+    writes: list[VaultWrite] = field(default_factory=list)
+    kept: list[VaultUndo] = field(default_factory=list)
+    said: list[str] = field(default_factory=list)
+    # Something was actually changed on disk: the old row is done with.
+    applied: bool = False
+    error: str = ""
+    reason: str = ""
+    left: list[str] = field(default_factory=list)
+    model: str = ""
+    prompt_tokens: int = 0
+    output_tokens: int = 0
+
+    @property
+    def undos(self) -> list[VaultUndo]:
+        return [*self.kept, *(w.undo for w in self.writes if w.undo is not None)]
+
+    def reply_line(self) -> str:
+        if self.left:
+            notes = ", ".join(f"«{name}»" for name in self.left)
+            return texts.VAULT_UNDO_LEFT.format(notes=notes)
+        if not self.applied:
+            why = texts.LLM_DOWN_SHORT.get(self.reason) or self.error or texts.FIX_UNCLEAR
+            return texts.FIX_FAILED.format(error=why)
+        what = "; ".join(self.said) or ", ".join(w.what for w in self.writes)
+        if self.error:
+            what += f" — {self.error}"
+        return texts.FIX_DONE.format(what=what)
+
+
+```
+
+In `VaultPipeline`, directly above `async def _kept(` (Part 1, Task 7) add:
+
+```python
+    async def fix(self, original: str, correction: str,
+                  undos: list[VaultUndo]) -> FixTurn:
+        """Change part of what one turn wrote (app/vault/fix.py). `undos` are that turn's
+        writes, each carrying the action it did. Never raises, never asks."""
+        turn = FixTurn(model=self._filer.model)
+        fix = getattr(self._filer, "fix", None)
+        previous = [VaultAction(**u.action) for u in undos if u.action is not None]
+        if fix is None or len(previous) != len(undos) or not previous:
+            turn.error = texts.FIX_UNCLEAR
+            return turn
+        try:
+            await asyncio.to_thread(self._index.refresh)
+            ctx = context(self._index, f"{original}\n{correction}", self._now())
+            plan, turn.prompt_tokens, turn.output_tokens = await fix(
+                original, correction, previous, ctx)
+        except FilerError as e:
+            log.warning("fix failed: %s", e)
+            turn.error, turn.reason = str(e), e.reason
+            return turn
+        except OSError as e:
+            log.warning("vault unreadable: %s", e)
+            turn.error = type(e).__name__
+            return turn
+        if plan.unclear:
+            return turn
+        # What the fix writes is checked like any answer; a web search is not part of a fix.
+        actions = [a.model_copy(update={"research": "", "media": ""})
+                   for a in check(plan.write, self._index, correction)]
+        scratch = VaultTurn()
+        prepared: list[VaultAction] = []
+        for action in actions:
+            if action.action == "rewrite":
+                rewritten = await self._rewritten(action, scratch)
+                prepared += [rewritten] if rewritten is not None else []
+            else:
+                prepared.append(action)
+        if not prepared and not plan.take_back:
+            turn.error = scratch.error
+            return turn
+        old = [undos[i] for i in plan.take_back]
+        turn.writes, failed, turn.left = await asyncio.to_thread(
+            self._writer.replace_writes, old, prepared)
+        if turn.left:
+            return turn
+        turn.applied = True
+        turn.kept = [u for i, u in enumerate(undos) if i not in set(plan.take_back)]
+        turn.said = plan.said
+        if failed:
+            turn.error = texts.VAULT_SOME_FAILED.format(n=len(failed))
+        log.info("vault fix %s: took back %d, wrote %d", turn.model, len(old),
+                 len(turn.writes))
+        self._link_later(turn.writes)
+        return turn
+
+```
+
+- [ ] **Step 8: Run the tests**
+
+Run: `uv run pytest tests/test_vault_fix.py -q`
+Expected: 11 passed.
+
+- [ ] **Step 9: Run the suite**
+
+Run: `uv run pytest -q && uv run ruff check .`
+Expected: all pass (`test_no_stray_cyrillic_outside_texts_and_llm_modules` included).
+
+- [ ] **Step 10: Commit**
+
+```bash
+git add app/vault/fix.py app/vault/staged.py app/vault/pipeline.py app/llm/staged_prompts.py app/texts.py tests/test_vault_fix.py
+git commit -m "feat(vault): a correction changes part of what a turn wrote, in one small call" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+---
+
+### Task 20: The Поправить button and the reply gesture
+
+**Files:**
+- Modify: `app/conversation/orchestrator.py` (`_vault_buttons`, `_fixing`, `handle_text(reply_to=)`, `_message`, `_callback`, `_fixable`, `_fix_too_late`, `_fix_ask`, `_fix`, `_undo`, `_cancel`, `_finish_vault`)
+- Modify: `app/telegram/handlers.py` (`_replied_to`, `_on_text`, `_on_voice`)
+- Test: `tests/test_vault_orchestrator.py`, `tests/test_handlers.py`
+
+**Interfaces:**
+- Consumes: `VaultPipeline.fix` (Task 19), `AuditStore.execution_by_reply` (Task 18), `texts.BTN_FIX` / `FIX_ASK` / `FIX_EXPIRED`.
+- Produces: callback `f:<execution_id>`; `Orchestrator.handle_text(..., reply_to: int | None = None)`; audit decisions `FIX_ASK` and `FIX` (error `FIX_EXPIRED`).
+
+- [ ] **Step 1: Update the pins and write the failing tests**
+
+In `tests/test_vault_orchestrator.py`, change the import `from datetime import datetime` to `from datetime import datetime, timedelta`. In `test_notion_off_leaves_a_working_obsidian_bot` (as changed in Part 1, Task 3), replace:
+
+```python
+    # No question, so the only button is Undo for the vault's own write.
+    assert [[b.id for b in r] for r in reply.buttons] == [[f"u:{row['id']}"]]
+```
+
+with:
+
+```python
+    # No question, so the buttons are Undo and Fix for the vault's own write.
+    assert [[b.id for b in r] for r in reply.buttons] == [[f"u:{row['id']}", f"f:{row['id']}"]]
+```
+
+Append to `tests/test_vault_orchestrator.py`:
+
+```python
+
+
+# ---- fixing part of a write ---------------------------------------------------------------------
+
+@pytest.fixture
+def staged_bot(bot, tmp_path):
+    """The same bot with the staged reader, scripted per stage, and Notion off."""
+    from app.vault.staged import StagedFiler
+    from tests.test_vault_fix import Script
+
+    script = Script()
+    bot.vault._filer = StagedFiler(script, "haiku")
+    bot.orch._switches = Switches(tmp_path / "switches.json", {"notion": False})
+    bot.script = script
+    return bot
+
+
+def _milk_task(script) -> None:
+    script.answers.update(INTENT_PROMPT={"intent": "add"}, TARGET_PROMPT={"target": "t"},
+                          TASKS_PROMPT={"items": [{"text": "молоко", "due": "", "repeat": "",
+                                                   "heading": "дом", "tag": "",
+                                                   "countdown": False}], "lookup": ""})
+
+
+MOVE_TO_GROCERIES = {"changes": [{"key": "a1", "op": "move", "field": "", "prop": "",
+                                  "value": "", "to": "g"}], "add": [], "unclear": False}
+
+
+async def test_the_fix_button_asks_then_the_next_message_moves_the_task(staged_bot):
+    bot = staged_bot
+    _milk_task(bot.script)
+    first = await bot.orch.handle_text(CHAT, USER, "надо молоко")
+    assert "- [ ] молоко" in bot.index.read(f"{texts.VAULT_TASKS_NOTE}.md")
+
+    asked = await bot.orch.handle_callback(CHAT, USER, f"f:{first.undo_id}")
+    assert asked.text == texts.FIX_ASK
+    bot.script.answers["FIX_PROMPT"] = MOVE_TO_GROCERIES
+    fixed = await bot.orch.handle_text(CHAT, USER, "не в задачи, а в продукты")
+
+    assert fixed.text.startswith(texts.FIX_DONE.split("{")[0])
+    assert "молоко" not in bot.index.read(f"{texts.VAULT_TASKS_NOTE}.md")
+    assert "- [ ] молоко" in bot.index.read(f"{texts.VAULT_GROCERIES_NOTE}.md")
+    assert [b.id for b in fixed.buttons[0]] == [f"u:{fixed.undo_id}", f"f:{fixed.undo_id}"]
+    # The first message's buttons are done with.
+    stale = await bot.orch.handle_callback(CHAT, USER, f"u:{first.undo_id}")
+    assert stale.text == texts.ERRORS["UNDO_EXPIRED"].format(minutes=5)
+
+
+async def test_a_reply_to_the_writes_message_is_a_fix_and_undo_then_removes_everything(
+        staged_bot):
+    bot = staged_bot
+    _milk_task(bot.script)
+    first = await bot.orch.handle_text(CHAT, USER, "надо молоко")
+    bot.store.set_reply_message_id(first.undo_id, 5001)  # what the transport records
+
+    bot.script.answers["FIX_PROMPT"] = MOVE_TO_GROCERIES
+    fixed = await bot.orch.handle_text(CHAT, USER, "в продукты", reply_to=5001)
+    assert "- [ ] молоко" in bot.index.read(f"{texts.VAULT_GROCERIES_NOTE}.md")
+
+    bot.script.answers["FIX_PROMPT"] = {"changes": [{"key": "a1", "op": "set", "field": "text",
+                                                     "prop": "", "value": "молоко овсяное",
+                                                     "to": ""}], "add": [], "unclear": False}
+    again = await bot.orch.handle_callback(CHAT, USER, f"f:{fixed.undo_id}")
+    assert again.text == texts.FIX_ASK
+    twice = await bot.orch.handle_text(CHAT, USER, "молоко овсяное")
+    assert "- [ ] молоко овсяное" in bot.index.read(f"{texts.VAULT_GROCERIES_NOTE}.md")
+
+    undone = await bot.orch.handle_callback(CHAT, USER, f"u:{twice.undo_id}")
+    assert undone.text == texts.UNDONE
+    assert "молоко" not in bot.index.read(f"{texts.VAULT_TASKS_NOTE}.md")
+    # The grocery page did not exist before the first message: the fix made it, and Undo
+    # takes it to the trash with everything else.
+    assert not (bot.dir / f"{texts.VAULT_GROCERIES_NOTE}.md").exists()
+
+
+async def test_a_reply_to_an_expired_write_is_too_late_and_writes_nothing(staged_bot):
+    bot = staged_bot
+    _milk_task(bot.script)
+    first = await bot.orch.handle_text(CHAT, USER, "надо молоко")
+    bot.store.set_reply_message_id(first.undo_id, 5001)
+    bot.orch._clock = Clock(NOW + timedelta(minutes=6))
+
+    reply = await bot.orch.handle_text(CHAT, USER, "в продукты", reply_to=5001)
+
+    assert reply.text == texts.FIX_EXPIRED.format(minutes=5)
+    assert "FIX_PROMPT" not in bot.script.stages
+    assert "в продукты" not in bot.index.read(f"{texts.VAULT_TASKS_NOTE}.md")
+
+
+async def test_a_reply_to_a_message_that_reported_no_write_is_an_ordinary_message(staged_bot):
+    bot = staged_bot
+    _milk_task(bot.script)
+    reply = await bot.orch.handle_text(CHAT, USER, "надо молоко", reply_to=9999)
+    assert reply.text.startswith("✅ Obsidian —")
+    assert "FIX_PROMPT" not in bot.script.stages
+
+
+async def test_a_fix_the_model_cannot_place_changes_nothing_and_can_be_tried_again(staged_bot):
+    bot = staged_bot
+    _milk_task(bot.script)
+    first = await bot.orch.handle_text(CHAT, USER, "надо молоко")
+    bot.script.answers["FIX_PROMPT"] = {"changes": [], "add": [], "unclear": True}
+    await bot.orch.handle_callback(CHAT, USER, f"f:{first.undo_id}")
+
+    reply = await bot.orch.handle_text(CHAT, USER, "ну это")
+
+    assert reply.text == texts.FIX_FAILED.format(error=texts.FIX_UNCLEAR)
+    assert "- [ ] молоко" in bot.index.read(f"{texts.VAULT_TASKS_NOTE}.md")
+    assert (await bot.orch.handle_callback(CHAT, USER, f"f:{first.undo_id}")).text \
+        == texts.FIX_ASK
+
+
+async def test_cancel_forgets_a_fix_that_was_asked_for(staged_bot):
+    bot = staged_bot
+    _milk_task(bot.script)
+    first = await bot.orch.handle_text(CHAT, USER, "надо молоко")
+    await bot.orch.handle_callback(CHAT, USER, f"f:{first.undo_id}")
+    await bot.orch.cancel(CHAT)
+
+    bot.script.answers.update(TARGET_PROMPT={"target": "g"},
+                              GROCERY_PROMPT={"names": ["хлеб"]})
+    reply = await bot.orch.handle_text(CHAT, USER, "купить хлеб")
+    assert "FIX_PROMPT" not in bot.script.stages
+    assert reply.text.startswith("✅ Obsidian —")
+```
+
+In `tests/test_handlers.py`, change `FakeOrchestrator.handle_text` to accept and record `reply_to`:
+
+```python
+    async def handle_text(self, chat_id, user_id, text, *, kind="text", transcript=None,
+                          progress=None, reply_to=None):
+        self.progress = progress
+        self.reply_to = reply_to
+```
+
+(the rest of the method unchanged), and append:
+
+```python
+
+
+async def test_a_reply_to_one_of_the_bots_messages_names_that_message():
+    hs = build()
+    original = Message(message_id=4242, date=datetime.datetime.now(UTC), chat=_chat(),
+                       from_user=User(id=777, is_bot=True, first_name="bot"),
+                       text="✅ Obsidian — задача")
+    message = _bound(Message(message_id=9, date=datetime.datetime.now(UTC), chat=_chat(),
+                             from_user=_user(ALLOWED_USER), text="в продукты",
+                             reply_to_message=original), hs.bot)
+    update = Update(update_id=9, message=message)
+
+    assert await dispatch(hs.app, update, hs.context)
+    assert hs.orch.reply_to == 4242
+
+    plain = text_update(ALLOWED_USER, "купить хлеб", hs.bot, update_id=10)
+    assert await dispatch(hs.app, plain, hs.context)
+    assert hs.orch.reply_to is None
+```
+
+- [ ] **Step 2: Run them to see them fail**
+
+Run: `uv run pytest tests/test_vault_orchestrator.py tests/test_handlers.py -q`
+Expected: the new tests and the changed pin FAIL (`handle_text() got an unexpected keyword argument 'reply_to'`, no Fix button).
+
+- [ ] **Step 3: The orchestrator**
+
+In `app/conversation/orchestrator.py`, after `_undo_buttons` add:
+
+```python
+
+
+def _vault_buttons(execution_id: int) -> list[list[Button]]:
+    """Undo, and Fix: a vault-only write can be changed in part (app/vault/fix.py)."""
+    return [[Button(f"u:{execution_id}", texts.BTN_UNDO),
+             Button(f"f:{execution_id}", texts.BTN_FIX)]]
+```
+
+In `Orchestrator.__init__`, after `self._waiting: dict[int, int] = {}` add:
+
+```python
+        # Chats whose next message is a fix, after the Fix button: chat -> execution id. In
+        # memory on purpose: a restart forgets it, and pressing the button again costs nothing.
+        self._fixing: dict[int, int] = {}
+```
+
+Replace `handle_text` with:
+
+```python
+    async def handle_text(
+        self, chat_id: int, user_id: int, text: str, *, kind: str = "text",
+        transcript: str | None = None, progress: Callable[[Reply], Awaitable[None]] | None = None,
+        reply_to: int | None = None,
+    ) -> Reply:
+        """`reply_to` is the id of the bot's message this one replies to in Telegram, if any:
+        a reply to a write's message is a fix of that write."""
+        async with self._chat_lock(chat_id):
+            return await self._turn(chat_id, user_id, kind,
+                                    lambda t: self._message(t, text, reply_to),
+                                    progress=progress, raw_input=text, transcription=transcript)
+```
+
+Directly above `async def _text(` add:
+
+```python
+    async def _message(self, turn: _Turn, text: str, reply_to: int | None) -> Reply:
+        """A fix, when the Fix button was pressed or the message replies to a write's reply;
+        otherwise an ordinary message."""
+        execution_id = self._fixing.pop(turn.chat_id, None)
+        if execution_id is None and reply_to is not None:
+            row = self._store.execution_by_reply(turn.chat_id, reply_to)
+            execution_id = row["id"] if row is not None else None
+        if execution_id is not None:
+            return await self._fix(turn, text, execution_id)
+        return await self._text(turn, text)
+
+```
+
+In `_callback`, replace its first two lines and the `u` branch head:
+
+```python
+    async def _callback(self, turn: _Turn, data: str) -> Reply:
+        prefix, _, rest = data.partition(":")
+        if prefix == "u" and rest.isdigit():
+```
+
+with:
+
+```python
+    async def _callback(self, turn: _Turn, data: str) -> Reply:
+        prefix, _, rest = data.partition(":")
+        # Any button other than Fix means the chat has moved on from a fix it asked for.
+        self._fixing.pop(turn.chat_id, None)
+        if prefix == "f" and rest.isdigit():
+            return self._fix_ask(turn, int(rest))
+        if prefix == "u" and rest.isdigit():
+```
+
+Directly above `async def _undo(` add:
+
+```python
+    # ---- fixing part of a vault write -----------------------------------------------------
+
+    def _fixable(self, turn: _Turn, execution_id: int) -> tuple[dict, UndoRecord] | None:
+        """The row and its record, when that write can still be fixed: this chat's, within the
+        undo window, not undone, the vault's alone, and every write knowing what it did."""
+        row = self._store.get_execution(execution_id, turn.now)
+        if row is None or row["undone"] or row["chat_id"] != turn.chat_id:
+            return None
+        record = UndoRecord.model_validate_json(row["undo"])
+        if (record.kind != "vault" or not record.vault
+                or any(u.action is None for u in record.vault) or not self._vault_on()):
+            return None
+        return row, record
+
+    def _fix_too_late(self, turn: _Turn) -> Reply:
+        turn.audit(decision=_kind("FIX"), error="FIX_EXPIRED")
+        return Reply(texts.FIX_EXPIRED.format(minutes=max(1, self._s.undo_window_s // 60)))
+
+    def _fix_ask(self, turn: _Turn, execution_id: int) -> Reply:
+        if self._fixable(turn, execution_id) is None:
+            return self._fix_too_late(turn)
+        self._fixing[turn.chat_id] = execution_id
+        turn.audit(decision=_kind("FIX_ASK"))
+        return Reply(texts.FIX_ASK)
+
+    async def _fix(self, turn: _Turn, text: str, execution_id: int) -> Reply:
+        """Change part of what a turn wrote. The old row is done with once anything changed;
+        the new one carries the untouched writes and the new ones, so its Undo takes the whole
+        thing back to before the first message."""
+        found = self._fixable(turn, execution_id)
+        if found is None:
+            return self._fix_too_late(turn)
+        row, record = found
+        assert self._vault is not None
+        turn.audit(decision=_kind("FIX"))
+        turn.source_text = text
+        event = self._store.get_event(row["event_id"]) or {}
+        original = (event.get("raw_input") or event.get("transcription") or "").strip()
+        result = await self._vault.fix(original, text, record.vault)
+        if result.model:
+            turn.call(result.model, "fix", fixed=execution_id, writes=len(result.writes) or None,
+                      error=result.error or None, prompt_tokens=result.prompt_tokens,
+                      output_tokens=result.output_tokens)
+        line = result.reply_line()
+        if not result.applied:
+            return Reply(line)
+        self._store.mark_undone(execution_id)
+        undos = result.undos
+        if not undos:  # everything was dropped: nothing is left to take back
+            return Reply(line)
+        turn.execution_id = self._store.add_execution(
+            turn.event_id, turn.chat_id, None,
+            UndoRecord(kind="vault", vault=undos).model_dump_json(),
+            self._clock() + timedelta(seconds=self._s.undo_window_s))
+        return Reply(line, _vault_buttons(turn.execution_id), undo_id=turn.execution_id)
+
+```
+
+At the top of `_undo`'s body add `self._fixing.pop(turn.chat_id, None)`; at the top of `_cancel`'s body add the same line.
+
+In `_finish_vault`, in the branch from Part 1, Task 3, replace:
+
+```python
+                # Notion wrote nothing, or is switched off: the vault's write is the only
+                # thing to take back, and it gets the same button a Notion write has. A reply
+                # that already carries buttons is a question; /undo still reaches the row.
+                reply = replace(reply, buttons=_undo_buttons(turn.execution_id),
+                                undo_id=turn.execution_id)
+```
+
+with:
+
+```python
+                # Notion wrote nothing, or is switched off: the vault's write is the only
+                # thing to take back or fix, and it gets the buttons for both. A reply that
+                # already carries buttons is a question; /undo still reaches the row.
+                reply = replace(reply, buttons=_vault_buttons(turn.execution_id),
+                                undo_id=turn.execution_id)
+```
+
+- [ ] **Step 4: The handler**
+
+In `app/telegram/handlers.py`, directly above `async def _on_text(` add:
+
+```python
+def _replied_to(update: Update) -> int | None:
+    """The id of the message this one replies to: a reply to the bot's report of a write is a
+    fix of that write (the orchestrator decides which messages are such reports)."""
+    replied = update.message.reply_to_message if update.message is not None else None
+    return replied.message_id if replied is not None else None
+
+
+```
+
+In `_on_text`, change `progress=_progress(update, context),` to `progress=_progress(update, context), reply_to=_replied_to(update),`. In `_on_voice`, after `kind="voice", transcript=transcript, progress=_progress(update, context),` add a line `reply_to=_replied_to(update),`.
+
+- [ ] **Step 5: Run the suite**
+
+Run: `uv run pytest -q && uv run ruff check .`
+Expected: all pass.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add app/conversation/orchestrator.py app/telegram/handlers.py tests/test_vault_orchestrator.py tests/test_handlers.py
+git commit -m "feat: Поправить button and reply-to-fix for vault writes" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+---
+
+### Task 21: Documentation, the live check, and the merge
+
+**Files:**
+- Modify: `documentation/ARCHITECTURE.md` §14a (one paragraph after the Undo rules from Task 16)
+- Modify: `README.md` (one paragraph after the Undo paragraph from Task 16)
+- Create (scratchpad, not committed): `live_fix.py`
+
+- [ ] **Step 1: ARCHITECTURE.md**
+
+After the "**One lock, one text.**" bullet added in Task 16, add:
+
+```markdown
+* **A write can be fixed in part** (`app/vault/fix.py`, spec
+  `docs/superpowers/specs/2026-10-06-vault-fix-design.md`). Each `VaultUndo` keeps the action
+  it carried out. The **Поправить** button, or a Telegram reply to the write's message, makes
+  the next message a correction: one call to the filer model sees the written actions as keyed
+  lines, the place list and the correction, and answers drop / set / move / add. Values pass
+  the staged gate over the original message, the correction and the written words; a drop
+  needs a word of the user's that asks for it (`texts.FIX_DROP_WORDS`). Code takes back the
+  changed writes and writes the new ones as one step (`VaultWriter.replace_writes`, nothing
+  touched if a line was edited by hand), and the new row's Undo removes everything back to
+  before the first message. Fix and Undo share one window and one expiry.
+```
+
+- [ ] **Step 2: README.md**
+
+After the Undo paragraph (Task 16), add:
+
+```markdown
+Next to Undo, an Obsidian reply has **Поправить**: press it (or reply to the bot's message)
+and say what is wrong — «не в задачи, а в продукты», «на пятницу», «кефир не надо», «и ещё
+яйца». Only that part changes; one small model call, and Undo then takes the whole thing back.
+```
+
+- [ ] **Step 3: Run the suite and commit**
+
+Run: `uv run pytest -q && uv run ruff check .`
+Expected: all pass.
+
+```bash
+git add documentation/ARCHITECTURE.md README.md
+git commit -m "docs: fixing part of a vault write" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+- [ ] **Step 4: The live check**
+
+Write this script to your scratchpad directory (not the repo) and run it from the repo root with `uv run python <scratchpad>/live_fix.py`. It never touches the real vault (a temp copy) and never prints the key. Use the editor tool to create it, not a heredoc.
+
+```python
+"""Live check of the fix stage: real Haiku, a throwaway copy of the vault."""
+
+from __future__ import annotations
+
+import asyncio
+import shutil
+import sys
+import tempfile
+from datetime import datetime
+from pathlib import Path
+
+from pydantic import SecretStr
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app import texts
+from app.vault.index import VaultIndex
+from app.vault.pipeline import VaultPipeline
+from app.vault.staged import StagedFiler
+from app.vault.writer import VaultWriter
+
+SOURCE = Path("C:/data/obsidian")
+
+
+class Keys(BaseSettings):
+    model_config = SettingsConfigDict(env_file="C:/apps/ai_assistant/.env",
+                                      env_file_encoding="utf-8", extra="ignore")
+    anthropic_api_key: SecretStr = SecretStr("")
+
+
+CASES = [
+    ("надо купить молоко", "не в задачи, а в продукты"),
+    ("позвонить маме", "на пятницу"),
+    ("купить хлеб, кефир и сыр", "кефир не надо"),
+    ("купить хлеб", "и ещё яйца"),
+    ("надо прочитать Пикник на обочине", "это книга, добавь в книги"),
+    ("записаться к стоматологу", "не к стоматологу, а к окулисту"),
+    ("надо забрать посылку", "ну это"),
+]
+
+
+def lines_with(path: Path, word: str) -> list[str]:
+    if not path.exists():
+        return []
+    return [ln for ln in path.read_text(encoding="utf-8").splitlines()
+            if word.casefold() in ln.casefold()]
+
+
+async def main() -> None:
+    key = Keys().anthropic_api_key.get_secret_value()
+    if not key:
+        raise SystemExit("no key")
+    for first, correction in CASES:
+        root = Path(tempfile.mkdtemp()) / "vault"
+        shutil.copytree(SOURCE, root, ignore=shutil.ignore_patterns(
+            ".obsidian", ".trash", ".stversions", "Вложения"))
+        index = VaultIndex(root)
+        index.refresh()
+        filer = StagedFiler.claude(key, "claude-haiku-4-5", lookup_model="claude-sonnet-5")
+        pipe = VaultPipeline(index, VaultWriter(index), filer, now=datetime.now)
+        turn = await pipe.handle(first)
+        print(f"\n=== «{first}» → {turn.reply_line()}")
+        fixed = await pipe.fix(first, correction, turn.undos)
+        print(f"    «{correction}» → {fixed.reply_line()}  "
+              f"[{fixed.prompt_tokens}+{fixed.output_tokens} tok]")
+        for word in (first.split()[-1], correction.split()[-1]):
+            for name in (texts.VAULT_TASKS_NOTE, texts.VAULT_GROCERIES_NOTE):
+                for line in lines_with(root / f"{name}.md", word[:4]):
+                    print(f"      {name}: {line}")
+        for note in [n for n in index.notes if n.folder == "Книги" and "икник" in n.name]:
+            print(f"      Книги: {note.name} {note.props}")
+        await filer.aclose()
+        shutil.rmtree(root.parent, ignore_errors=True)
+
+
+if __name__ == "__main__":
+    sys.stdout.reconfigure(encoding="utf-8")
+    asyncio.run(main())
+```
+
+Cases and what each must show:
+
+| first message | correction | expected |
+|---|---|---|
+| надо купить молоко | не в задачи, а в продукты | молоко unticked in Продукты, not in Задачи |
+| позвонить маме | на пятницу | 📅 on Friday's date |
+| купить хлеб, кефир и сыр | кефир не надо | кефир back as it was; хлеб, сыр stay |
+| купить хлеб | и ещё яйца | яйца added, хлеб untouched |
+| надо прочитать Пикник на обочине | это книга, добавь в книги | a note in Книги, nothing in Задачи |
+| записаться к стоматологу | не к стоматологу, а к окулисту | the task's text changed |
+| надо забрать посылку | ну это | nothing changed, «не понял, что поправить» |
+
+Run it and report the table of results to the user. Any case that goes wrong is fixed and pinned with a test before the merge.
+
+- [ ] **Step 5: Merge and push**
+
+Merge `reliability-fixes` into `main` and push (standing instruction: finished green branches are merged and pushed without asking; the release is the user's).

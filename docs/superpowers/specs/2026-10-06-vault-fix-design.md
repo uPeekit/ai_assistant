@@ -74,9 +74,13 @@ string, to: enum(place keys)}`; `add`: list of strings; `unclear`: boolean.
   dropped, not guessed.
 - `set` changes one field of a copy of the action. `drop` removes it. `keep` (and every action
   not named) is left exactly as written — its file is not touched.
-- `move` between the simple places — task file, groceries, diary, inbox — carries the text
-  over, no further call. A move into a folder or onto a note runs that place's details stage
-  (`_add_notes` / `_append`) once, for that action's own words plus the correction.
+- `move` between the simple places — task file, groceries, diary, inbox — and onto an
+  existing note (appended at its end) carries the text over, no further call. A move into a
+  folder runs that folder's details stage (`_add_notes`) once, for that action's own words
+  plus the correction: a book note needs properties a task never had.
+- `drop` only when the correction has a word that asks for it («не», «нет», «без», «убери»,
+  «удали», «лишнее», «отмени» …, `texts.FIX_DROP_WORDS` / `FIX_DROP_STEMS`), whatever the model
+  answered. Found in the live check: «ну это» made Haiku drop the task it was shown.
 - `add` makes new actions of the same kind and place as the turn's first action (the staged
   reader files a message to one place).
 - A turn whose action was a `rewrite` or a `move` of a note is not patched: the correction goes
@@ -122,6 +126,14 @@ item per changed action, «молоко → продукты») with `[Отме�
 - The handler passes the replied-to message id; a message that is not a reply passes `None`.
 - Before merging: about six real corrections replayed on a copy of the vault with real Haiku
   (scratchpad script, as for the staged reader), results reported to the user.
+
+## Found while building it
+
+- The staged gate's `_close` let a one-letter word vouch for every word it begins («и» →
+  «икра»), for fresh messages too. Fixed in the same branch (plan Task 17).
+- Live check (2026-10-06, seven corrections, real Haiku, a copy of the vault): all seven right
+  after the drop guard; one call of about 1 550 prompt tokens per fix, about 4 000 when a move
+  into a folder asks that folder's question.
 
 ## Out of scope
 
