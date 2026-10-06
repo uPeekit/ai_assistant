@@ -543,7 +543,11 @@ class VaultPipeline:
             except Exception as e:  # never reaches the user: the note is already written
                 log.warning("linking %s failed: %s", write.note, type(e).__name__)
 
-    async def undo(self, undos: list[VaultUndo]) -> None:
-        """Put every file of one turn back, newest first."""
+    async def undo(self, undos: list[VaultUndo]) -> list[str]:
+        """Take every write of one turn back, newest first. Returns the notes that have
+        changed since in the lines the turn wrote: those are left as they are."""
+        left: list[str] = []
         for undo in reversed(undos):
-            await asyncio.to_thread(self._writer.undo, undo)
+            if not await asyncio.to_thread(self._writer.undo, undo):
+                left.append(PurePosixPath(undo.path).stem)
+        return left

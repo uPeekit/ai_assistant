@@ -1106,14 +1106,21 @@ class Orchestrator:
             log.warning("undo failed: %s", e)
             return self._plain(turn, "UNDO_FAILED", message=e.message)
         vault_undos = _vault_undos(record)
+        left: list[str] = []
         if vault_undos and self._vault is not None:
             try:
-                await self._vault.undo(vault_undos)
+                left = await self._vault.undo(vault_undos)
             except Exception:  # Notion is already back: say so rather than fail the undo
                 log.exception("undoing the vault side failed")
         self._store.mark_undone(row["id"])
         turn.audit(decision=_kind("UNDO"))
-        return Reply(texts.UNDONE)
+        if not left:
+            return Reply(texts.UNDONE)
+        # A note somebody changed since, in the lines this turn wrote, is left as it is.
+        notes = ", ".join(f"«{name}»" for name in dict.fromkeys(left))
+        kept = texts.VAULT_UNDO_LEFT.format(notes=notes)
+        undone_some = record.kind != "vault" or len(left) < len(vault_undos)
+        return Reply(f"{texts.UNDONE}\n{kept}" if undone_some else kept)
 
     async def _cancel(self, turn: _Turn) -> Reply:
         self._sessions.drop(turn.chat_id)

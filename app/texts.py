@@ -418,6 +418,8 @@ VAULT_WEB_OFF = "поиск в интернете не подключён, за�
 VAULT_WEB_FAILED = "в интернете ничего не нашлось, записал без найденного"
 VAULT_WEB_UNCLEAR = "поиску нужен запрос точнее, записал без найденного"
 VAULT_NOTHING_TO_MOVE = "не нашёл, что переносить — ничего не тронул"
+# Undo found the file changed since, in the very lines it would take back.
+VAULT_UNDO_LEFT = "↩️ Не отменил в {notes}: там с тех пор что-то изменили, и я не стал трогать."
 VAULT_MOVE_UNCLEAR = "не понял, какие строки переносить — ничего не тронул"
 VAULT_WHAT = {
     "task": "задача в «{note}»",

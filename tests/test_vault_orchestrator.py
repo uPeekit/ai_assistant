@@ -496,3 +496,36 @@ async def test_notion_off_the_pages_read_are_audited_too(bot, tmp_path):
     await bot.orch.handle_text(CHAT, USER, "https://www.kv.ee/1")
     (event,) = closed_events(bot, ["text"])
     assert json.loads(event["llm_context"])["links"][0]["title"] == "Korter"
+
+
+# ---- undo takes back one message, not the file ----------------------------------------------
+
+async def test_undo_of_the_first_of_two_messages_keeps_the_second(bot, tmp_path):
+    bot.orch._switches = Switches(tmp_path / "switches.json", {"notion": False})
+    bot.claude.answers = [
+        {"actions": [{"action": "task", "text": "лампочки", "heading": "дом"}]},
+        {"actions": [{"action": "task", "text": "позвонить маме", "heading": "дом"}]},
+    ]
+    first = await bot.orch.handle_text(CHAT, USER, "лампочки")
+    await bot.orch.handle_text(CHAT, USER, "позвонить маме")
+
+    undone = await bot.orch.handle_callback(CHAT, USER, f"u:{first.undo_id}")
+
+    assert undone.text == texts.UNDONE
+    tasks = bot.index.read(f"{texts.VAULT_TASKS_NOTE}.md")
+    assert "лампочки" not in tasks and "- [ ] позвонить маме" in tasks
+
+
+async def test_undo_says_so_when_the_line_was_changed_by_hand_since(bot, tmp_path):
+    bot.orch._switches = Switches(tmp_path / "switches.json", {"notion": False})
+    bot.claude.answers = [{"actions": [{"action": "task", "text": "лампочки",
+                                         "heading": "дом"}]}]
+    reply = await bot.orch.handle_text(CHAT, USER, "лампочки")
+    path = bot.dir / f"{texts.VAULT_TASKS_NOTE}.md"
+    edited = path.read_text(encoding="utf-8").replace("- [ ] лампочки", "- [x] лампочки")
+    path.write_text(edited, encoding="utf-8", newline="\n")
+
+    undone = await bot.orch.handle_callback(CHAT, USER, f"u:{reply.undo_id}")
+
+    assert undone.text == texts.VAULT_UNDO_LEFT.format(notes=f"«{texts.VAULT_TASKS_NOTE}»")
+    assert path.read_text(encoding="utf-8") == edited
