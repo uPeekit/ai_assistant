@@ -29,6 +29,7 @@ Principle: clarification is not an error. Errors below are things the pipeline c
 | `REWRITE_NOTHING` | llm/edits | the model read the page and found nothing the instruction applies to | Не нашёл на «…», что именно поправить | nothing written |
 | `REWRITE_UNAVAILABLE` | commands/executor | no rewriter (no Anthropic key, or cloud off) | Переписать текст сейчас не могу | none |
 | `REWRITE_FAILED` | llm/rewrite | Claude refused, answered nothing, or was cut off | Не удалось переписать текст (…) | the page is untouched; the credit/key warning is appended once an hour |
+| `REWRITE_TOO_LONG` | llm/edits, llm/rewrite | the page (or the vault note) holds more than `MAX_INPUT` characters; it used to be cut and the answer written back over the whole | «…» слишком длинная, чтобы менять её за один раз | nothing written; name a section instead |
 | `INTERNAL` | conversation/orchestrator | unexpected exception on any path (the orchestrator never raises to the transport) | Не удалось обработать сообщение. | audit error, log exception |
 | `CONFIG_INVALID` | config | missing env / bad value | process exits with message | fix `.env` |
 | `INBOX_SAVED` | conversation/orchestrator (`_to_inbox`) | the inbox fallback wrote successfully | Сохранил в «{target}»: {url} | informational only — not an `events.error` value; the reply carries an Undo button like any other write |

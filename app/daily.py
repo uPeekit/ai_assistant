@@ -8,10 +8,12 @@ one."""
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from datetime import datetime, time, timedelta
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 log = logging.getLogger(__name__)
@@ -23,6 +25,43 @@ GRACE = timedelta(hours=2)
 # The shortest wait worth handing to asyncio: anything below a clock tick may return at once,
 # which would spin the loop until the tick passes. Sending 50 ms late costs nothing.
 MIN_SLEEP_S = 0.05
+# How long a wait goes before the schedule is read again: a time moved on the admin page is
+# honoured within this, instead of after the old time has fired.
+RECHECK_S = 60.0
+
+
+class LastRun:
+    """When a message last went out, kept in a small JSON file under one key per message, so
+    a restart inside the grace period does not send the morning agenda a second time."""
+
+    def __init__(self, path: Path, key: str) -> None:
+        self._path = path
+        self._key = key
+
+    def _all(self) -> dict:
+        try:
+            data = json.loads(self._path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def get(self) -> datetime | None:
+        value = self._all().get(self._key)
+        try:
+            when = datetime.fromisoformat(value) if isinstance(value, str) else None
+        except ValueError:
+            return None
+        # A time without an offset (a hand-edited file) cannot be compared with the aware
+        # schedule: treated as never run rather than killing it.
+        return when if when is not None and when.tzinfo is not None else None
+
+    def set(self, when: datetime) -> None:
+        data = {**self._all(), self._key: when.isoformat()}
+        try:
+            self._path.write_text(json.dumps(data, ensure_ascii=False, indent=2),
+                                  encoding="utf-8")
+        except OSError as e:  # a digest that cannot be remembered is still sent
+            log.warning("could not remember the last %s run: %s", self._key, e)
 
 
 def parse_at(value: str) -> time | None:
@@ -51,9 +90,11 @@ class DailyMessage:
     def __init__(self, send: Callable[[], Awaitable[object]],
                  at: time | tuple[time, ...] | Callable[[], tuple[time, ...]],
                  tz: str, *, now: Callable[[], datetime] | None = None,
-                 sleep: Callable[[float], Awaitable[object]] = asyncio.sleep) -> None:
+                 sleep: Callable[[float], Awaitable[object]] = asyncio.sleep,
+                 remember: LastRun | None = None) -> None:
         self._send = send
         self._sleep = sleep
+        self._remember = remember
         # A callable is re-read before every wait, so changing the times on the admin page
         # takes effect without a restart.
         if callable(at):
@@ -101,23 +142,42 @@ class DailyMessage:
         passed = [now.astimezone(self._zone).replace(hour=t.hour, minute=t.minute, second=0,
                                                       microsecond=0) for t in self._times]
         previous = max([p for p in passed if p <= now], default=min(passed) - timedelta(days=1))
-        if now - previous < GRACE:
-            await self._fire()
+        if now - previous < GRACE and not self._sent_already(previous):
+            await self._fire(previous)
         while True:
-            await self._until(self.next_run(self._now()))
-            await self._fire()
+            await self._fire(await self._wait())
 
-    async def _until(self, due: datetime) -> None:
-        """Sleep until the wall clock has really reached `due`.
+    def _sent_already(self, due: datetime) -> bool:
+        """Did this run go out before the restart? Without the memory a bot updated at 09:30
+        sent the morning agenda again."""
+        last = self._remember.get() if self._remember is not None else None
+        return last is not None and last >= due
 
-        asyncio's timers run on the monotonic clock and may fire up to a clock tick early —
-        about 16 ms on Windows. Waking at 08:59:59.985 and then asking for the next run gave
-        09:00 *today* again, and the morning digest went out twice, a second apart."""
-        while (left := (due - self._now()).total_seconds()) > 0:
-            await self._sleep(max(left, MIN_SLEEP_S))
+    async def _wait(self) -> datetime:
+        """Sleep until the next due time, and return it.
 
-    async def _fire(self) -> None:
+        The schedule is read again every RECHECK_S, from the moment the wait began: a time
+        moved on the admin page is honoured then, not after the old one has fired. And the
+        wall clock has to have really reached the time: asyncio's timers run on the monotonic
+        clock and may fire up to a clock tick early — about 16 ms on Windows. Waking at
+        08:59:59.985 and then asking for the next run gave 09:00 *today* again, and the
+        morning digest went out twice, a second apart."""
+        start = self._now()
+        while True:
+            due = self.next_run(start)
+            left = (due - self._now()).total_seconds()
+            if left <= 0:
+                if self._now() - due < GRACE:
+                    return due
+                start = self._now()  # moved to a time long past: that one is not sent
+                continue
+            await self._sleep(min(max(left, MIN_SLEEP_S), RECHECK_S))
+
+    async def _fire(self, due: datetime) -> None:
         try:
             await self._send()
         except Exception:  # a failed digest must never stop the schedule
             log.exception("daily message failed")
+            return
+        if self._remember is not None:
+            self._remember.set(due)

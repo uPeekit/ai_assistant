@@ -10,6 +10,7 @@ It runs after the reply has gone out, so it never makes the chat slower."""
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -129,14 +130,25 @@ class Linker:
             text = self._writer.read(write.path)
         except OSError:
             return 0
-        props, body = split(text)
+        _, body = split(text)
         pairs = obvious_links(body, self._index, exclude=write.note)
         pairs += await self._model_links(body, write.note, [p for p, _ in pairs])
-        linked = apply_links(body, pairs)
-        if linked == body:
+        if not pairs:
             return 0
-        added = linked.count("[[") - body.count("[[")
-        self._writer.replace(write.path, text.replace(body, linked, 1))
+        added = 0
+
+        def relink(current: str) -> str:
+            # The text as it is now, not as it was before the model was asked: an Undo or the
+            # next message may have changed the note in those seconds, and writing the old
+            # text back would undo the undo or drop that message's line.
+            nonlocal added
+            _, now_body = split(current)
+            linked = apply_links(now_body, pairs)
+            added = linked.count("[[") - now_body.count("[[")
+            return current.replace(now_body, linked, 1) if linked != now_body else current
+
+        if not await asyncio.to_thread(self._writer.amend, write.path, relink):
+            return 0
         log.info("linker added %d link(s) to %s", added, write.note)
         return added
 

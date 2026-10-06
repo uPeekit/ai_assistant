@@ -56,6 +56,22 @@ def _loopback_host(host_header: str | None) -> bool:
     return host in _LOOPBACK_HOSTS
 
 
+def _own_page(headers) -> bool:
+    """Is this POST the admin page's own? Binding to loopback keeps other machines out, but a
+    page on any other site can have the user's own browser send a POST here, and the socket
+    would not know the difference. Two things tell it apart: the page sends JSON — a content
+    type another origin can only send after a CORS preflight this server never answers — and a
+    browser names the origin a cross-site request comes from."""
+    ctype = (headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+    if ctype != "application/json":
+        return False
+    origin = headers.get("Origin")
+    if origin is None:
+        return True  # not a browser's cross-site request
+    netloc = origin.split("://", 1)[-1].split("/", 1)[0]
+    return _loopback_host(netloc)
+
+
 def _targets_payload(
     discovery: Discovery, descriptions: Descriptions, *, inbox_target_id: str,
 ) -> dict[str, Any]:
@@ -325,6 +341,11 @@ class _Handler(BaseHTTPRequestHandler):
             else:
                 self._drop_body()  # a header we would not read from is dropped the other way
             self._send_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
+            return
+        if not _own_page(self.headers):
+            log.warning("rejected POST /api/descriptions: not from the admin page")
+            self._drop_body()
+            self._send_json(HTTPStatus.FORBIDDEN, {"error": "forbidden_origin"})
             return
         length = _parse_content_length(self.headers.get("Content-Length"))
         if length is None:

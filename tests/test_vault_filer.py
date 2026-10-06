@@ -171,10 +171,29 @@ async def test_pipeline_keeps_the_words_when_the_model_answers_nothing(index):
     assert "какая-то мысль" in index.read(f"{texts.VAULT_INBOX_NOTE}.md")
 
 
-async def test_pipeline_survives_a_model_that_is_down(index):
+async def test_a_model_that_is_down_costs_the_filing_not_the_words(index):
+    """With Notion off nothing else would have kept the message: it goes to the inbox note as
+    it is, and the reply says both that it is saved and why it was not filed."""
     error = anthropic.APIError("down", request=None, body=None)  # type: ignore[arg-type]
-    turn = await pipeline(index, error).handle("зубы")
+    turn = await pipeline(index, error).handle("записаться к зубному")
+    assert [w.kind for w in turn.writes] == ["kept"] and turn.error
+    assert "- записаться к зубному" in index.read(f"{texts.VAULT_INBOX_NOTE}.md")
+    line = turn.reply_line()
+    assert line.startswith(texts.VAULT_REPLY.split("{")[0])
+    assert texts.VAULT_WHAT["kept"].format(note=texts.VAULT_INBOX_NOTE) in line
+    assert len(turn.undos) == 1  # and it can be taken back like any other write
+
+
+async def test_a_held_back_turn_keeps_nothing_when_the_model_is_down(index):
+    """The gate still decides: a turn the orchestrator held back writes nothing at all."""
+    error = anthropic.APIError("down", request=None, body=None)  # type: ignore[arg-type]
+
+    async def no() -> bool:
+        return False
+
+    turn = await pipeline(index, error).handle("зубы", go=no)
     assert turn.writes == [] and turn.error
+    assert index.by_name(texts.VAULT_INBOX_NOTE) is None
     assert texts.VAULT_FAILED.split("{")[0] in turn.reply_line()
 
 
@@ -224,3 +243,112 @@ async def test_linker_leaves_the_task_and_inbox_notes_alone(index):
                                     heading="дом"))
     assert await linker.link(write) == 0
     assert "[[" not in index.read(write.path)
+
+
+# ---- one write failing does not hide the others ---------------------------------------------
+
+async def test_a_write_that_fails_does_not_cost_the_others_their_undo(index):
+    pipe = pipeline(index, {"actions": [
+        {"action": "task", "text": "первое", "heading": "дом"},
+        {"action": "log", "text": "второе"},
+        {"action": "task", "text": "третье", "heading": "дом"},
+    ]})
+    real = pipe._writer.run
+
+    def flaky(action):
+        if action.action == "log":
+            raise OSError("disk says no")
+        return real(action)
+
+    pipe._writer.run = flaky
+    turn = await pipe.handle("первое, второе, третье")
+
+    assert [w.kind for w in turn.writes] == ["task", "task"]
+    assert len(turn.undos) == 2
+    line = turn.reply_line()
+    assert line.startswith(texts.VAULT_REPLY.split("{")[0])
+    assert texts.VAULT_SOME_FAILED.format(n=1) in line
+    tasks = index.read(f"{texts.VAULT_TASKS_NOTE}.md")
+    assert "первое" in tasks and "третье" in tasks
+
+
+async def test_when_every_write_fails_the_reply_says_not_written(index):
+    pipe = pipeline(index, {"actions": [{"action": "task", "text": "зубы", "heading": "дом"}]})
+
+    def broken(action):
+        raise OSError("disk says no")
+
+    pipe._writer.run = broken
+    turn = await pipe.handle("зубы")
+    assert turn.writes == [] and turn.error == "OSError"
+    assert texts.VAULT_FAILED.split("{")[0] in turn.reply_line()
+
+
+async def test_a_failed_write_is_said_next_to_a_remark_already_made(index):
+    pipe = pipeline(index, {"actions": [
+        {"action": "note", "title": "борщ", "folder": "Заметки", "research": "рецепт борща"},
+        {"action": "log", "text": "второе"},
+    ]})
+    real = pipe._writer.run
+
+    def flaky(action):
+        if action.action == "log":
+            raise OSError("disk says no")
+        return real(action)
+
+    pipe._writer.run = flaky
+    turn = await pipe.handle("первое и второе")
+    line = turn.reply_line()
+    assert texts.VAULT_WEB_OFF in line
+    assert texts.VAULT_SOME_FAILED.format(n=1) in line
+
+
+# ---- the linker writes from the text as it is now --------------------------------------------
+
+class _Meanwhile(FakeAnthropic):
+    """A model call during which something else happens to the vault."""
+
+    def __init__(self, meanwhile, *answers) -> None:
+        super().__init__(*answers)
+        self._meanwhile = meanwhile
+
+    async def create(self, **kwargs):
+        self._meanwhile()
+        return await super().create(**kwargs)
+
+
+async def test_the_linker_keeps_a_line_written_while_the_model_was_thinking(index):
+    writer = VaultWriter(index, now=lambda: NOW)
+    write = writer.run(VaultAction(action="note", folder=texts.VAULT_NOTES_DIR, title="Мысль",
+                                   body=["перечитать Пелевина"]))
+
+    def next_message() -> None:
+        writer.run(VaultAction(action="append", note="Мысль", body=["и Сорокина тоже"]))
+
+    client = _Meanwhile(next_message,
+                        {"links": [{"phrase": "Пелевина", "note": "Чапаев и Пустота"}]})
+    assert await Linker(index, writer, model="m", client=client).link(write) == 1
+    text = index.read(write.path)
+    assert "[[Чапаев и Пустота|Пелевина]]" in text and "и Сорокина тоже" in text
+
+
+async def test_the_linker_does_not_bring_back_a_note_that_was_undone_meanwhile(index, tmp_path):
+    writer = VaultWriter(index, now=lambda: NOW)
+    write = writer.run(VaultAction(action="note", folder=texts.VAULT_NOTES_DIR, title="Мысль",
+                                   body=["перечитать Пелевина"]))
+    client = _Meanwhile(lambda: writer.undo(write.undo),
+                        {"links": [{"phrase": "Пелевина", "note": "Чапаев и Пустота"}]})
+    assert await Linker(index, writer, model="m", client=client).link(write) == 0
+    assert not (tmp_path / write.path).exists()
+
+
+async def test_a_linked_note_can_still_be_undone(index, tmp_path):
+    before = index.read(f"{texts.VAULT_AREAS_DIR}/дом.md")
+    writer = VaultWriter(index, now=lambda: NOW)
+    write = writer.run(VaultAction(action="append", note="дом",
+                                   body=["перечитать Чапаев и Пустота"]))
+    linker = Linker(index, writer, model="m", client=FakeAnthropic({"links": []}))
+    assert await linker.link(write) == 1  # the name is in the text: no model needed
+    assert "[[Чапаев и Пустота]]" in index.read(write.path)
+    assert writer.undo(write.undo) is True
+    assert index.read(write.path) == before

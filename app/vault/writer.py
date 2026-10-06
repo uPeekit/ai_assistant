@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path, PurePosixPath
@@ -15,7 +16,7 @@ from pathlib import Path, PurePosixPath
 from pydantic import BaseModel, ConfigDict
 
 from app import texts
-from app.vault import frontmatter, groceries, mdedit
+from app.vault import frontmatter, groceries, mdedit, revert
 from app.vault.frontmatter import render
 from app.vault.index import SKIP_DIRS, VaultIndex
 from app.vault.names import safe_name, unique
@@ -59,11 +60,19 @@ class VaultAction(BaseModel):
 
 
 class VaultUndo(BaseModel):
-    """How to put one file back. `previous` is None when the file did not exist before."""
+    """How to take one write back. `previous` is None when the file did not exist before.
+
+    `written` is the text the write left behind: with both, undo removes that one change from
+    whatever the file holds by then (app/vault/revert.py) instead of putting the whole old
+    text back over it. None on a record made before 0.6.18, which is undone the old way."""
 
     model_config = ConfigDict(extra="forbid")
     path: str
     previous: str | None = None
+    written: str | None = None
+    # What the write did, as a VaultAction dump, so a later message can fix part of it
+    # (app/vault/fix.py) without the model reading the message again. None on old records.
+    action: dict | None = None
 
 
 class VaultWrite(BaseModel):
@@ -95,6 +104,16 @@ def task_line(action: VaultAction, countdown_tag: str) -> str:
     return f"- [{mark}] " + " ".join(p for p in parts if p)
 
 
+def _as_written(action: VaultAction, write: VaultWrite) -> VaultAction:
+    """The action the write really carried out. A note that was not there turns an append or
+    an update into an inbox line; a fix must see that line, not the append that never
+    happened."""
+    if write.kind.split("_")[0] == action.action:
+        return action
+    words = action.text or action.title or " ".join(action.body)
+    return VaultAction(action="inbox", text=words.strip()[:MAX_LINE])
+
+
 class VaultWriter:
     def __init__(self, index: VaultIndex, *, countdown_tag: str = texts.VAULT_COUNTDOWN_TAG,
                  now: callable = datetime.now,
@@ -103,6 +122,11 @@ class VaultWriter:
         self._root = index.root
         self._tag_source = tag_source or (lambda: countdown_tag)
         self._now = now
+        # Every change to a file is read, compute, write. Writes run in worker threads and the
+        # linker amends a note behind the reply, so two of them on one file would each write
+        # back a text that lacks the other's line. One lock for the vault: a write is
+        # milliseconds, and there is one user.
+        self._lock = threading.RLock()
 
     # ---- files -----------------------------------------------------------------------
 
@@ -131,27 +155,51 @@ class VaultWriter:
         tmp.write_text(text, encoding="utf-8", newline="\n")
         os.replace(tmp, path)
         self._index.note_changed(rel)
-        return VaultUndo(path=rel, previous=previous)
+        return VaultUndo(path=rel, previous=previous, written=text)
 
     def read(self, rel: str) -> str:
         return self._path(rel).read_text(encoding="utf-8")
 
-    def replace(self, rel: str, text: str) -> None:
-        """Rewrite a note the bot itself has just written (the linker's second pass). The undo
-        record of the write that created it still points at the text from before it, so Undo
-        takes the links away with the write they belong to."""
-        self._write(rel, text, None)
+    def amend(self, rel: str, change: Callable[[str], str]) -> bool:
+        """Change a note the bot has just written (the linker's pass), starting from the text
+        it holds *now*: the model call that decided the change took seconds, and an Undo or the
+        next message may have rewritten the file meanwhile. False when the note is gone or
+        `change` leaves it as it is. Undo still takes the write's own lines out afterwards
+        (app/vault/revert.py reads through the links)."""
+        with self._lock:
+            current = self._read(rel)
+            if current is None:
+                return False
+            text = change(current)
+            if text == current:
+                return False
+            self._write(rel, text, None)
+            return True
 
-    def undo(self, undo: VaultUndo) -> None:
-        path = self._path(undo.path)
-        if undo.previous is None:
-            if path.exists():
+    def undo(self, undo: VaultUndo) -> bool:
+        """Take one write back. False when the file has changed since in the very lines the
+        write touched: it is then left exactly as it is, and the caller says so."""
+        with self._lock:
+            path = self._path(undo.path)
+            current = self._read(undo.path)
+            if current is None:
+                # Already gone: undone before, or deleted by hand. A file the write only
+                # changed is not brought back from nothing — somebody removed it on purpose.
+                return undo.previous is None
+            if undo.written is None:  # a record from before 0.6.18
+                restored: str | None = undo.previous or ""
+            else:
+                restored = revert.take_back(undo.previous or "", undo.written, current)
+            if restored is None:
+                return False
+            if undo.previous is None and not restored.strip():
                 trash = self._path(f"{TRASH_DIR}/{PurePosixPath(undo.path).name}")
                 trash.parent.mkdir(parents=True, exist_ok=True)
                 os.replace(path, self._unused(trash))
-        else:
-            self._write(undo.path, undo.previous, None)
-        self._index.note_changed(undo.path)
+                self._index.note_changed(undo.path)
+            else:
+                self._write(undo.path, restored, None)
+            return True
 
     @staticmethod
     def _unused(path: Path) -> Path:
@@ -163,7 +211,60 @@ class VaultWriter:
 
     # ---- actions ---------------------------------------------------------------------
 
+    def replace_writes(self, old: list[VaultUndo], new: list[VaultAction]
+                       ) -> tuple[list[VaultWrite], list[int], list[str], list[str]]:
+        """Take `old` writes back and write `new` in their place, as one step: a fix.
+
+        First a dry run of every take-back on the files as they are now. If any write's lines
+        were changed by hand since, nothing at all is touched and their notes are returned —
+        half a fix would leave the old and the new side by side. Returns (writes, failed,
+        left, stuck): the new writes, the index into `new` of each action that could not be
+        written, the notes left alone, and the notes whose take-back could not be written (a
+        file held by another program). The new actions are written even then: a line twice
+        beats a line lost."""
+        with self._lock:
+            now: dict[str, str | None] = {}
+            left: list[str] = []
+            for undo in reversed(old):
+                current = now[undo.path] if undo.path in now else self._read(undo.path)
+                if current is None:
+                    if undo.previous is not None:
+                        left.append(PurePosixPath(undo.path).stem)
+                    continue
+                if undo.written is None:
+                    restored: str | None = undo.previous or ""
+                else:
+                    restored = revert.take_back(undo.previous or "", undo.written, current)
+                if restored is None:
+                    left.append(PurePosixPath(undo.path).stem)
+                now[undo.path] = restored
+            if left:
+                return [], [], list(dict.fromkeys(left)), []
+            stuck: list[str] = []
+            for undo in reversed(old):
+                try:
+                    self.undo(undo)
+                except (OSError, ValueError) as e:
+                    log.warning("fix take-back failed: %s", type(e).__name__)
+                    stuck.append(PurePosixPath(undo.path).stem)
+            writes: list[VaultWrite] = []
+            failed: list[int] = []
+            for i, action in enumerate(new):
+                try:
+                    writes.append(self.run(action))
+                except (OSError, ValueError) as e:
+                    log.warning("fix write failed (%s): %s", action.action, e)
+                    failed.append(i)
+            return writes, failed, [], list(dict.fromkeys(stuck))
+
     def run(self, action: VaultAction) -> VaultWrite:
+        with self._lock:
+            write = self._run(action)
+        if write.undo is not None:
+            write.undo.action = _as_written(action, write).model_dump(exclude_defaults=True)
+        return write
+
+    def _run(self, action: VaultAction) -> VaultWrite:
         handler = {
             "task": self._task, "note": self._note, "append": self._append,
             "update": self._update, "rewrite": self._rewrite, "log": self._log,

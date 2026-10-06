@@ -570,3 +570,29 @@ def test_every_element_the_script_reaches_for_exists_in_the_markup():
         assert names is not None, prefix
         for name in re.findall(r'"([\w_]+)"', names.group(0)):
             assert prefix + name in declared, prefix + name
+
+
+def _post_as(server, headers: dict, payload: dict):
+    conn = http.client.HTTPConnection("127.0.0.1", server.port, timeout=5)
+    try:
+        conn.request("POST", "/api/descriptions", body=json.dumps(payload).encode(),
+                     headers={"Host": "127.0.0.1", **headers})
+        resp = conn.getresponse()
+        return resp.status, json.loads(resp.read() or b"{}")
+    finally:
+        conn.close()
+
+
+def test_a_post_from_another_site_is_refused(server, descriptions):
+    """Loopback keeps other machines out, not other *pages*: a site open in the user's own
+    browser could POST here and flip the switches or rewrite the research instructions. The
+    page sends JSON, which a foreign origin cannot send without a preflight this server
+    does not answer; anything else, or a foreign Origin, is refused before it is read."""
+    payload = {"targets": {}}
+    assert _post_as(server, {"Content-Type": "text/plain"}, payload)[0] == 403
+    assert _post_as(server, {"Content-Type": "application/json",
+                             "Origin": "https://evil.example"}, payload)[0] == 403
+    assert _post_as(server, {"Content-Type": "application/json",
+                             "Origin": f"http://127.0.0.1:{server.port}"}, payload)[0] == 200
+    assert _post_as(server, {"Content-Type": "application/json; charset=utf-8"},
+                    payload)[0] == 200

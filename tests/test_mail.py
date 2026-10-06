@@ -354,3 +354,22 @@ async def test_a_classifier_that_never_answered_keeps_the_mail_for_the_next_run(
     assert "connection refused" in digest(run, BUCKETS)  # the user hears why
     await svc.run()
     assert box.asked == [None, None]  # the same mail is asked for again
+
+
+def test_unread_mail_past_the_cap_waits_for_the_next_run_instead_of_vanishing(monkeypatch):
+    """Forty-one unread letters and a cap of forty: the digest took the newest forty and moved
+    the bookmark past all of them, so the one left over was never in any digest."""
+    from app.mail.imap import GmailIMAP
+
+    box = FakeBox({u: (raw(f"S{u} <s@x.ee>", f"letter {u}", "t"), False)
+                   for u in range(10, 15)})
+    imap = GmailIMAP("me@x.ee", "pw")
+    monkeypatch.setattr(imap, "_open", lambda: box)
+
+    messages, newest, _ = imap.fetch_since(None, limit=3)
+    assert [m.subject for m in messages] == ["letter 10", "letter 11", "letter 12"]
+    assert newest == "12"
+
+    messages, newest, _ = imap.fetch_since(newest, limit=3)
+    assert [m.subject for m in messages] == ["letter 13", "letter 14"]
+    assert newest == "14"

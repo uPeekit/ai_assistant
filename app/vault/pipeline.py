@@ -19,10 +19,13 @@ from pathlib import PurePosixPath
 
 from app import texts
 from app.llm.edits import EditError, Editor, NothingToChange
+from app.llm.edits import TooLong as EditTooLong
 from app.llm.prompts import MOVE_INSTRUCTION
 from app.llm.research import ResearchError, ResearchQuestion
 from app.llm.rewrite import RewriteError, Rewriter
+from app.llm.rewrite import TooLong as RewriteTooLong
 from app.vault import agenda as agenda_mod
+from app.vault import fix as fixing
 from app.vault import frontmatter, mdedit
 from app.vault.filer import GROCERY_LIST, Filer, FilerError, check, context, doubtful
 from app.vault.index import VaultIndex
@@ -108,8 +111,8 @@ class VaultTurn:
         return [w.undo for w in self.writes if w.undo is not None]
 
     def reply_line(self) -> str:
-        if self.error:
-            why = texts.LLM_DOWN_SHORT.get(self.reason) or self.error
+        why = (texts.LLM_DOWN_SHORT.get(self.reason) or self.error) if self.error else ""
+        if why and not self.writes:
             return texts.VAULT_FAILED.format(error=why)
         if self.answer and not self.writes:
             return self.answer
@@ -120,8 +123,11 @@ class VaultTurn:
         what = ", ".join(w.what for w in self.writes[:MAX_SUMMARY])
         if len(self.writes) > MAX_SUMMARY:
             what += f" (+{len(self.writes) - MAX_SUMMARY})"
-        if self.remark:
-            what += f" — {self.remark}"
+        # What was written is said even when something else went wrong: those files are on
+        # disk and Undo reaches them, so a bare "not written" would be untrue twice over.
+        notes = "; ".join(n for n in (self.remark, why) if n)
+        if notes:
+            what += f" — {notes}"
         line = texts.VAULT_REPLY.format(what=what)
         if self.answer:
             return f"{line}\n{self.answer}"
@@ -141,6 +147,40 @@ class VaultTurn:
             lines.append(texts.VAULT_SEARCH_HIT.format(
                 name=name, line=f" — {hit.line}" if hit.line else ""))
         return "\n".join(lines)
+
+
+@dataclass
+class FixTurn:
+    """What a fix did: the writes it made, the turn's writes it left as they were, and the
+    phrases the reply is made of."""
+
+    writes: list[VaultWrite] = field(default_factory=list)
+    kept: list[VaultUndo] = field(default_factory=list)
+    said: list[str] = field(default_factory=list)
+    # Something was actually changed on disk: the old row is done with.
+    applied: bool = False
+    error: str = ""
+    reason: str = ""
+    left: list[str] = field(default_factory=list)
+    model: str = ""
+    prompt_tokens: int = 0
+    output_tokens: int = 0
+
+    @property
+    def undos(self) -> list[VaultUndo]:
+        return [*self.kept, *(w.undo for w in self.writes if w.undo is not None)]
+
+    def reply_line(self) -> str:
+        if self.left:
+            notes = ", ".join(f"«{name}»" for name in self.left)
+            return texts.VAULT_UNDO_LEFT.format(notes=notes)
+        if not self.applied:
+            why = texts.LLM_DOWN_SHORT.get(self.reason) or self.error or texts.FIX_UNCLEAR
+            return texts.FIX_FAILED.format(error=why)
+        what = "; ".join(self.said) or ", ".join(w.what for w in self.writes)
+        if self.error:
+            what += f" — {self.error}"
+        return texts.FIX_DONE.format(what=what)
 
 
 class VaultPipeline:
@@ -203,7 +243,7 @@ class VaultPipeline:
             raw, prompt_tokens, output_tokens = await self._filer.file(message, ctx)
         except FilerError as e:
             log.warning("filer failed: %s", e)
-            return VaultTurn(error=str(e), reason=e.reason, model=self._filer.model)
+            return await self._kept(message, e, go)
         except OSError as e:
             log.warning("vault unreadable: %s", e)
             return VaultTurn(error=type(e).__name__)
@@ -276,12 +316,13 @@ class VaultPipeline:
             turn.hits += await asyncio.to_thread(
                 search, self._index, question.text, folder=question.folder,
                 tags=tuple(question.tags), props=question.props)
-        try:
-            turn.writes = await asyncio.to_thread(self._write_all, actions)
-        except (OSError, ValueError) as e:
-            log.warning("vault write failed: %s", e)
-            turn.error = type(e).__name__
+        turn.writes, failed = await asyncio.to_thread(self._write_all, actions)
+        if failed and not turn.writes:
+            turn.error = turn.error or failed[0]
             return turn
+        if failed:
+            turn.remark = "; ".join(
+                r for r in (turn.remark, texts.VAULT_SOME_FAILED.format(n=len(failed))) if r)
         log.info("vault %s: %s", model,
                  ", ".join([*(f"{w.kind}:{w.note}" for w in turn.writes),
                             *([f"search:{len(turn.hits)} hits"] if turn.asked else []),
@@ -290,6 +331,91 @@ class VaultPipeline:
                             *([f"answered:{len(turn.answer.splitlines())} lines"]
                               if turn.answer else [])]) or "-")
         self._link_later(turn.writes)
+        return turn
+
+    async def fix(self, original: str, correction: str,
+                  undos: list[VaultUndo]) -> FixTurn:
+        """Change part of what one turn wrote (app/vault/fix.py). `undos` are that turn's
+        writes, each carrying the action it did. Never raises, never asks."""
+        turn = FixTurn(model=self._filer.model)
+        fix = getattr(self._filer, "fix", None)
+        previous = [VaultAction(**u.action) for u in undos if u.action is not None]
+        if fix is None or len(previous) != len(undos) or not previous:
+            turn.error = texts.FIX_UNCLEAR
+            return turn
+        try:
+            await asyncio.to_thread(self._index.refresh)
+            ctx = context(self._index, f"{original}\n{correction}", self._now())
+            plan, turn.prompt_tokens, turn.output_tokens = await fix(
+                original, correction, previous, ctx)
+        except FilerError as e:
+            log.warning("fix failed: %s", e)
+            turn.error, turn.reason = str(e), e.reason
+            return turn
+        except OSError as e:
+            log.warning("vault unreadable: %s", e)
+            turn.error = type(e).__name__
+            return turn
+        if plan.unclear:
+            if plan.said:  # e.g. the one move that could not be done: name it
+                turn.error = "; ".join(plan.said)
+            return turn
+        # What the fix writes is checked like any answer; a web search is not part of a fix.
+        actions = [a.model_copy(update={"research": "", "media": ""})
+                   for a in check(plan.write, self._index, correction, regroup=False)]
+        scratch = VaultTurn()
+        prepared: list[VaultAction] = []
+        for action in actions:
+            if action.action == "rewrite":
+                rewritten = await self._rewritten(action, scratch)
+                prepared += [rewritten] if rewritten is not None else []
+            else:
+                prepared.append(action)
+        if not prepared and not plan.take_back:
+            turn.error = scratch.error
+            return turn
+        old = [undos[i] for i in plan.take_back]
+        try:
+            turn.writes, failed, turn.left, stuck = await asyncio.to_thread(
+                self._writer.replace_writes, old, prepared)
+        except (OSError, ValueError) as e:
+            log.warning("vault fix write failed: %s", type(e).__name__)
+            turn.error = type(e).__name__
+            return turn
+        if turn.left:
+            return turn
+        turn.applied = True
+        turn.kept = [u for i, u in enumerate(undos) if i not in set(plan.take_back)]
+        turn.said = plan.said
+        problems = []
+        if failed:
+            problems.append(texts.FIX_NOT_WRITTEN.format(
+                items=", ".join(fixing.words(prepared[i]) for i in failed)))
+        if stuck:
+            problems.append(texts.FIX_NOT_TAKEN_BACK.format(
+                notes=", ".join(f"«{name}»" for name in stuck)))
+        turn.error = "; ".join(problems)
+        log.info("vault fix %s: took back %d, wrote %d", turn.model, len(old),
+                 len(turn.writes))
+        self._link_later(turn.writes)
+        return turn
+
+    async def _kept(self, message: str, error: FilerError,
+                    go: Callable[[], Awaitable[bool]] | None) -> VaultTurn:
+        """The model could not be asked — Claude is down, out of credit, or answered rubbish.
+        The words go to the inbox note as they are, which takes no model: with Notion off
+        there is no other place that would have kept them. The reply says both things, that
+        they are saved and why they are not filed."""
+        turn = VaultTurn(error=str(error), reason=error.reason, model=self._filer.model)
+        if not message.strip() or (go is not None and not await go()):
+            return turn
+        try:
+            write = await asyncio.to_thread(
+                self._writer.run, VaultAction(action="inbox", text=message))
+        except (OSError, ValueError) as e:
+            log.warning("could not keep the message in the inbox note: %s", e)
+            return turn
+        turn.writes = [write.model_copy(update={"kind": "kept"})]
         return turn
 
     async def _looked_up(self, actions: list[VaultAction], message: str,
@@ -377,6 +503,9 @@ class VaultPipeline:
                 # to anything in it. The "not written" wording made it look like a breakage.
                 turn.error = turn.error or texts.VAULT_NOTHING_TO_CHANGE
                 return None
+            except EditTooLong:
+                turn.error = turn.error or texts.VAULT_TOO_LONG
+                return None
             except EditError as e:
                 return self._failed(name, e, turn)
             turn.prompt_tokens += prompt_tokens
@@ -393,6 +522,9 @@ class VaultPipeline:
         try:
             new_text, prompt_tokens, output_tokens = await self._rewriter.rewrite(
                 current, instruction)
+        except RewriteTooLong:
+            turn.error = turn.error or texts.VAULT_TOO_LONG
+            return None
         except RewriteError as e:
             return self._failed(name, e, turn)
         turn.prompt_tokens += prompt_tokens
@@ -427,6 +559,9 @@ class VaultPipeline:
                 mdedit.numbered(lines), MOVE_INSTRUCTION.format(to=action.to, what=action.text))
         except NothingToChange:
             turn.error = turn.error or texts.VAULT_NOTHING_TO_MOVE
+            return []
+        except EditTooLong:
+            turn.error = turn.error or texts.VAULT_TOO_LONG
             return []
         except EditError as e:
             self._failed(note.name, e, turn)
@@ -526,8 +661,18 @@ class VaultPipeline:
             return text
         return f"{text}\n\n{shopping}" if text else shopping
 
-    def _write_all(self, actions: list[VaultAction]) -> list[VaultWrite]:
-        return [self._writer.run(a) for a in actions]
+    def _write_all(self, actions: list[VaultAction]) -> tuple[list[VaultWrite], list[str]]:
+        """What was written, and the error of each action that could not be. One file that
+        cannot be written must not hide the ones already on disk, or cost them their Undo."""
+        writes: list[VaultWrite] = []
+        failed: list[str] = []
+        for action in actions:
+            try:
+                writes.append(self._writer.run(action))
+            except (OSError, ValueError) as e:
+                log.warning("vault write failed (%s): %s", action.action, e)
+                failed.append(type(e).__name__)
+        return writes, failed
 
     def _link_later(self, writes: list[VaultWrite]) -> None:
         if self._linker is None or not writes or not self._linking():
@@ -543,7 +688,11 @@ class VaultPipeline:
             except Exception as e:  # never reaches the user: the note is already written
                 log.warning("linking %s failed: %s", write.note, type(e).__name__)
 
-    async def undo(self, undos: list[VaultUndo]) -> None:
-        """Put every file of one turn back, newest first."""
+    async def undo(self, undos: list[VaultUndo]) -> list[str]:
+        """Take every write of one turn back, newest first. Returns the notes that have
+        changed since in the lines the turn wrote: those are left as they are."""
+        left: list[str] = []
         for undo in reversed(undos):
-            await asyncio.to_thread(self._writer.undo, undo)
+            if not await asyncio.to_thread(self._writer.undo, undo):
+                left.append(PurePosixPath(undo.path).stem)
+        return left

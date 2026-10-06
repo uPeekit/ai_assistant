@@ -538,3 +538,77 @@ async def test_an_added_picture_is_counted_once_not_with_the_lines_below_it():
     assert result.added == 1
     assert result.undo is not None
     assert [len(e.block_ids) for e in result.undo.edits] == [1]
+
+
+# ---- a page too long to show the model -------------------------------------------------------
+
+async def test_the_editor_refuses_a_page_it_could_only_read_the_top_of():
+    from app.llm.edits import MAX_INPUT, TooLong
+
+    client = FakeAnthropic({"edits": [], "full": "короче"})
+    with pytest.raises(TooLong):
+        await Editor("", "m", client=client).plan("[1] " + "я" * MAX_INPUT, "сократи")
+    assert client.seen == []  # nothing was sent, so nothing can come back to be written
+
+
+async def test_a_note_too_long_to_edit_is_left_exactly_as_it_is(tmp_path):
+    from app.llm.edits import MAX_INPUT
+    from app.vault.index import VaultIndex
+    from app.vault.pipeline import VaultPipeline, VaultTurn
+    from app.vault.writer import VaultAction, VaultWriter
+
+    long_text = "\n".join(f"строка {i} " + "я" * 80 for i in range(MAX_INPUT // 80))
+    (tmp_path / "Длинная.md").write_text(long_text, encoding="utf-8", newline="\n")
+    index = VaultIndex(tmp_path)
+    index.refresh()
+    client = FakeAnthropic({"edits": [], "full": "короче"})
+    pipe = VaultPipeline(index, VaultWriter(index), filer=None,  # type: ignore[arg-type]
+                         editor=Editor("", "m", client=client))
+    turn = VaultTurn()
+
+    action = await pipe._rewritten(VaultAction(action="rewrite", note="Длинная",
+                                               text="сократи"), turn)
+
+    assert action is None and turn.error == texts.VAULT_TOO_LONG
+    assert client.seen == []
+    assert (tmp_path / "Длинная.md").read_text(encoding="utf-8") == long_text
+
+
+# ---- a page longer than one read ------------------------------------------------------------
+
+async def test_undo_never_claims_a_block_the_page_read_did_not_cover():
+    """The page is read up to a cap, and Notion answers an insert with every sibling after
+    it. Ids past the cap were unknown to the executor, so they looked freshly created — and
+    Undo of one added line deleted the user's own blocks from there to the end of the page."""
+    from app.commands.models import AppendBlocks
+
+    provider = FakeNotionProvider()
+    provider.page_blocks[PAGE] = [
+        _text("bulleted_list_item", "анкеры", "b-1"),
+        _text("bulleted_list_item", "маты", "b-2"),
+        _text("heading_2", "Заметки", "h-2"),
+        *[_text("paragraph", f"абзац {i}", f"p-{i}") for i in range(400)],
+    ]
+    executor = Executor(provider)
+    result = await executor.run(AppendBlocks(
+        page_id=PAGE, target_name="Идеи", page_title="Шведская стенка",
+        paragraphs=["шурупы"], markdown=True, request="добавь шурупы"))
+
+    [call] = [c for c in provider.calls if c[0] == "append_blocks"]
+    assert call[3] == "b-2"  # inserted into the list, so the siblings were reported
+    assert result.undo is not None and len(result.undo.block_ids) == 1
+    assert not any(b.startswith("p-") for b in result.undo.block_ids)
+
+
+async def test_two_lines_inserted_at_one_place_keep_the_order_they_were_written_in():
+    provider = FakeNotionProvider()
+    provider.page_blocks[PAGE] = _page()
+    await _executor(provider, _edits(
+        {"op": "insert", "at": 2, "text": "первая вставка"},
+        {"op": "insert", "at": 2, "text": "вторая вставка"},
+    )).run(_cmd())
+
+    page = [str(b) for b in provider.page_blocks[PAGE]]
+    first = next(i for i, b in enumerate(page) if "первая вставка" in b)
+    second = next(i for i, b in enumerate(page) if "вторая вставка" in b)
+    assert second == first + 1

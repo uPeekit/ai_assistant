@@ -592,3 +592,32 @@ def test_two_question_sequence_converges_to_execute():
     decision3 = Policy(T).evaluate(result3)
     assert decision3.kind == "EXECUTE"
     assert next_question(decision3, session.asked, ctx) is None
+
+
+def test_a_list_field_answered_by_a_button_survives_the_rebuild():
+    """A required multi-select answered by pressing one option: the session stores that one
+    option, and rebuilding the field used to iterate over it as if it were a list — a
+    TypeError on every press until the question expired."""
+    snap = sample_snapshot()
+    todo = next(t for t in snap.targets if t.id == "ds-todo")
+    todo.fields[:] = [replace(f, required=True) if f.id == "tags" else f for f in todo.fields]
+    ctx = ContextBuilder("Europe/Tallinn").build(snap, now=SAMPLE_NOW)
+    tk = ctx.target_key("ds-todo")
+    interp = make_interp("create", cand(ctx, tk, 0.95, fields={
+        f"{tk}.f1": val("Документы"), ctx.field_key("ds-todo", "prio"): val(
+            ctx.option_key("ds-todo", "prio", "o-A"))}))
+    result = SemanticValidator().validate(interp, ctx, snap)
+    decision = Policy(T).evaluate(result)
+    q = decision.questions[0]
+    assert q.type == "field_required" and q.field_name == "Теги"
+    options = options_for(q, decision.candidate, result, ctx)
+    session = session_from_decision(chat_id=42, event_id=1, text="msg", result=result,
+                                    decision=decision, options=options, now=NOW, ttl_s=600,
+                                    asked=[])
+
+    answered, verb = apply_answer(session, options[0].id)
+    assert verb is None
+
+    rebuilt = result_from_session(answered, snap, ctx)
+    tags = next(f for f in rebuilt.candidates[0].fields.values() if f.field.id == "tags")
+    assert tags.status == "value" and [o.name for o in tags.value] == ["дом"]

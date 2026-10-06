@@ -144,7 +144,15 @@ class GmailIMAP:
                 # picked up again once it is older than the next run.
                 unread = set(self._search(box, [*criteria, "UNSEEN"])) if uids else set()
                 uids = [u for u in uids if u in unread]
-                messages = [self._one(box, uid) for uid in uids[-limit:]]
+                if len(uids) > limit:
+                    # More than one run holds: the oldest go now and the bookmark stops at the
+                    # last of them, so the rest are the next run's. Taking the newest and
+                    # moving the bookmark past the whole lot left the others out of every
+                    # digest, with nothing to say so.
+                    log.info("mail: %d unread, %d taken now, the rest next run",
+                             len(uids), limit)
+                    uids, newest = uids[:limit], uids[limit - 1]
+                messages = [self._one(box, uid) for uid in uids]
                 return [m for m in messages if m is not None], newest, validity
         except (imaplib.IMAP4.error, OSError) as e:
             raise MailboxError(f"{type(e).__name__}: {e}") from None
@@ -182,6 +190,6 @@ class GmailIMAP:
         # PEEK, so fetching does not mark the message as read.
         ok, data = box.uid("FETCH", uid, "(BODY.PEEK[])")
         if ok != "OK" or not data or not isinstance(data[0], tuple):
-            log.info("could not fetch one message (uid kept for the next run)")
+            log.warning("could not fetch one message; it is left out of this digest")
             return None
         return parse(uid, data[0][1])

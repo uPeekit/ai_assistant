@@ -18,6 +18,7 @@ BTN_CONFIRM = "Да"
 BTN_OTHER = "Другое"
 BTN_ADD_NEW = "Добавить как новое"
 BTN_UNDO_ALL = "Отменить всё"
+BTN_FIX = "Поправить"
 
 # ---- values -------------------------------------------------------------------------------
 
@@ -170,6 +171,8 @@ ERRORS: dict[str, str] = {
     "REWRITE_NOTHING": "Не нашёл на «{target_name}», что именно поправить — ничего не изменил.",
     "REWRITE_UNAVAILABLE": "Переписать текст сейчас не могу: для этого нужен Claude.",
     "REWRITE_FAILED": "Не удалось переписать текст ({error}). Ничего не изменил.",
+    "REWRITE_TOO_LONG": "«{target_name}» слишком длинная, чтобы менять её за один раз. "
+                        "Ничего не изменил.",
     # Both stores are switched off on the admin page: there is nowhere to write.
     "NOTHING_ENABLED": "Обе стороны выключены — включите Notion или Obsidian на странице "
                         "настроек.",
@@ -418,7 +421,38 @@ VAULT_WEB_OFF = "поиск в интернете не подключён, за�
 VAULT_WEB_FAILED = "в интернете ничего не нашлось, записал без найденного"
 VAULT_WEB_UNCLEAR = "поиску нужен запрос точнее, записал без найденного"
 VAULT_NOTHING_TO_MOVE = "не нашёл, что переносить — ничего не тронул"
+# Undo found the file changed since, in the very lines it would take back.
+VAULT_UNDO_LEFT = "↩️ Не отменил в {notes}: там с тех пор что-то изменили, и я не стал трогать."
+# Some of a message's writes failed after others were already on disk.
+VAULT_SOME_FAILED = "ещё {n} записать не удалось"
+# A note (or the section named) is longer than the editing model may read in one go.
+VAULT_TOO_LONG = "заметка слишком длинная, чтобы менять её целиком — назовите раздел"
 VAULT_MOVE_UNCLEAR = "не понял, какие строки переносить — ничего не тронул"
+# Fixing part of what was just written (app/vault/fix.py).
+FIX_ASK = "✏️ Что поправить? Напишите или надиктуйте."
+FIX_EXPIRED = "Поправить уже нельзя (прошло больше {minutes} минут)."
+FIX_UNCLEAR = "не понял, что поправить — ничего не менял"
+FIX_DONE = "✏️ Obsidian — поправлено: {what}"
+FIX_FAILED = "⚠️ Obsidian — не поправил: {error}"
+FIX_MOVED = "«{item}» → «{place}»"
+FIX_SET = "«{item}» — {value}"
+FIX_DROPPED = "«{item}» убрано"
+FIX_ADDED = "+ «{item}»"
+FIX_NOT_MOVED = "«{item}» не перенёс"
+FIX_NOTE = "«{note}» ещё раз"
+# New writes of a fix that failed: their words, so the user can send them again.
+FIX_NOT_WRITTEN = "не записал: {items}"
+# The old lines a fix could not take back (the file was held by another program): the new ones
+# are written anyway, so the old ones are there twice until removed by hand.
+FIX_NOT_TAKEN_BACK = "старое осталось в {notes} — уберите руками"
+# A fix may drop something only when the correction says to: whole words, and word starts.
+# Found live: «ну это» made the model drop the task it was shown.
+FIX_DROP_WORDS = ("нет", "без", "ненадо")
+# «не» drops only before these word starts («не надо», «не нужно»): «не в задачи, а в продукты»
+# is a move, not a drop.
+FIX_DROP_AFTER_NE_WORD = "не"
+FIX_DROP_AFTER_NE = ("надо", "нужн")
+FIX_DROP_STEMS = ("убер", "убра", "удал", "лишн", "отмен", "ненуж", "выкин", "вычеркн")
 VAULT_WHAT = {
     "task": "задача в «{note}»",
     "note": "заметка «{note}»",
@@ -427,6 +461,8 @@ VAULT_WHAT = {
     "rewrite": "переписано «{note}»",
     "log": "запись в дневнике «{note}»",
     "inbox": "в «{note}» — не понял, куда это",
+    # The model could not be asked at all: the words are kept as they are.
+    "kept": "сохранил в «{note}» как есть",
     "grocery": "в список продуктов: {detail}",
     "grocery_done": "куплено: {detail}",
 }

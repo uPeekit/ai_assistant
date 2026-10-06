@@ -22,8 +22,10 @@ from app.commands.models import (
     UpdateItem,
 )
 from app.llm.edits import Edit, EditError, Editor, EditPlan, NothingToChange
+from app.llm.edits import TooLong as EditTooLong
 from app.llm.edits import check as check_edits
 from app.llm.rewrite import RewriteError, Rewriter
+from app.llm.rewrite import TooLong as RewriteTooLong
 from app.llm.sections import SectionPicker
 from app.notion import props, titles
 from app.notion.errors import NotionError
@@ -280,7 +282,7 @@ class Executor:
             # a note the model shaped on purpose: leave it alone
             return blocks, None, frozenset()
         try:
-            children = await self._p.block_children(page_id)
+            children = await self._p.block_children(page_id, limit=MAX_PAGE_BLOCKS)
         except NotionError as e:
             log.info("could not read %s to match its list (%s)", page_id, e)
             return blocks, None, frozenset()
@@ -317,9 +319,11 @@ class Executor:
         sibling that follows them** (verified live: one paragraph inserted after the first
         of three comes back as three results). Those trailing ids are the user's own
         blocks, and treating them as ours would put them in an undo record — so Undo would
-        delete lines nobody added. `known` is the ids the caller already read from the
-        page; without it, only the first `len(batch)` results are trusted, because the new
-        blocks come first."""
+        delete lines nobody added. The new blocks come first, so only the first `len(batch)`
+        results can be ours; `known`, the ids the caller read from the page, is taken out of
+        those as a second check. It used to be the only check, and a page read is capped:
+        past the cap every following sibling looked new, and Undo deleted the user's own
+        blocks from there to the end of the page."""
         ids: list[str] = []
         for i in range(0, len(blocks), MAX_BLOCKS_PER_REQUEST):
             batch = blocks[i:i + MAX_BLOCKS_PER_REQUEST]
@@ -327,8 +331,7 @@ class Executor:
             got = [b["id"] for b in data.get("results", []) if "id" in b]
             if after:
                 seen = known | set(ids)
-                fresh = ([b for b in got if b not in seen] if known
-                         else got[:len(batch)])
+                fresh = [b for b in got[:len(batch)] if b not in seen]
             else:
                 fresh = got  # an append to the end reports only what it added
             ids += fresh
@@ -464,6 +467,8 @@ class Executor:
             plan, _, _ = await self._editor.plan(numbered(lines), cmd.instruction)
         except NothingToChange:
             raise Refused("REWRITE_NOTHING", target_name=cmd.page_title) from None
+        except EditTooLong:
+            raise Refused("REWRITE_TOO_LONG", target_name=cmd.page_title) from None
         except EditError as e:
             raise Refused("REWRITE_FAILED", error=str(e)) from None
         return check_edits(plan, lines)
@@ -500,8 +505,10 @@ class Executor:
             preview.append(edit.text)
 
         # Bottom-up, and in reverse for several insertions after one line, so they land in the
-        # order the model wrote them.
-        for edit in sorted([e for e in edits if e.op in ("insert", "image")],
+        # order the model wrote them: each goes right after the same block, so the last one
+        # written has to go in first. (`sorted` is stable, reversed or not — the list itself
+        # has to be turned round.)
+        for edit in sorted(reversed([e for e in edits if e.op in ("insert", "image")]),
                            key=lambda e: e.at, reverse=True):
             if edit.op == "image":
                 new = await self._prepare([image_block(edit.url, edit.caption)],
@@ -546,6 +553,8 @@ class Executor:
             raise Refused("REWRITE_EMPTY", target_name=cmd.page_title)
         try:
             new_text, _, _ = await self._rewriter.rewrite(current, cmd.instruction)
+        except RewriteTooLong:
+            raise Refused("REWRITE_TOO_LONG", target_name=cmd.page_title) from None
         except RewriteError as e:
             raise Refused("REWRITE_FAILED", error=str(e)) from None
         return await self._replace_text(cmd, children, new_text)

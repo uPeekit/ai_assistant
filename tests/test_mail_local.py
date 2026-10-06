@@ -385,3 +385,33 @@ async def test_an_answer_cut_off_by_its_length_says_so_rather_than_not_json():
     sorted_, _, _ = await classifier.sort([message("1")])
 
     assert sorted_ == [] and "cut off" in classifier.last_error
+
+
+async def test_an_answer_that_is_not_json_is_a_classifier_error_not_a_crash():
+    """A proxy's HTML error page in place of Ollama's JSON raised out of the run that is
+    documented never to raise."""
+    from app.mail.classify import ClassifyError
+    from app.mail.local import LocalClassifier
+    from tests.test_mail import message
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="<html>bad gateway</html>")
+
+    classifier = LocalClassifier("http://x", "m", BUCKETS,
+                                 transport=httpx.MockTransport(handler))
+    with pytest.raises(ClassifyError):
+        await classifier._ask([message("1")])
+
+
+async def test_an_answer_that_is_json_but_not_an_object_is_a_classifier_error_not_a_crash():
+    from app.mail.classify import ClassifyError
+    from app.mail.local import LocalClassifier
+    from tests.test_mail import message
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[])
+
+    classifier = LocalClassifier("http://x", "m", BUCKETS,
+                                 transport=httpx.MockTransport(handler))
+    with pytest.raises(ClassifyError):
+        await classifier._ask([message("1")])

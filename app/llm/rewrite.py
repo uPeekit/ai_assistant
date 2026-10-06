@@ -37,6 +37,11 @@ class RewriteError(Exception):
         self.reason = reason
 
 
+class TooLong(RewriteError):
+    """The text is longer than one call may read. Sending the top of it and writing the answer
+    back as the whole would delete the rest unread, so nothing is sent at all."""
+
+
 def unfence(text: str) -> str:
     """The answer without the code fence a model sometimes wraps the whole thing in. Only when
     it wraps *everything*: a page that really is one code block keeps its fence."""
@@ -66,11 +71,13 @@ class Rewriter:
         because "the model said nothing" must not be mistaken for "the page should be empty"."""
         if not current.strip():
             raise RewriteError("nothing to rewrite")
+        if len(current) > MAX_INPUT:
+            raise TooLong(f"{len(current)} characters, the limit is {MAX_INPUT}")
         try:
             resp = await self._client.messages.create(
                 model=self.model, max_tokens=MAX_TOKENS, system=REWRITE_PROMPT,
                 messages=[{"role": "user",
-                           "content": rewrite_message(current[:MAX_INPUT], instruction)}],
+                           "content": rewrite_message(current, instruction)}],
             )
         except anthropic.APIError as e:
             raise RewriteError(describe(e), self._health.record(e)) from None

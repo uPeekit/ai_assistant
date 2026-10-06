@@ -22,11 +22,14 @@ the same cases (tools/benchmark_filer.py).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from dataclasses import dataclass
+from time import monotonic
 
 import anthropic
 
@@ -34,8 +37,10 @@ from app import texts
 from app.llm import staged_prompts as P
 from app.llm.health import Health, describe
 from app.llm.prompts import WEB_WORDS, links_section
+from app.vault import fix as fixing
 from app.vault.filer import GROCERY_LIST, GUIDE_LINK, MEDIA, FilerError, VaultContext
 from app.vault.index import related
+from app.vault.writer import VaultAction
 from app.web.links import URL
 
 log = logging.getLogger(__name__)
@@ -82,7 +87,9 @@ def _close(one: str, two: str) -> bool:
     if one == two:
         return True
     short, other = sorted((one, two), key=len)
-    return len(short) < 4 and other.startswith(short)
+    # Three letters at least: a one-letter word ("and") began every word that shares its
+    # letter, so a product nobody named passed as said.
+    return 3 <= len(short) < 4 and other.startswith(short)
 
 
 _TASK_TAIL = re.compile(r"[\U0001F4C5\U0001F501\u2705].*$")
@@ -296,10 +303,34 @@ class StagedFiler:
         if self._close is not None:
             await self._close()
 
+    async def fix(self, original: str, correction: str, previous: list[VaultAction],
+                  ctx: VaultContext) -> tuple[fixing.FixPlan, int, int]:
+        """What a correction changes in what a turn wrote (app/vault/fix.py)."""
+        run = _Run(self._ask_model, f"{original}\n{correction}", ctx, lookup=self._lookup)
+        started = monotonic()
+        rewritten = next((a for a in previous if a.action == "rewrite"), None)
+        if rewritten is not None:
+            # A note that was rewritten or moved from is changed again, from what it says
+            # now: the edit is not something a field can describe.
+            raw = await run._change_note(correction, rewritten.note)
+            plan = fixing.FixPlan(write=[a for a in raw if a.get("action") != "inbox"],
+                                  said=[texts.FIX_NOTE.format(note=rewritten.note)])
+            plan.unclear = not plan.write
+        else:
+            plan = await run.patch(original, correction, previous)
+        log.info("fix %s: %s | %d call(s), %.1fs", self.model, " > ".join(run.trail) or "-",
+                 run.calls, monotonic() - started)
+        return plan, run.prompt_tokens, run.output_tokens
+
     async def file(self, message: str, ctx: VaultContext) -> tuple[list[dict], int, int]:
         run = _Run(self._ask_model, message, ctx, lookup=self._lookup)
+        started = monotonic()
         actions = await run.read()
-        log.info("staged %s: %s | %d call(s)", self.model, " > ".join(run.trail) or "-", run.calls)
+        # Each call's seconds, in the order they finished: what a slow turn was spent on.
+        log.info("staged %s: %s | %d call(s), %s = %.1fs", self.model,
+                 " > ".join(run.trail) or "-", run.calls,
+                 " + ".join(f"{t:.1f}" for t in run.took) or "0",
+                 monotonic() - started)
         return actions, run.prompt_tokens, run.output_tokens
 
 
@@ -315,6 +346,7 @@ class _Run:
         self.prompt_tokens = 0
         self.output_tokens = 0
         self.calls = 0
+        self.took: list[float] = []  # seconds per call, for the log
         self.trail: list[str] = []  # what each stage answered, for the log
 
     async def _ask(self, system: str, schema: dict, content: str, *,
@@ -322,8 +354,10 @@ class _Run:
         links = links_section(list(self.ctx.links))
         if links:  # every stage sees the pages, whatever it decides from them
             content = f"{content}\n\n{links}"
+        started = monotonic()
         data, prompt_tokens, output_tokens = await (model or self._ask_model)(
             system, schema, content, max_tokens)
+        self.took.append(monotonic() - started)
         self.prompt_tokens += prompt_tokens
         self.output_tokens += output_tokens
         self.calls += 1
@@ -360,22 +394,92 @@ class _Run:
         return {f"n{i}": name
                 for i, name in enumerate([*hubs, *named][:MAX_NOTES_SHOWN], start=1)}
 
+    async def patch(self, original: str, correction: str,
+                    previous: list[VaultAction]) -> fixing.FixPlan:
+        """One question about the difference: which written thing changes, and how."""
+        ctx = self.ctx
+        places = self._places()
+        its = fixing.items(previous)
+        keyed = {f"a{i}": fixing.describe(item.action, ctx.tasks_note)
+                 for i, item in enumerate(its, start=1)}
+        answer = await self._ask(
+            P.FIX_PROMPT, fixing.schema(list(keyed), list(places)),
+            P.message(self._today(), P.section(P.H_ORIGINAL, original),
+                      P.section(P.H_FIX_DONE, P.keyed(keyed)),
+                      P.section(P.H_PLACES, P.keyed(places)), text=correction))
+        self.trail.append("fix")
+        if answer.get("unclear") and not answer.get("changes") and not answer.get("add"):
+            return fixing.FixPlan(unclear=True)
+        # What was written already passed the gate once: its words are a source too.
+        written = "\n".join(fixing.words(item.action) for item in its)
+        gate = _Gate(f"{self.message}\n{written}", ctx.guide, self._pages())
+        notes = self._notes()
+        folders = {f"f{i}": folder for i, folder in enumerate(ctx.folders, start=1)}
+        names = {TASKS: ctx.tasks_note, GROCERIES: texts.VAULT_GROCERIES_NOTE,
+                 DIARY: texts.VAULT_DAILY_DIR, INBOX: texts.VAULT_INBOX_NOTE,
+                 **folders, **notes}
+
+        async def move(action: VaultAction, key: str) -> list[dict]:
+            simple = fixing.simple_move(action, key, tasks=TASKS, groceries=GROCERIES,
+                                        diary=DIARY, inbox=INBOX, notes=notes)
+            if simple is not None:
+                return simple
+            if key in folders:
+                # A book note needs what a task never had: that folder's own question, for
+                # this one thing, in its own words and the correction's.
+                try:
+                    return await self._add_notes(f"{fixing.words(action)}\n{correction}",
+                                                 folders[key])
+                except FilerError as e:
+                    log.warning("fix: moving into a folder failed (%s)", e)
+            return []
+
+        return await fixing.plan(previous, answer, gate, tags=ctx.tags, places=places,
+                                 place_names=names, move=move,
+                                 dropping=fixing.may_drop(correction))
+
     def _tasks(self) -> dict[str, str]:
         return {f"o{i}": line for i, line in enumerate(self.ctx.open_tasks, start=1)}
 
     # ---- stage 1 -------------------------------------------------------------------------
 
     async def read(self) -> list[dict]:
-        answer = await self._ask(P.INTENT_PROMPT, _obj({"intent": _enum(INTENTS)}),
-                                 P.message(text=self.message))
-        intent = str(answer.get("intent", ""))
+        # The target question does not depend on the intent, and nearly every message adds
+        # something: asked together with the intent, the answer is ready one call sooner —
+        # a second or two of every turn. For the other intents that answer is thrown away:
+        # one small call, which is what a second of waiting on every message is worth.
+        intent_task = asyncio.create_task(self._intent())
+        target_task = asyncio.create_task(self._target(self.message))
+        # When the intent call fails, nobody awaits this one: its exception is still retrieved,
+        # or asyncio logs it as never retrieved.
+        target_task.add_done_callback(lambda t: t.cancelled() or t.exception())
+        try:
+            intent = await intent_task
+        except BaseException:
+            target_task.cancel()
+            raise
         self.trail.append(intent or "?")
+        if intent == "add" or intent not in INTENTS:
+            try:
+                key = await target_task
+            except Exception as e:  # the intent is known; a lost target call is one retry
+                log.info("target call failed (%s); asking again", type(e).__name__)
+                key = await self._target(self.message)
+            return await self._add(self.message, key) or [self._inbox(self.message)]
+        target_task.cancel()
+        with suppress(asyncio.CancelledError, Exception):
+            await target_task
         if intent == "unclear":
             return [self._inbox(self.message)]
-        handler = {"add": self._add, "done": self._done, "change": self._change,
-                   "move": self._move, "ask": self._question}.get(intent, self._add)
+        handler = {"done": self._done, "change": self._change, "move": self._move,
+                   "ask": self._question}[intent]
         actions = await handler(self.message)
         return actions or [self._inbox(self.message)]
+
+    async def _intent(self) -> str:
+        answer = await self._ask(P.INTENT_PROMPT, _obj({"intent": _enum(INTENTS)}),
+                                 P.message(text=self.message))
+        return str(answer.get("intent", ""))
 
     @staticmethod
     def _inbox(text: str) -> dict:
@@ -403,8 +507,8 @@ class _Run:
         places[INBOX] = P.PLACE_INBOX
         return places
 
-    async def _add(self, text: str) -> list[dict]:
-        """One target for the whole of `text`, then its details.
+    async def _target(self, text: str) -> str:
+        """One target for the whole of `text`.
 
         One, always. Three ways of letting a message go to more than one place were tried —
         a target per item, a "several" key here, a leftover handed back by the details
@@ -415,7 +519,10 @@ class _Run:
         answer = await self._ask(
             P.TARGET_PROMPT, _obj({"target": _enum(places)}),
             P.message(self._guide(), P.section(P.H_PLACES, P.keyed(places)), text=text))
-        key = str(answer.get("target", ""))
+        return str(answer.get("target", ""))
+
+    async def _add(self, text: str, key: str) -> list[dict]:
+        """The details of the place `key`, the target stage's answer."""
         self.trail.append(key or "?")
         if key == TASKS:
             return await self._add_tasks(text)

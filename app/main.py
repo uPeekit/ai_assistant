@@ -57,7 +57,7 @@ from app.commands.executor import Executor
 from app.config import Settings, load_settings
 from app.conversation.orchestrator import Orchestrator
 from app.conversation.session import SessionStore
-from app.daily import DailyMessage, parse_times
+from app.daily import DailyMessage, LastRun, parse_times
 from app.instance_lock import AlreadyRunning, InstanceLock
 from app.llm.answer import LinkAnswerer
 from app.llm.base import LLMClient, LLMError
@@ -89,6 +89,7 @@ from app.speech.base import SpeechToText
 from app.speech.whisper_local import WhisperLocal
 from app.switches import Switches
 from app.telegram.handlers import register
+from app.telegram.sending import send_text
 from app.tuning import Defaults, Tuning
 from app.validation.policy import Policy, Thresholds
 from app.validation.semantic import SemanticValidator
@@ -300,13 +301,15 @@ def _daily_digest(settings: Settings, vault: VaultPipeline | None, switches: Swi
         text = f"{text}\n\n{warning}".strip() if warning else text
         for chat_id in sorted(settings.allowed_user_ids):
             try:
-                await application().bot.send_message(chat_id, text)
+                await send_text(application().bot, chat_id, text)
             except Exception:  # one blocked chat must not stop the others
                 log.exception("could not send the daily digest to a chat")
         # Without this line a digest sent twice left no trace in the log at all.
         log.info("daily digest sent: %d lines", len(text.splitlines()))
 
-    return DailyMessage(send, lambda: parse_times(tuning.agenda_at), settings.timezone)
+    return DailyMessage(send, lambda: parse_times(tuning.agenda_at), settings.timezone,
+                        remember=LastRun(settings.db_path.with_name("daily_state.json"),
+                                         "agenda"))
 
 
 def _mail_digest(settings: Settings, switches: Switches, buckets_file: Buckets, tuning: Tuning,
@@ -354,7 +357,7 @@ def _mail_digest(settings: Settings, switches: Switches, buckets_file: Buckets, 
         async def to_everyone(body: str) -> None:
             for chat_id in sorted(settings.allowed_user_ids):
                 try:
-                    await application().bot.send_message(chat_id, body)
+                    await send_text(application().bot, chat_id, body)
                 except Exception:
                     log.exception("could not send the mail digest to a chat")
 
@@ -364,7 +367,9 @@ def _mail_digest(settings: Settings, switches: Switches, buckets_file: Buckets, 
         async for shadow in service.compare(run):
             await to_everyone(shadow_digest(shadow, service.buckets))
 
-    return service, DailyMessage(send, lambda: parse_times(tuning.mail_at), settings.timezone)
+    return service, DailyMessage(send, lambda: parse_times(tuning.mail_at), settings.timezone,
+                                 remember=LastRun(settings.db_path.with_name("daily_state.json"),
+                                                  "mail"))
 
 
 def build(

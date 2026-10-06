@@ -421,6 +421,12 @@ request cannot forge to say anything else. `MAX_BODY_BYTES` (512 KiB) similarly 
 `POST`'s `Content-Length` before `rfile.read()` ever runs, so a hostile/huge header cannot force
 an unbounded blocking read.
 
+**Own-page guard on `POST`.** The `Host` header stops rebinding; it does not stop a page on
+another site, open in the user's browser, from making that browser POST here — the socket is
+loopback either way. So `POST /api/descriptions` also requires `Content-Type: application/json`
+(a foreign origin can only send that after a CORS preflight this server never answers) and
+refuses an `Origin` header that is not loopback (`403 forbidden_origin`, `_own_page`).
+
 **The inbox picker** is one radio button per target plus "инбокс не выбран", rendered from
 `is_inbox` on each target in the `GET /api/targets` payload and saved as the `inbox` flag on
 `POST /api/descriptions` (`notion/descriptions.py:TargetMeta.inbox`; at most one target may carry
@@ -508,7 +514,7 @@ message ─┬─ Notion pipeline (§4, unchanged)
                                     section), the model returns markdown, the writer
                                     writes it
                writer.VaultWriter   task / note / append / update / rewrite / log /
-                                    inbox, atomic, with the file's previous text kept
+                                    inbox, atomic, with the text before and after kept
                                     for Undo
                linker.Linker        after the reply: names and aliases, then a Haiku pass for
                                     the links matching cannot see
@@ -520,14 +526,42 @@ message ─┬─ Notion pipeline (§4, unchanged)
 
 Rules that hold here:
 
-* **It never asks a question.** Anything unclear becomes a line in the inbox note.
+* **It never asks a question.** Anything unclear becomes a line in the inbox note — and so does
+  the whole message when the model cannot be asked at all (Claude down, out of credit, an
+  answer that is not JSON): written as it is, kind `kept`, no model needed, with the reply
+  saying why it was not filed.
 * **Only a fresh message** goes to the vault. A button press or an answer to a Notion question
   does not (`Orchestrator._text`).
-* **One Undo for both stores.** `UndoRecord.vault` carries the files to put back; when Notion
-  wrote nothing, the vault's undo gets its own `executions` row with `kind: "vault"`, which
-  `/undo` reaches. `Orchestrator._finish_vault` is the one place the two sides meet.
-* **Never deletes.** Undo moves a created note to the vault's `.trash`; everything else is a
-  restore of the previous text.
+* **One Undo for both stores.** `UndoRecord.vault` carries the writes to take back; when Notion
+  wrote nothing, the vault's undo gets its own `executions` row with `kind: "vault"`, and the
+  reply carries the same Undo button a Notion write has. `Orchestrator._finish_vault` is the
+  one place the two sides meet.
+* **Undo takes back the write, not the file.** `VaultUndo` keeps the text before and after the
+  write, and `app/vault/revert.py` removes exactly that change from whatever the file holds by
+  then — a task added by the next message, or the links the linker put in, stay. A file whose
+  lines the write touched were changed since is left alone and the reply names it
+  (`texts.VAULT_UNDO_LEFT`). A note the write created goes to `.trash` only when nothing else
+  was written into it meanwhile. Nothing is ever deleted outright.
+* **One lock, one text.** Every write and undo takes `VaultWriter._lock`; the linker, which
+  runs behind the reply, amends a note from the text it holds *now* (`VaultWriter.amend`),
+  never from the text it read before its model call. A multi-action message whose third write
+  fails keeps the first two and their undo; the reply counts what failed.
+* **A write can be fixed in part** (`app/vault/fix.py`, spec
+  `docs/superpowers/specs/2026-10-06-vault-fix-design.md`). Each `VaultUndo` keeps the action
+  it carried out. The **Поправить** button, or a Telegram reply to the write's message, makes
+  the next message a correction; a reply to the write's message is itself the correction and
+  outranks a pending press. Only vault-only writes are fixable: a turn Notion also wrote to
+  shows Undo only, and a reply to it is an ordinary message. Usually one call to the filer
+  model (a move into a folder asks that folder's question too; a turn that rewrote a note goes
+  to the change-a-note stage) sees the written actions as keyed lines, the place list and the
+  correction, and answers drop / set / move / add. Values pass the staged gate over the
+  original message, the correction and the written words; a drop needs a word of the user's
+  that asks for it (`texts.FIX_DROP_WORDS` as whole words, `texts.FIX_DROP_STEMS` as word
+  starts, and «не» only as «не надо / не нужно»). Code takes back the changed writes and
+  writes the new ones as one step (`VaultWriter.replace_writes`); the take-back is
+  all-or-nothing — nothing is touched if a line was edited by hand — but not the whole fix: a
+  new write that fails is named in the reply. The new row's Undo removes everything back to
+  before the first message. Fix and Undo share one window and one expiry.
 * **Stays inside the vault**, and never touches `.obsidian/`.
 * A failure on either side is one line in the reply, never a failed message.
 

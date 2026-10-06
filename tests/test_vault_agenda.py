@@ -9,7 +9,7 @@ from datetime import date, datetime, time, timedelta
 import pytest
 
 from app import texts
-from app.daily import DailyMessage, parse_at
+from app.daily import DailyMessage, parse_at, parse_times
 from app.vault import agenda
 from app.vault.filer import Filer, check
 from app.vault.index import VaultIndex
@@ -263,5 +263,107 @@ async def test_a_timer_that_wakes_a_little_early_still_sends_once():
                          now=lambda: clock[0], sleep=sleep)
     daily.start()
     await asyncio.wait_for(parked.wait(), 5)
+    await daily.stop()
+    assert sent == [1]
+
+
+async def test_a_restart_inside_the_grace_does_not_send_the_same_morning_twice(tmp_path):
+    """Updating the bot at 09:30 sent the agenda again: nothing remembered that 09:00 had
+    already gone out."""
+    from zoneinfo import ZoneInfo
+
+    from app.daily import LastRun
+
+    tallinn = ZoneInfo("Europe/Tallinn")
+    sent: list[int] = []
+    memory = LastRun(tmp_path / "daily_state.json", "agenda")
+    first = DailyMessage(lambda: _record(sent), time(9, 0), "Europe/Tallinn",
+                         now=lambda: datetime(2026, 9, 25, 9, 5, tzinfo=tallinn),
+                         remember=memory)
+    first.start()
+    await asyncio.sleep(0.05)
+    await first.stop()
+    assert sent == [1]
+
+    restarted = DailyMessage(lambda: _record(sent), time(9, 0), "Europe/Tallinn",
+                             now=lambda: datetime(2026, 9, 25, 9, 30, tzinfo=tallinn),
+                             remember=memory)
+    restarted.start()
+    await asyncio.sleep(0.05)
+    await restarted.stop()
+    assert sent == [1]  # 09:00 went out before the restart
+
+    next_day = DailyMessage(lambda: _record(sent), time(9, 0), "Europe/Tallinn",
+                            now=lambda: datetime(2026, 9, 26, 9, 10, tzinfo=tallinn),
+                            remember=memory)
+    next_day.start()
+    await asyncio.sleep(0.05)
+    await next_day.stop()
+    assert sent == [1, 1]  # a new day is a new message
+
+
+async def test_a_time_moved_earlier_on_the_admin_page_is_honoured_before_the_old_one():
+    from zoneinfo import ZoneInfo
+
+    tallinn = ZoneInfo("Europe/Tallinn")
+    clock = [datetime(2026, 9, 25, 8, 0, tzinfo=tallinn)]
+    times = [parse_times("12:00")]
+    fired_at: list[datetime] = []
+    parked = asyncio.Event()
+
+    async def send() -> None:
+        fired_at.append(clock[0])
+
+    async def sleep(seconds: float) -> None:
+        if fired_at:
+            parked.set()
+            await asyncio.Event().wait()
+        clock[0] += timedelta(seconds=seconds)
+        if clock[0] >= datetime(2026, 9, 25, 8, 30, tzinfo=tallinn):
+            times[0] = parse_times("09:00")  # changed while the bot waits for 12:00
+
+    daily = DailyMessage(send, lambda: times[0], "Europe/Tallinn", now=lambda: clock[0],
+                         sleep=sleep)
+    daily.start()
+    await asyncio.wait_for(parked.wait(), 5)
+    await daily.stop()
+    assert fired_at and fired_at[0].hour == 9 and fired_at[0].minute == 0
+
+
+async def test_a_broken_memory_file_does_not_stop_the_morning_message(tmp_path):
+    from zoneinfo import ZoneInfo
+
+    from app.daily import LastRun
+
+    path = tmp_path / "daily_state.json"
+    path.write_text("{not json", encoding="utf-8")
+    tallinn = ZoneInfo("Europe/Tallinn")
+    sent: list[int] = []
+    daily = DailyMessage(lambda: _record(sent), time(9, 0), "Europe/Tallinn",
+                         now=lambda: datetime(2026, 9, 25, 9, 5, tzinfo=tallinn),
+                         remember=LastRun(path, "agenda"))
+    daily.start()
+    await asyncio.sleep(0.05)
+    await daily.stop()
+    assert sent == [1]
+    assert LastRun(path, "agenda").get() == datetime(2026, 9, 25, 9, 0, tzinfo=tallinn)
+
+
+async def test_a_naive_time_in_the_memory_file_does_not_stop_the_morning_message(tmp_path):
+    """A hand-edited file without an offset: comparing it with an aware time raised, and the
+    schedule's task died."""
+    from zoneinfo import ZoneInfo
+
+    from app.daily import LastRun
+
+    path = tmp_path / "daily_state.json"
+    path.write_text('{"agenda": "2026-09-25T09:00:00"}', encoding="utf-8")
+    tallinn = ZoneInfo("Europe/Tallinn")
+    sent: list[int] = []
+    daily = DailyMessage(lambda: _record(sent), time(9, 0), "Europe/Tallinn",
+                         now=lambda: datetime(2026, 9, 25, 9, 5, tzinfo=tallinn),
+                         remember=LastRun(path, "agenda"))
+    daily.start()
+    await asyncio.sleep(0.05)
     await daily.stop()
     assert sent == [1]

@@ -166,6 +166,8 @@ class VaultIndex:
 
     @property
     def notes(self) -> list[Note]:
+        """A copy: writes, undo and the morning digest change the index from worker threads
+        while the event loop reads it, and a dict that changes size under a loop raises."""
         return list(self._notes.values())
 
     def get(self, rel: str) -> Note | None:
@@ -177,23 +179,23 @@ class VaultIndex:
         wanted = name.strip().strip("[]").casefold()
         if not wanted:
             return None
-        exact = [n for n in self._notes.values() if n.name.casefold() == wanted]
+        exact = [n for n in self.notes if n.name.casefold() == wanted]
         if not exact:
-            exact = [n for n in self._notes.values()
+            exact = [n for n in self.notes
                      if any(a.casefold() == wanted for a in n.aliases)]
         return min(exact, key=lambda n: (n.path.count("/"), n.path)) if exact else None
 
     def folders(self) -> list[str]:
         """Every folder that holds notes, and every folder on the way to one."""
         out: set[str] = set()
-        for note in self._notes.values():
+        for note in self.notes:
             parts = PurePosixPath(note.path).parent.parts
             for i in range(1, len(parts) + 1):
                 out.add("/".join(parts[:i]))
         return sorted(x for x in out if x)
 
     def tags(self) -> list[str]:
-        return sorted({t for n in self._notes.values() for t in n.tags})
+        return sorted({t for n in self.notes for t in n.tags})
 
     def candidates(self, text: str, limit: int = 40) -> list[Note]:
         """Notes whose name or aliases share words with `text`, best first — what the filer is
@@ -202,7 +204,7 @@ class VaultIndex:
         if not wanted:
             return []
         scored: list[tuple[float, Note]] = []
-        for note in self._notes.values():
+        for note in self.notes:
             if note.name == GUIDE_NOTE:
                 continue
             best = 0.0

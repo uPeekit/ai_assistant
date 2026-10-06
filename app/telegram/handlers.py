@@ -56,6 +56,7 @@ from app.notion.snapshot import WorkspaceSnapshot
 from app.speech.base import SpeechEmpty, SpeechError, SpeechToText
 from app.telegram.auth import allowed_filter, deny, is_allowed
 from app.telegram.keyboards import to_markup
+from app.telegram.sending import send_text
 
 log = logging.getLogger(__name__)
 
@@ -110,9 +111,7 @@ async def _send(
     the message to edit; a failure to record it must not take back a reply already on its way
     to the user, so it is only logged."""
     chat_id = update.effective_chat.id
-    sent = await context.bot.send_message(
-        chat_id=chat_id, text=reply.text, reply_markup=to_markup(reply)
-    )
+    sent = await send_text(context.bot, chat_id, reply.text, to_markup(reply))
     if reply.undo_id is not None:
         try:
             store.set_reply_message_id(reply.undo_id, sent.message_id)
@@ -161,12 +160,19 @@ def _progress(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return send
 
 
+def _replied_to(update: Update) -> int | None:
+    """The id of the message this one replies to: a reply to the bot's report of a write is a
+    fix of that write (the orchestrator decides which messages are such reports)."""
+    replied = update.message.reply_to_message if update.message is not None else None
+    return replied.message_id if replied is not None else None
+
+
 async def _on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     orch: Orchestrator = context.bot_data[_ORCH]
     async with _typing(context, update.effective_chat.id):
         reply = await orch.handle_text(
             update.effective_chat.id, update.effective_user.id, update.message.text,
-            progress=_progress(update, context),
+            progress=_progress(update, context), reply_to=_replied_to(update),
         )
     await _send(update, context, reply, context.bot_data[_STORE])
 
@@ -202,6 +208,7 @@ async def _on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         reply = await orch.handle_text(
             update.effective_chat.id, update.effective_user.id, transcript,
             kind="voice", transcript=transcript, progress=_progress(update, context),
+            reply_to=_replied_to(update),
         )
     await _send(update, context, reply, store)
 
@@ -227,7 +234,11 @@ async def _on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if user_id is None:
         return
     query = update.callback_query
-    await query.answer()  # Telegram's 10-second budget; never carries text
+    # Only stops the button's spinner. Telegram refuses it for a press it considers too old —
+    # one that waited behind a long turn — and that refusal used to be raised from here, before
+    # the orchestrator was ever called: the press was lost and the user was told the bot broke.
+    with contextlib.suppress(TelegramError):
+        await query.answer()
     orch: Orchestrator = context.bot_data[_ORCH]
     async with _typing(context, update.effective_chat.id):
         reply = await orch.handle_callback(update.effective_chat.id, user_id, query.data,

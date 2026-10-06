@@ -58,7 +58,7 @@ ERROR_PLACEHOLDERS: dict[str, set[str]] = {
     "NOTHING_ENABLED": set(),
     "REWRITE_EMPTY": {"target_name"}, "REWRITE_NOTHING": {"target_name"},
     "REWRITE_UNAVAILABLE": set(),
-    "REWRITE_FAILED": {"error"},
+    "REWRITE_FAILED": {"error"}, "REWRITE_TOO_LONG": {"target_name"},
 }
 
 

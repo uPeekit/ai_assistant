@@ -273,9 +273,12 @@ def _split_tags(line: str) -> tuple[str, list[str]]:
     return text.strip(), tags
 
 
-def check(raw_actions: list[dict], index: VaultIndex, message: str) -> list[VaultAction]:
+def check(raw_actions: list[dict], index: VaultIndex, message: str, *,
+          regroup: bool = True) -> list[VaultAction]:
     """Every action the writer may safely carry out. An action naming a note or a folder that
-    is not there is not guessed at — it becomes an inbox line holding the user's own words."""
+    is not there is not guessed at — it becomes an inbox line holding the user's own words.
+    `regroup=False`: a fix states the place itself, so the grocery page lookup must not
+    overrule it."""
     out: list[VaultAction] = []
     pantry = groceries_mod.read(index.groceries())
     tasks_note = index.by_name(texts.VAULT_TASKS_NOTE)
@@ -365,7 +368,7 @@ def check(raw_actions: list[dict], index: VaultIndex, message: str) -> list[Vaul
             # too. Something already done is an update of a line that exists, never a new
             # one: a new task written ticked is hidden from every "not done" query at once.
             action.done = None
-        instead = _as_grocery(action, pantry)
+        instead = _as_grocery(action, pantry) if regroup else None
         if instead is not None:
             action = instead
         action = _or_new_task(action, tasks_text)

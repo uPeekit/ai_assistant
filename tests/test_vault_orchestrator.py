@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import anthropic
 import pytest
@@ -141,10 +141,18 @@ async def test_notion_off_leaves_a_working_obsidian_bot(bot, tmp_path):
 
     reply = await bot.orch.handle_text(CHAT, USER, "зубы")
 
-    assert reply.text.startswith("✅ Obsidian —") and not reply.buttons
+    assert reply.text.startswith("✅ Obsidian —")
     assert bot.llm.calls == 0 and bot.notion.calls == []
     assert "- [ ] зубы" in bot.index.read(f"{texts.VAULT_TASKS_NOTE}.md")
-    assert json.loads(executions(bot)[0]["undo"])["kind"] == "vault"
+    [row] = executions(bot)
+    assert json.loads(row["undo"])["kind"] == "vault"
+    # No question, so the buttons are Undo and Fix for the vault's own write.
+    assert [[b.id for b in r] for r in reply.buttons] == [[f"u:{row['id']}", f"f:{row['id']}"]]
+    assert reply.undo_id == row["id"]
+
+    undone = await bot.orch.handle_callback(CHAT, USER, f"u:{row['id']}")
+    assert undone.text == texts.UNDONE
+    assert "зубы" not in bot.index.read(f"{texts.VAULT_TASKS_NOTE}.md")
 
 
 async def test_obsidian_off_leaves_the_notion_bot_exactly_as_it_was(bot, tmp_path):
@@ -488,3 +496,269 @@ async def test_notion_off_the_pages_read_are_audited_too(bot, tmp_path):
     await bot.orch.handle_text(CHAT, USER, "https://www.kv.ee/1")
     (event,) = closed_events(bot, ["text"])
     assert json.loads(event["llm_context"])["links"][0]["title"] == "Korter"
+
+
+# ---- undo takes back one message, not the file ----------------------------------------------
+
+async def test_undo_of_the_first_of_two_messages_keeps_the_second(bot, tmp_path):
+    bot.orch._switches = Switches(tmp_path / "switches.json", {"notion": False})
+    bot.claude.answers = [
+        {"actions": [{"action": "task", "text": "лампочки", "heading": "дом"}]},
+        {"actions": [{"action": "task", "text": "позвонить маме", "heading": "дом"}]},
+    ]
+    first = await bot.orch.handle_text(CHAT, USER, "лампочки")
+    await bot.orch.handle_text(CHAT, USER, "позвонить маме")
+
+    undone = await bot.orch.handle_callback(CHAT, USER, f"u:{first.undo_id}")
+
+    assert undone.text == texts.UNDONE
+    tasks = bot.index.read(f"{texts.VAULT_TASKS_NOTE}.md")
+    assert "лампочки" not in tasks and "- [ ] позвонить маме" in tasks
+
+
+async def test_undo_says_so_when_the_line_was_changed_by_hand_since(bot, tmp_path):
+    bot.orch._switches = Switches(tmp_path / "switches.json", {"notion": False})
+    bot.claude.answers = [{"actions": [{"action": "task", "text": "лампочки",
+                                         "heading": "дом"}]}]
+    reply = await bot.orch.handle_text(CHAT, USER, "лампочки")
+    path = bot.dir / f"{texts.VAULT_TASKS_NOTE}.md"
+    edited = path.read_text(encoding="utf-8").replace("- [ ] лампочки", "- [x] лампочки")
+    path.write_text(edited, encoding="utf-8", newline="\n")
+
+    undone = await bot.orch.handle_callback(CHAT, USER, f"u:{reply.undo_id}")
+
+    assert undone.text == texts.VAULT_UNDO_LEFT.format(notes=f"«{texts.VAULT_TASKS_NOTE}»")
+    assert path.read_text(encoding="utf-8") == edited
+
+
+# ---- fixing part of a write ---------------------------------------------------------------------
+
+@pytest.fixture
+def staged_bot(bot, tmp_path):
+    """The same bot with the staged reader, scripted per stage, and Notion off."""
+    from app.vault.staged import StagedFiler
+    from tests.test_vault_fix import Script
+
+    script = Script()
+    bot.vault._filer = StagedFiler(script, "haiku")
+    bot.orch._switches = Switches(tmp_path / "switches.json", {"notion": False})
+    bot.script = script
+    return bot
+
+
+def _milk_task(script) -> None:
+    script.answers.update(INTENT_PROMPT={"intent": "add"}, TARGET_PROMPT={"target": "t"},
+                          TASKS_PROMPT={"items": [{"text": "молоко", "due": "", "repeat": "",
+                                                   "heading": "дом", "tag": "",
+                                                   "countdown": False}], "lookup": ""})
+
+
+MOVE_TO_GROCERIES = {"changes": [{"key": "a1", "op": "move", "field": "", "prop": "",
+                                  "value": "", "to": "g"}], "add": [], "unclear": False}
+
+
+async def test_the_fix_button_asks_then_the_next_message_moves_the_task(staged_bot):
+    bot = staged_bot
+    _milk_task(bot.script)
+    first = await bot.orch.handle_text(CHAT, USER, "надо молоко")
+    assert "- [ ] молоко" in bot.index.read(f"{texts.VAULT_TASKS_NOTE}.md")
+
+    asked = await bot.orch.handle_callback(CHAT, USER, f"f:{first.undo_id}")
+    assert asked.text == texts.FIX_ASK
+    bot.script.answers["FIX_PROMPT"] = MOVE_TO_GROCERIES
+    fixed = await bot.orch.handle_text(CHAT, USER, "не в задачи, а в продукты")
+
+    assert fixed.text.startswith(texts.FIX_DONE.split("{")[0])
+    assert "молоко" not in bot.index.read(f"{texts.VAULT_TASKS_NOTE}.md")
+    assert "- [ ] молоко" in bot.index.read(f"{texts.VAULT_GROCERIES_NOTE}.md")
+    assert [b.id for b in fixed.buttons[0]] == [f"u:{fixed.undo_id}", f"f:{fixed.undo_id}"]
+    # The first message's buttons are done with.
+    stale = await bot.orch.handle_callback(CHAT, USER, f"u:{first.undo_id}")
+    assert stale.text == texts.ERRORS["UNDO_EXPIRED"].format(minutes=5)
+
+
+async def test_a_reply_to_the_writes_message_is_a_fix_and_undo_then_removes_everything(
+        staged_bot):
+    bot = staged_bot
+    _milk_task(bot.script)
+    first = await bot.orch.handle_text(CHAT, USER, "надо молоко")
+    bot.store.set_reply_message_id(first.undo_id, 5001)  # what the transport records
+
+    bot.script.answers["FIX_PROMPT"] = MOVE_TO_GROCERIES
+    fixed = await bot.orch.handle_text(CHAT, USER, "в продукты", reply_to=5001)
+    assert "- [ ] молоко" in bot.index.read(f"{texts.VAULT_GROCERIES_NOTE}.md")
+
+    bot.script.answers["FIX_PROMPT"] = {"changes": [{"key": "a1", "op": "set", "field": "text",
+                                                     "prop": "", "value": "молоко овсяное",
+                                                     "to": ""}], "add": [], "unclear": False}
+    again = await bot.orch.handle_callback(CHAT, USER, f"f:{fixed.undo_id}")
+    assert again.text == texts.FIX_ASK
+    twice = await bot.orch.handle_text(CHAT, USER, "молоко овсяное")
+    assert "- [ ] молоко овсяное" in bot.index.read(f"{texts.VAULT_GROCERIES_NOTE}.md")
+
+    undone = await bot.orch.handle_callback(CHAT, USER, f"u:{twice.undo_id}")
+    assert undone.text == texts.UNDONE
+    assert "молоко" not in bot.index.read(f"{texts.VAULT_TASKS_NOTE}.md")
+    # The grocery page did not exist before the first message: the fix made it, and Undo
+    # takes it to the trash with everything else.
+    assert not (bot.dir / f"{texts.VAULT_GROCERIES_NOTE}.md").exists()
+
+
+async def test_a_reply_to_an_expired_write_is_too_late_and_writes_nothing(staged_bot):
+    bot = staged_bot
+    _milk_task(bot.script)
+    first = await bot.orch.handle_text(CHAT, USER, "надо молоко")
+    bot.store.set_reply_message_id(first.undo_id, 5001)
+    bot.orch._clock = Clock(NOW + timedelta(minutes=6))
+
+    reply = await bot.orch.handle_text(CHAT, USER, "в продукты", reply_to=5001)
+
+    assert reply.text == texts.FIX_EXPIRED.format(minutes=5)
+    assert "FIX_PROMPT" not in bot.script.stages
+    assert "в продукты" not in bot.index.read(f"{texts.VAULT_TASKS_NOTE}.md")
+
+
+async def test_a_reply_to_a_message_that_reported_no_write_is_an_ordinary_message(staged_bot):
+    bot = staged_bot
+    _milk_task(bot.script)
+    reply = await bot.orch.handle_text(CHAT, USER, "надо молоко", reply_to=9999)
+    assert reply.text.startswith("✅ Obsidian —")
+    assert "FIX_PROMPT" not in bot.script.stages
+
+
+async def test_a_fix_the_model_cannot_place_changes_nothing_and_can_be_tried_again(staged_bot):
+    bot = staged_bot
+    _milk_task(bot.script)
+    first = await bot.orch.handle_text(CHAT, USER, "надо молоко")
+    bot.script.answers["FIX_PROMPT"] = {"changes": [], "add": [], "unclear": True}
+    await bot.orch.handle_callback(CHAT, USER, f"f:{first.undo_id}")
+
+    reply = await bot.orch.handle_text(CHAT, USER, "ну это")
+
+    assert reply.text == texts.FIX_FAILED.format(error=texts.FIX_UNCLEAR)
+    assert "- [ ] молоко" in bot.index.read(f"{texts.VAULT_TASKS_NOTE}.md")
+    # Pressing Поправить took the buttons off the write's message: the answer gives them
+    # back, without claiming the message (the write's own message stays the one recorded).
+    assert [b.id for b in reply.buttons[0]] == [f"u:{first.undo_id}", f"f:{first.undo_id}"]
+    assert reply.undo_id is None
+    assert (await bot.orch.handle_callback(CHAT, USER, f"f:{first.undo_id}")).text \
+        == texts.FIX_ASK
+
+
+async def test_cancel_forgets_a_fix_that_was_asked_for(staged_bot):
+    bot = staged_bot
+    _milk_task(bot.script)
+    first = await bot.orch.handle_text(CHAT, USER, "надо молоко")
+    await bot.orch.handle_callback(CHAT, USER, f"f:{first.undo_id}")
+    await bot.orch.cancel(CHAT)
+
+    bot.script.answers.update(TARGET_PROMPT={"target": "g"},
+                              GROCERY_PROMPT={"names": ["хлеб"]})
+    reply = await bot.orch.handle_text(CHAT, USER, "купить хлеб")
+    assert "FIX_PROMPT" not in bot.script.stages
+    assert reply.text.startswith("✅ Obsidian —")
+
+
+async def test_a_fix_asked_for_and_left_is_forgotten_when_the_window_closes(staged_bot):
+    bot = staged_bot
+    _milk_task(bot.script)
+    first = await bot.orch.handle_text(CHAT, USER, "надо молоко")
+    await bot.orch.handle_callback(CHAT, USER, f"f:{first.undo_id}")
+    bot.orch._clock = Clock(NOW + timedelta(minutes=6))
+
+    bot.script.answers.update(TARGET_PROMPT={"target": "g"},
+                              GROCERY_PROMPT={"names": ["хлеб"]})
+    reply = await bot.orch.handle_text(CHAT, USER, "купить хлеб")
+
+    assert reply.text.startswith("✅ Obsidian —")
+    assert "FIX_PROMPT" not in bot.script.stages
+    assert "хлеб" in bot.index.read(f"{texts.VAULT_GROCERIES_NOTE}.md")
+
+
+async def test_a_correction_typed_just_after_the_window_is_too_late_not_a_new_note(staged_bot):
+    """Поправить pressed at 4 minutes, the correction sent at 6: the write's window (5) has
+    closed, but the press is fresh — «в продукты» is a correction, not a grocery line."""
+    bot = staged_bot
+    _milk_task(bot.script)
+    first = await bot.orch.handle_text(CHAT, USER, "надо молоко")
+    bot.orch._clock = Clock(NOW + timedelta(minutes=4))
+    assert (await bot.orch.handle_callback(CHAT, USER, f"f:{first.undo_id}")).text \
+        == texts.FIX_ASK
+    bot.orch._clock = Clock(NOW + timedelta(minutes=6))
+    bot.script.answers.update(TARGET_PROMPT={"target": "g"},
+                              GROCERY_PROMPT={"names": ["продукты"]})
+
+    reply = await bot.orch.handle_text(CHAT, USER, "в продукты")
+
+    assert reply.text == texts.FIX_EXPIRED.format(minutes=5)
+    assert "FIX_PROMPT" not in bot.script.stages
+    assert not (bot.dir / f"{texts.VAULT_GROCERIES_NOTE}.md").exists()
+    assert "в продукты" not in bot.index.read(f"{texts.VAULT_TASKS_NOTE}.md")
+
+
+async def test_undo_that_undid_nothing_can_be_pressed_again(bot, tmp_path):
+    """The line was edited by hand, so Undo left it. Once the edit is reverted, Undo works:
+    the row was not spent on a take-back that did nothing."""
+    bot.orch._switches = Switches(tmp_path / "switches.json", {"notion": False})
+    bot.claude.answers = [{"actions": [{"action": "task", "text": "лампочки",
+                                         "heading": "дом"}]}]
+    reply = await bot.orch.handle_text(CHAT, USER, "лампочки")
+    path = bot.dir / f"{texts.VAULT_TASKS_NOTE}.md"
+    original = path.read_text(encoding="utf-8")
+    path.write_text(original.replace("- [ ] лампочки", "- [x] лампочки"), encoding="utf-8",
+                    newline="\n")
+
+    left = await bot.orch.handle_callback(CHAT, USER, f"u:{reply.undo_id}")
+    assert left.text == texts.VAULT_UNDO_LEFT.format(notes=f"«{texts.VAULT_TASKS_NOTE}»")
+
+    path.write_text(original, encoding="utf-8", newline="\n")
+    undone = await bot.orch.handle_callback(CHAT, USER, f"u:{reply.undo_id}")
+    assert undone.text == texts.UNDONE
+    assert "лампочки" not in path.read_text(encoding="utf-8")
+
+
+async def test_a_reply_wins_over_a_pending_button_fix(staged_bot):
+    bot = staged_bot
+    _milk_task(bot.script)
+    first = await bot.orch.handle_text(CHAT, USER, "надо молоко")
+    bot.script.answers["TASKS_PROMPT"] = {"items": [{"text": "хлеб", "due": "", "repeat": "",
+                                                     "heading": "дом", "tag": "",
+                                                     "countdown": False}], "lookup": ""}
+    second = await bot.orch.handle_text(CHAT, USER, "надо хлеб")
+    bot.store.set_reply_message_id(first.undo_id, 5001)
+    bot.store.set_reply_message_id(second.undo_id, 5002)
+    await bot.orch.handle_callback(CHAT, USER, f"f:{first.undo_id}")
+
+    bot.script.answers["FIX_PROMPT"] = {"changes": [{"key": "a1", "op": "set", "field": "text",
+                                                     "prop": "", "value": "хлеб ржаной",
+                                                     "to": ""}], "add": [], "unclear": False}
+    await bot.orch.handle_text(CHAT, USER, "хлеб ржаной", reply_to=5002)
+
+    tasks = bot.index.read(f"{texts.VAULT_TASKS_NOTE}.md")
+    assert "- [ ] хлеб ржаной" in tasks and "- [ ] молоко" in tasks
+    assert bot.script.stages.count("FIX_PROMPT") == 1
+    # The reply used up the pending fix: the next message is an ordinary one.
+    bot.script.answers.update(TARGET_PROMPT={"target": "g"},
+                              GROCERY_PROMPT={"names": ["яйца"]})
+    later = await bot.orch.handle_text(CHAT, USER, "купить яйца")
+    assert later.text.startswith("✅ Obsidian —")
+    assert bot.script.stages.count("FIX_PROMPT") == 1
+
+
+async def test_a_reply_to_a_write_notion_was_part_of_is_an_ordinary_message(staged_bot):
+    from app.commands.executor import UndoRecord
+
+    bot = staged_bot
+    event = bot.store.new_event(telegram_user_id=USER, chat_id=CHAT, kind="text")
+    row_id = bot.store.add_execution(
+        event, CHAT, None, UndoRecord(kind="archive", page_id="p").model_dump_json(),
+        NOW + timedelta(minutes=5))
+    bot.store.set_reply_message_id(row_id, 5001)
+    bot.script.answers.update(INTENT_PROMPT={"intent": "add"}, TARGET_PROMPT={"target": "g"},
+                              GROCERY_PROMPT={"names": ["хлеб"]})
+
+    reply = await bot.orch.handle_text(CHAT, USER, "купить хлеб", reply_to=5001)
+
+    assert reply.text.startswith("✅ Obsidian —")
+    assert "FIX_PROMPT" not in bot.script.stages
+    assert "хлеб" in bot.index.read(f"{texts.VAULT_GROCERIES_NOTE}.md")

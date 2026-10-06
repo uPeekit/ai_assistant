@@ -66,8 +66,9 @@ gemma3:1b 3/16.
   mailbox's `historyId`.
 - After that: `users.history.list` from the stored id — only what changed, a few requests per
   run. A gap (id too old) falls back to the query above.
-- A run handles at most `GMAIL_MAX_PER_RUN` messages (default 40) so a backlog cannot turn into
-  a huge model call or a wall of text.
+- A run handles at most `MAIL_MAX_PER_RUN` messages (default 40) so a backlog cannot turn into
+  a huge model call or a wall of text. Past the cap the *oldest* go now and the bookmark stops
+  at the last of them: the rest wait for the next run rather than being skipped for good.
 - Polled by the existing `Sweeper` pattern, `GMAIL_POLL_S` (default 300 s). Push
   notifications (Pub/Sub) are not worth a public endpoint for one mailbox.
 

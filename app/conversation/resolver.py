@@ -64,7 +64,9 @@ def _rebuild_value(ctx: Context, target_id: str, field_id: str, fk: str, ftype: 
     if ftype in _OPTION_TYPES:
         return _rebuild_option(ctx, target_id, field_id, raw)
     if ftype in _LIST_OPTION_TYPES:
-        return [_rebuild_option(ctx, target_id, field_id, x) for x in raw]
+        # A button answer stores the one option that was pressed, not a list of one.
+        chosen = raw if isinstance(raw, list) else [raw]
+        return [_rebuild_option(ctx, target_id, field_id, x) for x in chosen]
     if ftype == "date":
         return typed_value(ctx, fk, "date", raw)
     return raw

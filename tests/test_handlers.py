@@ -45,8 +45,9 @@ class FakeOrchestrator:
         self.order = order
 
     async def handle_text(self, chat_id, user_id, text, *, kind="text", transcript=None,
-                          progress=None):
+                          progress=None, reply_to=None):
         self.progress = progress
+        self.reply_to = reply_to
         if self.order is not None:
             self.order.append("handle_text")
         self.calls.append(("handle_text", chat_id, user_id, text, kind, transcript))
@@ -731,3 +732,84 @@ async def test_typing_is_shown_while_a_message_is_handled():
     hs = build(order=order)
     assert await dispatch(hs.app, text_update(ALLOWED_USER, "купи молоко", hs.bot), hs.context)
     assert order.index("action:typing") < order.index("handle_text")
+
+
+# ---- a reply longer than one Telegram message ---------------------------------------------------
+
+
+def test_pieces_cut_at_line_ends_and_only_hard_when_they_must():
+    from app.telegram.sending import pieces
+
+    assert pieces("") == [""]
+    assert pieces("a" * 4096) == ["a" * 4096]
+    lines = "\n".join(f"строка {i}" for i in range(600))
+    parts = pieces(lines)
+    assert len(parts) > 1 and all(len(p) <= 4096 for p in parts)
+    assert "\n".join(parts) == lines  # nothing lost, nothing doubled
+    assert all(not p.startswith("\n") and not p.endswith("\n") for p in parts)
+    hard = pieces("x" * 5000)
+    assert [len(p) for p in hard] == [4096, 904]
+
+
+def test_pieces_count_what_telegram_counts_utf16_units():
+    """An emoji outside the BMP is two units to Telegram: 3000 of them are 6000 units."""
+    from app.telegram.sending import pieces
+
+    text = "🌅" * 3000
+    parts = pieces(text)
+    assert len(parts) == 2
+    assert all(len(p.encode("utf-16-le")) // 2 <= 4096 for p in parts)
+    assert "".join(parts) == text
+
+
+async def test_a_long_reply_arrives_in_several_messages_with_the_buttons_under_the_last():
+    long_text = "\n".join(f"• пункт {i}" for i in range(700))
+    hs = build(reply=Reply(long_text, buttons=[[Button("u:7", "Undo")]], undo_id=7))
+    update = text_update(ALLOWED_USER, "что у меня по дому", hs.bot)
+
+    assert await dispatch(hs.app, update, hs.context)
+
+    assert len(hs.bot.sent) > 1
+    assert "".join(m["text"] for m in hs.bot.sent).replace("\n", "") == long_text.replace("\n", "")
+    assert [m["reply_markup"] is not None for m in hs.bot.sent][-1] is True
+    assert all(m["reply_markup"] is None for m in hs.bot.sent[:-1])
+    assert hs.store.recorded == [(7, hs.bot.sent[-1]["message_id"])]
+
+
+async def test_a_press_telegram_will_no_longer_acknowledge_is_still_handled():
+    """A button pressed while a long turn ran reaches the handler late, and Telegram refuses
+    to acknowledge it by then. The refusal used to be raised from here: the press was lost
+    and the chat got "could not handle the message"."""
+    from telegram.error import BadRequest
+
+    class StaleBot(FakeBot):
+        async def answer_callback_query(self, callback_query_id, text=None, **kwargs):
+            raise BadRequest("Query is too old and response timeout expired")
+
+    hs = build(reply=Reply("undone"))
+    hs.bot = StaleBot()
+    hs.context.bot = hs.bot
+    update = callback_update(ALLOWED_USER, "u:7", hs.bot)
+
+    assert await dispatch(hs.app, update, hs.context)
+
+    assert hs.orch.calls == [("handle_callback", CHAT_ID, ALLOWED_USER, "u:7")]
+    assert [m["text"] for m in hs.bot.sent] == ["undone"]
+
+
+async def test_a_reply_to_one_of_the_bots_messages_names_that_message():
+    hs = build()
+    original = Message(message_id=4242, date=datetime.datetime.now(UTC), chat=_chat(),
+                       from_user=User(id=777, is_bot=True, first_name="bot"),
+                       text="✅ Obsidian — задача")
+    message = _bound(Message(message_id=9, date=datetime.datetime.now(UTC), chat=_chat(),
+                             from_user=_user(ALLOWED_USER), text="в продукты",
+                             reply_to_message=original), hs.bot)
+    update = Update(update_id=9, message=message)
+
+    assert await dispatch(hs.app, update, hs.context)
+    assert hs.orch.reply_to == 4242
+
+    plain = text_update(ALLOWED_USER, "купить хлеб", hs.bot, update_id=10)
+    assert await dispatch(hs.app, plain, hs.context)
+    assert hs.orch.reply_to is None
