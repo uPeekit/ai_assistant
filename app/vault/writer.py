@@ -70,6 +70,9 @@ class VaultUndo(BaseModel):
     path: str
     previous: str | None = None
     written: str | None = None
+    # What the write did, as a VaultAction dump, so a later message can fix part of it
+    # (app/vault/fix.py) without the model reading the message again. None on old records.
+    action: dict | None = None
 
 
 class VaultWrite(BaseModel):
@@ -99,6 +102,16 @@ def task_line(action: VaultAction, countdown_tag: str) -> str:
         parts.append(f"📅 {action.due}")
     mark = mdedit.DONE if action.done else mdedit.OPEN
     return f"- [{mark}] " + " ".join(p for p in parts if p)
+
+
+def _as_written(action: VaultAction, write: VaultWrite) -> VaultAction:
+    """The action the write really carried out. A note that was not there turns an append or
+    an update into an inbox line; a fix must see that line, not the append that never
+    happened."""
+    if write.kind.split("_")[0] == action.action:
+        return action
+    words = action.text or action.title or " ".join(action.body)
+    return VaultAction(action="inbox", text=words.strip()[:MAX_LINE])
 
 
 class VaultWriter:
@@ -198,9 +211,51 @@ class VaultWriter:
 
     # ---- actions ---------------------------------------------------------------------
 
+    def replace_writes(self, old: list[VaultUndo], new: list[VaultAction]
+                       ) -> tuple[list[VaultWrite], list[str], list[str]]:
+        """Take `old` writes back and write `new` in their place, as one step: a fix.
+
+        First a dry run of every take-back on the files as they are now. If any write's lines
+        were changed by hand since, nothing at all is touched and their notes are returned —
+        half a fix would leave the old and the new side by side. Returns (writes, failed,
+        left): the new writes, the error of each new action that could not be written, and
+        the notes left alone."""
+        with self._lock:
+            now: dict[str, str | None] = {}
+            left: list[str] = []
+            for undo in reversed(old):
+                current = now[undo.path] if undo.path in now else self._read(undo.path)
+                if current is None:
+                    if undo.previous is not None:
+                        left.append(PurePosixPath(undo.path).stem)
+                    continue
+                if undo.written is None:
+                    restored: str | None = undo.previous or ""
+                else:
+                    restored = revert.take_back(undo.previous or "", undo.written, current)
+                if restored is None:
+                    left.append(PurePosixPath(undo.path).stem)
+                now[undo.path] = restored
+            if left:
+                return [], [], list(dict.fromkeys(left))
+            for undo in reversed(old):
+                self.undo(undo)
+            writes: list[VaultWrite] = []
+            failed: list[str] = []
+            for action in new:
+                try:
+                    writes.append(self.run(action))
+                except (OSError, ValueError) as e:
+                    log.warning("fix write failed (%s): %s", action.action, e)
+                    failed.append(type(e).__name__)
+            return writes, failed, []
+
     def run(self, action: VaultAction) -> VaultWrite:
         with self._lock:
-            return self._run(action)
+            write = self._run(action)
+        if write.undo is not None:
+            write.undo.action = _as_written(action, write).model_dump(exclude_defaults=True)
+        return write
 
     def _run(self, action: VaultAction) -> VaultWrite:
         handler = {

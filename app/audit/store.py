@@ -185,6 +185,17 @@ class AuditStore:
             ).fetchone()
             return dict(row) if row else None
 
+    def execution_by_reply(self, chat_id: int, reply_message_id: int) -> dict | None:
+        """The write whose reply is this Telegram message, expired or not: the caller says
+        "too late" for an expired one, rather than treating the reply as a new message."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM executions WHERE chat_id = ? AND reply_message_id = ? "
+                "ORDER BY id DESC LIMIT 1",
+                (chat_id, reply_message_id),
+            ).fetchone()
+            return dict(row) if row else None
+
     def latest_execution(self, chat_id: int, now: datetime) -> dict | None:
         with self._lock:
             row = self._conn.execute(

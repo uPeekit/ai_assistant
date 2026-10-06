@@ -167,3 +167,21 @@ def test_update_event_unknown_column_rejected(store):
     eid = store.new_event(telegram_user_id=1, chat_id=1, kind="text")
     with pytest.raises(ValueError):
         store.update_event(eid, notion_token="x")
+
+
+def test_a_write_is_found_by_the_message_that_reported_it(tmp_path):
+    from datetime import UTC, datetime, timedelta
+
+    from app.audit.store import AuditStore
+
+    store = AuditStore(tmp_path / "bot.sqlite")
+    store.migrate()
+    then = datetime(2026, 10, 6, 12, 0, tzinfo=UTC)
+    event = store.new_event(telegram_user_id=1, chat_id=7, kind="text")
+    first = store.add_execution(event, 7, None, "{}", then + timedelta(minutes=5))
+    store.set_reply_message_id(first, 501)
+
+    assert store.execution_by_reply(7, 501)["id"] == first
+    assert store.execution_by_reply(8, 501) is None  # another chat's message
+    assert store.execution_by_reply(7, 502) is None
+    store.close()

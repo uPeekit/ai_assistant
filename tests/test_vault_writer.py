@@ -368,3 +368,46 @@ def test_undo_reads_through_line_endings_another_program_wrote(writer, index):
     assert writer.undo(first.undo) is True
     after = index.read(first.path)
     assert "купить лампочки" not in after and "позвонить маме" in after
+
+
+# ---- each write remembers what it did --------------------------------------------------------
+
+def test_a_write_remembers_the_action_it_carried_out(writer):
+    write = writer.run(VaultAction(action="task", text="лампочки", heading="дом", due="2026-10-09"))
+    assert write.undo.action == {"action": "task", "text": "лампочки", "heading": "дом",
+                                 "due": "2026-10-09"}
+
+
+def test_an_append_that_became_an_inbox_line_remembers_the_inbox_line(writer):
+    write = writer.run(VaultAction(action="append", note="нет такой", body=["строка"]))
+    assert write.kind == "inbox"
+    assert write.undo.action == {"action": "inbox", "text": "строка"}
+
+
+def test_a_grocery_write_remembers_its_products(writer):
+    write = writer.run(VaultAction(action="grocery", body=["молоко", "хлеб"]))
+    assert write.undo.action == {"action": "grocery", "body": ["молоко", "хлеб"]}
+
+
+def test_replace_takes_back_old_writes_and_makes_new_ones_as_one_step(writer, index):
+    old = writer.run(VaultAction(action="task", text="молоко", heading="дом"))
+    writes, failed, left = writer.replace_writes(
+        [old.undo], [VaultAction(action="grocery", body=["молоко"])])
+
+    assert left == [] and failed == [] and [w.kind for w in writes] == ["grocery"]
+    assert "молоко" not in index.read(old.path)
+    assert "- [ ] молоко" in index.read(f"{texts.VAULT_GROCERIES_NOTE}.md")
+
+
+def test_replace_touches_nothing_when_one_line_was_edited_since(writer, index, vault):
+    a = writer.run(VaultAction(action="task", text="молоко", heading="дом"))
+    b = writer.run(VaultAction(action="task", text="позвонить", heading="дом"))
+    edited = index.read(b.path).replace("- [ ] позвонить", "- [x] позвонить")
+    (vault / b.path).write_text(edited, encoding="utf-8", newline="\n")
+
+    writes, failed, left = writer.replace_writes(
+        [a.undo, b.undo], [VaultAction(action="log", text="сходил")])
+
+    assert writes == [] and left == [texts.VAULT_TASKS_NOTE]
+    assert index.read(a.path) == edited  # the milk task is still there too
+    assert not (vault / texts.VAULT_DAILY_DIR).exists()  # and nothing new was written
