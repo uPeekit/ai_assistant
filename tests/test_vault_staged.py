@@ -634,3 +634,12 @@ async def test_a_target_call_that_failed_is_asked_again_rather_than_lost():
                    GROCERY_PROMPT={"names": ["молоко"]})
     actions, _, _ = await StagedFiler(script, "haiku").file("купи молоко", ctx())
     assert [a["action"] for a in actions] == ["grocery"]
+
+
+def test_a_one_letter_word_does_not_vouch_for_every_word_it_begins():
+    """«и» (and) began «икра»: a product nobody named passed the gate as said. A short word
+    still matches its own longer form: «сыр» and «сыра»."""
+    gate = _Gate("купить молоко и яйца", "")
+    assert not gate.said("икра")
+    assert gate.said("яйца")
+    assert _Gate("купить сыр", "").said("сыра")

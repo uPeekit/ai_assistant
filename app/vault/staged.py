@@ -85,7 +85,9 @@ def _close(one: str, two: str) -> bool:
     if one == two:
         return True
     short, other = sorted((one, two), key=len)
-    return len(short) < 4 and other.startswith(short)
+    # Three letters at least: a one-letter word ("and") began every word that shares its
+    # letter, so a product nobody named passed as said.
+    return 3 <= len(short) < 4 and other.startswith(short)
 
 
 _TASK_TAIL = re.compile(r"[\U0001F4C5\U0001F501\u2705].*$")
