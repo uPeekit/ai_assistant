@@ -155,7 +155,10 @@ class LocalClassifier:
             resp.raise_for_status()
         except httpx.HTTPError as e:
             raise ClassifyError(f"ollama: {e}") from None
-        data = resp.json()
+        try:
+            data = resp.json()
+        except ValueError:  # a proxy's error page, a half-written reply
+            raise ClassifyError("ollama answered something that is not JSON") from None
         prompt_tokens = data.get("prompt_eval_count", 0) or 0
         if prompt_tokens >= self._num_ctx - CTX_MARGIN:
             raise ContextOverflow(
