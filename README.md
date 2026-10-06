@@ -59,6 +59,10 @@ note you added after it stays, and if you edited the very lines it wrote the bot
 alone and says so. The bot never deletes or bulk-edits anything, and it never sees or
 uses your Notion access token for anything other than talking to the Notion API.
 
+Next to Undo, an Obsidian reply has **Поправить**: press it (or reply to the bot's message)
+and say what is wrong — «не в задачи, а в продукты», «на пятницу», «кефир не надо», «и ещё
+яйца». Only that part changes; one small model call, and Undo then takes the whole thing back.
+
 ## Install
 
 You need three things before the bot can run: a place for it to read/write in Notion, a Telegram

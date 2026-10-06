@@ -546,6 +546,16 @@ Rules that hold here:
   runs behind the reply, amends a note from the text it holds *now* (`VaultWriter.amend`),
   never from the text it read before its model call. A multi-action message whose third write
   fails keeps the first two and their undo; the reply counts what failed.
+* **A write can be fixed in part** (`app/vault/fix.py`, spec
+  `docs/superpowers/specs/2026-10-06-vault-fix-design.md`). Each `VaultUndo` keeps the action
+  it carried out. The **Поправить** button, or a Telegram reply to the write's message, makes
+  the next message a correction: one call to the filer model sees the written actions as keyed
+  lines, the place list and the correction, and answers drop / set / move / add. Values pass
+  the staged gate over the original message, the correction and the written words; a drop
+  needs a word of the user's that asks for it (`texts.FIX_DROP_WORDS`). Code takes back the
+  changed writes and writes the new ones as one step (`VaultWriter.replace_writes`, nothing
+  touched if a line was edited by hand), and the new row's Undo removes everything back to
+  before the first message. Fix and Undo share one window and one expiry.
 * **Stays inside the vault**, and never touches `.obsidian/`.
 * A failure on either side is one line in the reply, never a failed message.
 
