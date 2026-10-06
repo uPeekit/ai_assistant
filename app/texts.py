@@ -431,6 +431,8 @@ VAULT_WHAT = {
     "rewrite": "переписано «{note}»",
     "log": "запись в дневнике «{note}»",
     "inbox": "в «{note}» — не понял, куда это",
+    # The model could not be asked at all: the words are kept as they are.
+    "kept": "сохранил в «{note}» как есть",
     "grocery": "в список продуктов: {detail}",
     "grocery_done": "куплено: {detail}",
 }

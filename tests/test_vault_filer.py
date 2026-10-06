@@ -171,10 +171,29 @@ async def test_pipeline_keeps_the_words_when_the_model_answers_nothing(index):
     assert "какая-то мысль" in index.read(f"{texts.VAULT_INBOX_NOTE}.md")
 
 
-async def test_pipeline_survives_a_model_that_is_down(index):
+async def test_a_model_that_is_down_costs_the_filing_not_the_words(index):
+    """With Notion off nothing else would have kept the message: it goes to the inbox note as
+    it is, and the reply says both that it is saved and why it was not filed."""
     error = anthropic.APIError("down", request=None, body=None)  # type: ignore[arg-type]
-    turn = await pipeline(index, error).handle("зубы")
+    turn = await pipeline(index, error).handle("записаться к зубному")
+    assert [w.kind for w in turn.writes] == ["kept"] and turn.error
+    assert "- записаться к зубному" in index.read(f"{texts.VAULT_INBOX_NOTE}.md")
+    line = turn.reply_line()
+    assert line.startswith(texts.VAULT_REPLY.split("{")[0])
+    assert texts.VAULT_WHAT["kept"].format(note=texts.VAULT_INBOX_NOTE) in line
+    assert len(turn.undos) == 1  # and it can be taken back like any other write
+
+
+async def test_a_held_back_turn_keeps_nothing_when_the_model_is_down(index):
+    """The gate still decides: a turn the orchestrator held back writes nothing at all."""
+    error = anthropic.APIError("down", request=None, body=None)  # type: ignore[arg-type]
+
+    async def no() -> bool:
+        return False
+
+    turn = await pipeline(index, error).handle("зубы", go=no)
     assert turn.writes == [] and turn.error
+    assert index.by_name(texts.VAULT_INBOX_NOTE) is None
     assert texts.VAULT_FAILED.split("{")[0] in turn.reply_line()
 
 

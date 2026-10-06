@@ -206,7 +206,7 @@ class VaultPipeline:
             raw, prompt_tokens, output_tokens = await self._filer.file(message, ctx)
         except FilerError as e:
             log.warning("filer failed: %s", e)
-            return VaultTurn(error=str(e), reason=e.reason, model=self._filer.model)
+            return await self._kept(message, e, go)
         except OSError as e:
             log.warning("vault unreadable: %s", e)
             return VaultTurn(error=type(e).__name__)
@@ -294,6 +294,24 @@ class VaultPipeline:
                             *([f"answered:{len(turn.answer.splitlines())} lines"]
                               if turn.answer else [])]) or "-")
         self._link_later(turn.writes)
+        return turn
+
+    async def _kept(self, message: str, error: FilerError,
+                    go: Callable[[], Awaitable[bool]] | None) -> VaultTurn:
+        """The model could not be asked — Claude is down, out of credit, or answered rubbish.
+        The words go to the inbox note as they are, which takes no model: with Notion off
+        there is no other place that would have kept them. The reply says both things, that
+        they are saved and why they are not filed."""
+        turn = VaultTurn(error=str(error), reason=error.reason, model=self._filer.model)
+        if not message.strip() or (go is not None and not await go()):
+            return turn
+        try:
+            write = await asyncio.to_thread(
+                self._writer.run, VaultAction(action="inbox", text=message))
+        except (OSError, ValueError) as e:
+            log.warning("could not keep the message in the inbox note: %s", e)
+            return turn
+        turn.writes = [write.model_copy(update={"kind": "kept"})]
         return turn
 
     async def _looked_up(self, actions: list[VaultAction], message: str,
