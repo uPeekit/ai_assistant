@@ -421,6 +421,12 @@ request cannot forge to say anything else. `MAX_BODY_BYTES` (512 KiB) similarly 
 `POST`'s `Content-Length` before `rfile.read()` ever runs, so a hostile/huge header cannot force
 an unbounded blocking read.
 
+**Own-page guard on `POST`.** The `Host` header stops rebinding; it does not stop a page on
+another site, open in the user's browser, from making that browser POST here — the socket is
+loopback either way. So `POST /api/descriptions` also requires `Content-Type: application/json`
+(a foreign origin can only send that after a CORS preflight this server never answers) and
+refuses an `Origin` header that is not loopback (`403 forbidden_origin`, `_own_page`).
+
 **The inbox picker** is one radio button per target plus "инбокс не выбран", rendered from
 `is_inbox` on each target in the `GET /api/targets` payload and saved as the `inbox` flag on
 `POST /api/descriptions` (`notion/descriptions.py:TargetMeta.inbox`; at most one target may carry
