@@ -526,14 +526,26 @@ message ─┬─ Notion pipeline (§4, unchanged)
 
 Rules that hold here:
 
-* **It never asks a question.** Anything unclear becomes a line in the inbox note.
+* **It never asks a question.** Anything unclear becomes a line in the inbox note — and so does
+  the whole message when the model cannot be asked at all (Claude down, out of credit, an
+  answer that is not JSON): written as it is, kind `kept`, no model needed, with the reply
+  saying why it was not filed.
 * **Only a fresh message** goes to the vault. A button press or an answer to a Notion question
   does not (`Orchestrator._text`).
-* **One Undo for both stores.** `UndoRecord.vault` carries the files to put back; when Notion
-  wrote nothing, the vault's undo gets its own `executions` row with `kind: "vault"`, which
-  `/undo` reaches. `Orchestrator._finish_vault` is the one place the two sides meet.
-* **Never deletes.** Undo moves a created note to the vault's `.trash`; everything else is a
-  restore of the previous text.
+* **One Undo for both stores.** `UndoRecord.vault` carries the writes to take back; when Notion
+  wrote nothing, the vault's undo gets its own `executions` row with `kind: "vault"`, and the
+  reply carries the same Undo button a Notion write has. `Orchestrator._finish_vault` is the
+  one place the two sides meet.
+* **Undo takes back the write, not the file.** `VaultUndo` keeps the text before and after the
+  write, and `app/vault/revert.py` removes exactly that change from whatever the file holds by
+  then — a task added by the next message, or the links the linker put in, stay. A file whose
+  lines the write touched were changed since is left alone and the reply names it
+  (`texts.VAULT_UNDO_LEFT`). A note the write created goes to `.trash` only when nothing else
+  was written into it meanwhile. Nothing is ever deleted outright.
+* **One lock, one text.** Every write and undo takes `VaultWriter._lock`; the linker, which
+  runs behind the reply, amends a note from the text it holds *now* (`VaultWriter.amend`),
+  never from the text it read before its model call. A multi-action message whose third write
+  fails keeps the first two and their undo; the reply counts what failed.
 * **Stays inside the vault**, and never touches `.obsidian/`.
 * A failure on either side is one line in the reply, never a failed message.
 

@@ -54,7 +54,9 @@ phrasing:
   see "Flagging the inbox page" below.
 
 Every write comes back with an **Undo** button that works for a few minutes
-(`UNDO_WINDOW_S`, see below). The bot never deletes or bulk-edits anything, and it never sees or
+(`UNDO_WINDOW_S`, see below). Undo takes back that one message's change, not the whole file: a
+note you added after it stays, and if you edited the very lines it wrote the bot leaves them
+alone and says so. The bot never deletes or bulk-edits anything, and it never sees or
 uses your Notion access token for anything other than talking to the Notion API.
 
 ## Install
