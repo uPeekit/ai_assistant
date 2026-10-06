@@ -57,7 +57,7 @@ from app.commands.executor import Executor
 from app.config import Settings, load_settings
 from app.conversation.orchestrator import Orchestrator
 from app.conversation.session import SessionStore
-from app.daily import DailyMessage, parse_times
+from app.daily import DailyMessage, LastRun, parse_times
 from app.instance_lock import AlreadyRunning, InstanceLock
 from app.llm.answer import LinkAnswerer
 from app.llm.base import LLMClient, LLMError
@@ -307,7 +307,9 @@ def _daily_digest(settings: Settings, vault: VaultPipeline | None, switches: Swi
         # Without this line a digest sent twice left no trace in the log at all.
         log.info("daily digest sent: %d lines", len(text.splitlines()))
 
-    return DailyMessage(send, lambda: parse_times(tuning.agenda_at), settings.timezone)
+    return DailyMessage(send, lambda: parse_times(tuning.agenda_at), settings.timezone,
+                        remember=LastRun(settings.db_path.with_name("daily_state.json"),
+                                         "agenda"))
 
 
 def _mail_digest(settings: Settings, switches: Switches, buckets_file: Buckets, tuning: Tuning,
@@ -365,7 +367,9 @@ def _mail_digest(settings: Settings, switches: Switches, buckets_file: Buckets, 
         async for shadow in service.compare(run):
             await to_everyone(shadow_digest(shadow, service.buckets))
 
-    return service, DailyMessage(send, lambda: parse_times(tuning.mail_at), settings.timezone)
+    return service, DailyMessage(send, lambda: parse_times(tuning.mail_at), settings.timezone,
+                                 remember=LastRun(settings.db_path.with_name("daily_state.json"),
+                                                  "mail"))
 
 
 def build(
