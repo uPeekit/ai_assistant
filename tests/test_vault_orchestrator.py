@@ -141,10 +141,18 @@ async def test_notion_off_leaves_a_working_obsidian_bot(bot, tmp_path):
 
     reply = await bot.orch.handle_text(CHAT, USER, "зубы")
 
-    assert reply.text.startswith("✅ Obsidian —") and not reply.buttons
+    assert reply.text.startswith("✅ Obsidian —")
     assert bot.llm.calls == 0 and bot.notion.calls == []
     assert "- [ ] зубы" in bot.index.read(f"{texts.VAULT_TASKS_NOTE}.md")
-    assert json.loads(executions(bot)[0]["undo"])["kind"] == "vault"
+    [row] = executions(bot)
+    assert json.loads(row["undo"])["kind"] == "vault"
+    # No question, so the only button is Undo for the vault's own write.
+    assert [[b.id for b in r] for r in reply.buttons] == [[f"u:{row['id']}"]]
+    assert reply.undo_id == row["id"]
+
+    undone = await bot.orch.handle_callback(CHAT, USER, f"u:{row['id']}")
+    assert undone.text == texts.UNDONE
+    assert "зубы" not in bot.index.read(f"{texts.VAULT_TASKS_NOTE}.md")
 
 
 async def test_obsidian_off_leaves_the_notion_bot_exactly_as_it_was(bot, tmp_path):

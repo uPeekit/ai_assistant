@@ -1457,6 +1457,12 @@ class Orchestrator:
         undos = result.undos
         if undos:
             self._record_vault_undo(turn, undos)
+            if not reply.buttons and turn.execution_id is not None:
+                # Notion wrote nothing, or is switched off: the vault's write is the only
+                # thing to take back, and it gets the same button a Notion write has. A reply
+                # that already carries buttons is a question; /undo still reaches the row.
+                reply = replace(reply, buttons=_undo_buttons(turn.execution_id),
+                                undo_id=turn.execution_id)
         line = result.reply_line()
         if not line:
             return reply
