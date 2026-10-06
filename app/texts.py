@@ -440,6 +440,11 @@ FIX_DROPPED = "«{item}» убрано"
 FIX_ADDED = "+ «{item}»"
 FIX_NOT_MOVED = "«{item}» не перенёс"
 FIX_NOTE = "«{note}» ещё раз"
+# New writes of a fix that failed: their words, so the user can send them again.
+FIX_NOT_WRITTEN = "не записал: {items}"
+# The old lines a fix could not take back (the file was held by another program): the new ones
+# are written anyway, so the old ones are there twice until removed by hand.
+FIX_NOT_TAKEN_BACK = "старое осталось в {notes} — уберите руками"
 # A fix may drop something only when the correction says to: whole words, and word starts.
 # Found live: «ну это» made the model drop the task it was shown.
 FIX_DROP_WORDS = ("не", "нет", "без", "ненадо")

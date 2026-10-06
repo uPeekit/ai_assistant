@@ -309,3 +309,58 @@ async def test_a_set_then_a_move_of_the_same_item_keeps_the_new_words(index):
     assert turn.applied
     assert "- [ ] кефир" in index.read(f"{texts.VAULT_GROCERIES_NOTE}.md")
     assert "молоко" not in index.read(f"{texts.VAULT_TASKS_NOTE}.md")
+
+
+# ---- a fix never raises, and never loses the user's words --------------------------------------
+
+MOVE_TO_GROCERIES = {"changes": [{"key": "a1", "op": "move", "field": "", "prop": "",
+                                  "value": "", "to": "g"}], "add": [], "unclear": False}
+
+
+async def test_a_write_that_raises_inside_a_fix_is_an_error_not_a_crash(index, monkeypatch):
+    undos = write(index, VaultAction(action="task", text="молоко", heading="дом"))
+    p = pipe(index, Script(FIX_PROMPT=MOVE_TO_GROCERIES))
+
+    def locked(old, new):
+        raise PermissionError("locked")
+
+    monkeypatch.setattr(p._writer, "replace_writes", locked)
+    turn = await p.fix("молоко", "в продукты", undos)
+
+    assert not turn.applied and turn.error == "PermissionError"
+    assert turn.reply_line() == texts.FIX_FAILED.format(error="PermissionError")
+
+
+async def test_a_take_back_that_could_not_be_written_is_named(index, monkeypatch):
+    undos = write(index, VaultAction(action="task", text="молоко", heading="дом"))
+    p = pipe(index, Script(FIX_PROMPT=MOVE_TO_GROCERIES))
+
+    def locked(undo):
+        raise PermissionError("locked")
+
+    monkeypatch.setattr(p._writer, "undo", locked)
+    turn = await p.fix("молоко", "в продукты", undos)
+
+    assert turn.applied  # the new line is written: a duplicate beats a lost line
+    assert "- [ ] молоко" in index.read(f"{texts.VAULT_GROCERIES_NOTE}.md")
+    assert turn.error == texts.FIX_NOT_TAKEN_BACK.format(notes=f"«{texts.VAULT_TASKS_NOTE}»")
+    assert turn.error in turn.reply_line()
+
+
+async def test_a_new_write_that_fails_inside_a_fix_is_named_by_its_words(index, monkeypatch):
+    undos = write(index, VaultAction(action="task", text="молоко", heading="дом"))
+    script = Script(FIX_PROMPT={**MOVE_TO_GROCERIES, "add": ["хлеб"]})
+    p = pipe(index, script)
+    real = p._writer.run
+
+    def run(action):
+        if action.text == "хлеб":
+            raise PermissionError("locked")
+        return real(action)
+
+    monkeypatch.setattr(p._writer, "run", run)
+    turn = await p.fix("молоко", "в продукты, и ещё хлеб", undos)
+
+    assert turn.applied
+    assert turn.error == texts.FIX_NOT_WRITTEN.format(items="хлеб")
+    assert texts.FIX_NOT_WRITTEN.format(items="хлеб") in turn.reply_line()

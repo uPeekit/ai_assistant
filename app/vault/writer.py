@@ -212,14 +212,16 @@ class VaultWriter:
     # ---- actions ---------------------------------------------------------------------
 
     def replace_writes(self, old: list[VaultUndo], new: list[VaultAction]
-                       ) -> tuple[list[VaultWrite], list[str], list[str]]:
+                       ) -> tuple[list[VaultWrite], list[int], list[str], list[str]]:
         """Take `old` writes back and write `new` in their place, as one step: a fix.
 
         First a dry run of every take-back on the files as they are now. If any write's lines
         were changed by hand since, nothing at all is touched and their notes are returned —
         half a fix would leave the old and the new side by side. Returns (writes, failed,
-        left): the new writes, the error of each new action that could not be written, and
-        the notes left alone."""
+        left, stuck): the new writes, the index into `new` of each action that could not be
+        written, the notes left alone, and the notes whose take-back could not be written (a
+        file held by another program). The new actions are written even then: a line twice
+        beats a line lost."""
         with self._lock:
             now: dict[str, str | None] = {}
             left: list[str] = []
@@ -237,18 +239,23 @@ class VaultWriter:
                     left.append(PurePosixPath(undo.path).stem)
                 now[undo.path] = restored
             if left:
-                return [], [], list(dict.fromkeys(left))
+                return [], [], list(dict.fromkeys(left)), []
+            stuck: list[str] = []
             for undo in reversed(old):
-                self.undo(undo)
+                try:
+                    self.undo(undo)
+                except (OSError, ValueError) as e:
+                    log.warning("fix take-back failed: %s", type(e).__name__)
+                    stuck.append(PurePosixPath(undo.path).stem)
             writes: list[VaultWrite] = []
-            failed: list[str] = []
-            for action in new:
+            failed: list[int] = []
+            for i, action in enumerate(new):
                 try:
                     writes.append(self.run(action))
                 except (OSError, ValueError) as e:
                     log.warning("fix write failed (%s): %s", action.action, e)
-                    failed.append(type(e).__name__)
-            return writes, failed, []
+                    failed.append(i)
+            return writes, failed, [], list(dict.fromkeys(stuck))
 
     def run(self, action: VaultAction) -> VaultWrite:
         with self._lock:

@@ -391,10 +391,11 @@ def test_a_grocery_write_remembers_its_products(writer):
 
 def test_replace_takes_back_old_writes_and_makes_new_ones_as_one_step(writer, index):
     old = writer.run(VaultAction(action="task", text="молоко", heading="дом"))
-    writes, failed, left = writer.replace_writes(
+    writes, failed, left, stuck = writer.replace_writes(
         [old.undo], [VaultAction(action="grocery", body=["молоко"])])
 
-    assert left == [] and failed == [] and [w.kind for w in writes] == ["grocery"]
+    assert left == [] and failed == [] and stuck == []
+    assert [w.kind for w in writes] == ["grocery"]
     assert "молоко" not in index.read(old.path)
     assert "- [ ] молоко" in index.read(f"{texts.VAULT_GROCERIES_NOTE}.md")
 
@@ -405,9 +406,50 @@ def test_replace_touches_nothing_when_one_line_was_edited_since(writer, index, v
     edited = index.read(b.path).replace("- [ ] позвонить", "- [x] позвонить")
     (vault / b.path).write_text(edited, encoding="utf-8", newline="\n")
 
-    writes, failed, left = writer.replace_writes(
+    writes, failed, left, stuck = writer.replace_writes(
         [a.undo, b.undo], [VaultAction(action="log", text="сходил")])
 
-    assert writes == [] and left == [texts.VAULT_TASKS_NOTE]
+    assert writes == [] and left == [texts.VAULT_TASKS_NOTE] and stuck == []
     assert index.read(a.path) == edited  # the milk task is still there too
     assert not (vault / texts.VAULT_DAILY_DIR).exists()  # and nothing new was written
+
+
+def test_replace_still_writes_the_new_ones_when_a_take_back_cannot_be_written(
+        writer, index, monkeypatch):
+    """Windows: Syncthing or an antivirus holds the file and os.replace raises. The new line
+    is written anyway — a duplicate beats a lost line — and the note is named."""
+    a = writer.run(VaultAction(action="task", text="молоко", heading="дом"))
+    b = writer.run(VaultAction(action="inbox", text="позвонить"))
+    real, calls = writer.undo, []
+
+    def locked_once(undo):
+        calls.append(undo.path)
+        if len(calls) == 1:
+            raise PermissionError("locked")
+        return real(undo)
+
+    monkeypatch.setattr(writer, "undo", locked_once)
+    writes, failed, left, stuck = writer.replace_writes(
+        [a.undo, b.undo], [VaultAction(action="grocery", body=["молоко"])])
+
+    assert left == [] and failed == [] and stuck == [texts.VAULT_INBOX_NOTE]
+    assert [w.kind for w in writes] == ["grocery"]
+    assert "- [ ] молоко" in index.read(f"{texts.VAULT_GROCERIES_NOTE}.md")
+    assert "молоко" not in index.read(a.path)  # the other take-back still went through
+
+
+def test_replace_says_which_new_actions_could_not_be_written(writer, index, monkeypatch):
+    real = writer.run
+
+    def run(action):
+        if action.text == "хлеб":
+            raise PermissionError("locked")
+        return real(action)
+
+    monkeypatch.setattr(writer, "run", run)
+    writes, failed, left, stuck = writer.replace_writes(
+        [], [VaultAction(action="log", text="сходил"), VaultAction(action="task", text="хлеб"),
+             VaultAction(action="inbox", text="ещё")])
+
+    assert failed == [1] and left == [] and stuck == []
+    assert [w.kind for w in writes] == ["log", "inbox"]

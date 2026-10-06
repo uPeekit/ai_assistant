@@ -25,6 +25,7 @@ from app.llm.research import ResearchError, ResearchQuestion
 from app.llm.rewrite import RewriteError, Rewriter
 from app.llm.rewrite import TooLong as RewriteTooLong
 from app.vault import agenda as agenda_mod
+from app.vault import fix as fixing
 from app.vault import frontmatter, mdedit
 from app.vault.filer import GROCERY_LIST, Filer, FilerError, check, context, doubtful
 from app.vault.index import VaultIndex
@@ -374,15 +375,26 @@ class VaultPipeline:
             turn.error = scratch.error
             return turn
         old = [undos[i] for i in plan.take_back]
-        turn.writes, failed, turn.left = await asyncio.to_thread(
-            self._writer.replace_writes, old, prepared)
+        try:
+            turn.writes, failed, turn.left, stuck = await asyncio.to_thread(
+                self._writer.replace_writes, old, prepared)
+        except (OSError, ValueError) as e:
+            log.warning("vault fix write failed: %s", type(e).__name__)
+            turn.error = type(e).__name__
+            return turn
         if turn.left:
             return turn
         turn.applied = True
         turn.kept = [u for i, u in enumerate(undos) if i not in set(plan.take_back)]
         turn.said = plan.said
+        problems = []
         if failed:
-            turn.error = texts.VAULT_SOME_FAILED.format(n=len(failed))
+            problems.append(texts.FIX_NOT_WRITTEN.format(
+                items=", ".join(fixing.words(prepared[i]) for i in failed)))
+        if stuck:
+            problems.append(texts.FIX_NOT_TAKEN_BACK.format(
+                notes=", ".join(f"«{name}»" for name in stuck)))
+        turn.error = "; ".join(problems)
         log.info("vault fix %s: took back %d, wrote %d", turn.model, len(old),
                  len(turn.writes))
         self._link_later(turn.writes)
