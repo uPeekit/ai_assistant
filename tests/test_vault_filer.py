@@ -263,3 +263,22 @@ async def test_when_every_write_fails_the_reply_says_not_written(index):
     turn = await pipe.handle("зубы")
     assert turn.writes == [] and turn.error == "OSError"
     assert texts.VAULT_FAILED.split("{")[0] in turn.reply_line()
+
+
+async def test_a_failed_write_is_said_next_to_a_remark_already_made(index):
+    pipe = pipeline(index, {"actions": [
+        {"action": "note", "title": "борщ", "folder": "Заметки", "research": "рецепт борща"},
+        {"action": "log", "text": "второе"},
+    ]})
+    real = pipe._writer.run
+
+    def flaky(action):
+        if action.action == "log":
+            raise OSError("disk says no")
+        return real(action)
+
+    pipe._writer.run = flaky
+    turn = await pipe.handle("первое и второе")
+    line = turn.reply_line()
+    assert texts.VAULT_WEB_OFF in line
+    assert texts.VAULT_SOME_FAILED.format(n=1) in line

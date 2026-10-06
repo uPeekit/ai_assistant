@@ -281,10 +281,11 @@ class VaultPipeline:
                 tags=tuple(question.tags), props=question.props)
         turn.writes, failed = await asyncio.to_thread(self._write_all, actions)
         if failed and not turn.writes:
-            turn.error = failed[0]
+            turn.error = turn.error or failed[0]
             return turn
         if failed:
-            turn.remark = turn.remark or texts.VAULT_SOME_FAILED.format(n=len(failed))
+            turn.remark = "; ".join(
+                r for r in (turn.remark, texts.VAULT_SOME_FAILED.format(n=len(failed))) if r)
         log.info("vault %s: %s", model,
                  ", ".join([*(f"{w.kind}:{w.note}" for w in turn.writes),
                             *([f"search:{len(turn.hits)} hits"] if turn.asked else []),
