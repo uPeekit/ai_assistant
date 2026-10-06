@@ -3,6 +3,8 @@ gate that checks every returned value against the message."""
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from app.llm import staged_prompts as P
@@ -39,6 +41,10 @@ class Script:
                        max_tokens: int = 0):
         name = next(k for k, v in vars(P).items() if k.endswith("_PROMPT") and v == system)
         self.asked.append((name, schema, content))
+        if name == "TARGET_PROMPT" and name not in self.answers:
+            # Asked alongside the intent and thrown away for anything but an "add".
+            await asyncio.sleep(0)
+            raise KeyError(name)
         answer = self.answers[name]
         if isinstance(answer, list):  # one answer per call of this stage
             answer = answer.pop(0)
@@ -47,6 +53,11 @@ class Script:
     @property
     def stages(self) -> list[str]:
         return [name for name, _, _ in self.asked]
+
+    @property
+    def details(self) -> list[str]:
+        """The stages after intent and target, which are always asked (together)."""
+        return [s for s in self.stages if s not in ("INTENT_PROMPT", "TARGET_PROMPT")]
 
 
 def key_of(script: Script, stage: str, label: str) -> str:
@@ -162,7 +173,7 @@ async def test_nonsense_is_kept_in_the_inbox_without_another_question():
     script = Script(INTENT_PROMPT={"intent": "unclear"})
     actions, _, _ = await StagedFiler(script, "haiku").file("трум трум", ctx())
     assert actions == [{"action": "inbox", "text": "трум трум"}]
-    assert script.stages == ["INTENT_PROMPT"]
+    assert script.details == []
 
 
 async def test_a_note_is_offered_only_when_the_guide_links_it_or_the_message_names_it():
@@ -242,7 +253,7 @@ async def test_move_names_the_source_by_key_and_the_destination_in_the_users_wor
     script = Script(INTENT_PROMPT={"intent": "move"})
     actions, _, _ = await StagedFiler(script, "haiku").file(
         "перенеси", ctx(known_notes=[], guide=""))
-    assert actions[0]["action"] == "inbox" and script.stages == ["INTENT_PROMPT"]
+    assert actions[0]["action"] == "inbox" and script.details == []
 
 
 @pytest.mark.parametrize("answer, expected", [
@@ -534,7 +545,7 @@ async def test_a_question_with_a_read_link_is_answered_from_the_link_not_the_vau
     message = "какой залог? https://www.kv.ee/1"
     actions, _, _ = await StagedFiler(script, "haiku").file(message, ctx(links=(page,)))
     assert actions == [{"action": "link_answer", "text": message}]
-    assert script.stages == ["INTENT_PROMPT"]
+    assert script.details == []
 
 
 async def test_a_title_and_fields_from_a_read_page_are_the_users_not_the_models_memory():
@@ -579,3 +590,47 @@ async def test_a_page_full_of_numbers_does_not_let_an_invented_due_date_through(
     actions, _, _ = await StagedFiler(script, "haiku").file(
         "сходить на Дюну https://kino.ee/1", ctx(links=(page,)))
     assert actions[0]["due"] == ""
+
+
+async def test_the_target_is_asked_alongside_the_intent_and_dropped_for_other_intents():
+    """Two of the three calls of an ordinary message run at the same time, so the answer
+    comes one call sooner. A message that is not an "add" has still asked, and the answer
+    is thrown away: no details stage runs on it."""
+    order: list[str] = []
+
+    class Slow(Script):
+        async def __call__(self, system, schema, content, max_tokens=0):
+            name = "intent" if system == P.INTENT_PROMPT else "other"
+            order.append(f"{name} asked")
+            if name == "intent":
+                await asyncio.sleep(0.01)  # the target question is in flight meanwhile
+            order.append(f"{name} answered")
+            return await super().__call__(system, schema, content, max_tokens)
+
+    script = Slow(INTENT_PROMPT={"intent": "add"}, TARGET_PROMPT={"target": "g"},
+                  GROCERY_PROMPT={"names": ["молоко"]})
+    actions, _, _ = await StagedFiler(script, "haiku").file("купи молоко", ctx())
+    assert [a["action"] for a in actions] == ["grocery"]
+    assert order.index("other asked") < order.index("intent answered")
+    assert script.details == ["GROCERY_PROMPT"]
+
+    script = Script(INTENT_PROMPT={"intent": "done"}, TARGET_PROMPT={"target": "t"},
+                    DONE_PROMPT={"target": "o1"})
+    actions, _, _ = await StagedFiler(script, "haiku").file("забрал посылку", ctx())
+    assert actions[0]["action"] == "update" and script.details == ["DONE_PROMPT"]
+
+
+async def test_a_target_call_that_failed_is_asked_again_rather_than_lost():
+    calls = {"n": 0}
+
+    class Flaky(Script):
+        async def __call__(self, system, schema, content, max_tokens=0):
+            if system == P.TARGET_PROMPT and calls["n"] == 0:
+                calls["n"] += 1
+                raise RuntimeError("connection reset")
+            return await super().__call__(system, schema, content, max_tokens)
+
+    script = Flaky(INTENT_PROMPT={"intent": "add"}, TARGET_PROMPT={"target": "g"},
+                   GROCERY_PROMPT={"names": ["молоко"]})
+    actions, _, _ = await StagedFiler(script, "haiku").file("купи молоко", ctx())
+    assert [a["action"] for a in actions] == ["grocery"]

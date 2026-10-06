@@ -22,11 +22,14 @@ the same cases (tools/benchmark_filer.py).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from dataclasses import dataclass
+from time import monotonic
 
 import anthropic
 
@@ -298,8 +301,13 @@ class StagedFiler:
 
     async def file(self, message: str, ctx: VaultContext) -> tuple[list[dict], int, int]:
         run = _Run(self._ask_model, message, ctx, lookup=self._lookup)
+        started = monotonic()
         actions = await run.read()
-        log.info("staged %s: %s | %d call(s)", self.model, " > ".join(run.trail) or "-", run.calls)
+        # Each call's seconds, in the order they finished: what a slow turn was spent on.
+        log.info("staged %s: %s | %d call(s), %s = %.1fs", self.model,
+                 " > ".join(run.trail) or "-", run.calls,
+                 " + ".join(f"{t:.1f}" for t in run.took) or "0",
+                 monotonic() - started)
         return actions, run.prompt_tokens, run.output_tokens
 
 
@@ -315,6 +323,7 @@ class _Run:
         self.prompt_tokens = 0
         self.output_tokens = 0
         self.calls = 0
+        self.took: list[float] = []  # seconds per call, for the log
         self.trail: list[str] = []  # what each stage answered, for the log
 
     async def _ask(self, system: str, schema: dict, content: str, *,
@@ -322,8 +331,10 @@ class _Run:
         links = links_section(list(self.ctx.links))
         if links:  # every stage sees the pages, whatever it decides from them
             content = f"{content}\n\n{links}"
+        started = monotonic()
         data, prompt_tokens, output_tokens = await (model or self._ask_model)(
             system, schema, content, max_tokens)
+        self.took.append(monotonic() - started)
         self.prompt_tokens += prompt_tokens
         self.output_tokens += output_tokens
         self.calls += 1
@@ -366,16 +377,39 @@ class _Run:
     # ---- stage 1 -------------------------------------------------------------------------
 
     async def read(self) -> list[dict]:
-        answer = await self._ask(P.INTENT_PROMPT, _obj({"intent": _enum(INTENTS)}),
-                                 P.message(text=self.message))
-        intent = str(answer.get("intent", ""))
+        # The target question does not depend on the intent, and nearly every message adds
+        # something: asked together with the intent, the answer is ready one call sooner —
+        # a second or two of every turn. For the other intents that answer is thrown away:
+        # one small call, which is what a second of waiting on every message is worth.
+        intent_task = asyncio.create_task(self._intent())
+        target_task = asyncio.create_task(self._target(self.message))
+        try:
+            intent = await intent_task
+        except BaseException:
+            target_task.cancel()
+            raise
         self.trail.append(intent or "?")
+        if intent == "add" or intent not in INTENTS:
+            try:
+                key = await target_task
+            except Exception as e:  # the intent is known; a lost target call is one retry
+                log.info("target call failed (%s); asking again", type(e).__name__)
+                key = await self._target(self.message)
+            return await self._add(self.message, key) or [self._inbox(self.message)]
+        target_task.cancel()
+        with suppress(asyncio.CancelledError, Exception):
+            await target_task
         if intent == "unclear":
             return [self._inbox(self.message)]
-        handler = {"add": self._add, "done": self._done, "change": self._change,
-                   "move": self._move, "ask": self._question}.get(intent, self._add)
+        handler = {"done": self._done, "change": self._change, "move": self._move,
+                   "ask": self._question}[intent]
         actions = await handler(self.message)
         return actions or [self._inbox(self.message)]
+
+    async def _intent(self) -> str:
+        answer = await self._ask(P.INTENT_PROMPT, _obj({"intent": _enum(INTENTS)}),
+                                 P.message(text=self.message))
+        return str(answer.get("intent", ""))
 
     @staticmethod
     def _inbox(text: str) -> dict:
@@ -403,8 +437,8 @@ class _Run:
         places[INBOX] = P.PLACE_INBOX
         return places
 
-    async def _add(self, text: str) -> list[dict]:
-        """One target for the whole of `text`, then its details.
+    async def _target(self, text: str) -> str:
+        """One target for the whole of `text`.
 
         One, always. Three ways of letting a message go to more than one place were tried —
         a target per item, a "several" key here, a leftover handed back by the details
@@ -415,7 +449,10 @@ class _Run:
         answer = await self._ask(
             P.TARGET_PROMPT, _obj({"target": _enum(places)}),
             P.message(self._guide(), P.section(P.H_PLACES, P.keyed(places)), text=text))
-        key = str(answer.get("target", ""))
+        return str(answer.get("target", ""))
+
+    async def _add(self, text: str, key: str) -> list[dict]:
+        """The details of the place `key`, the target stage's answer."""
         self.trail.append(key or "?")
         if key == TASKS:
             return await self._add_tasks(text)
