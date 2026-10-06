@@ -427,8 +427,11 @@ class _Run:
             if key in folders:
                 # A book note needs what a task never had: that folder's own question, for
                 # this one thing, in its own words and the correction's.
-                return await self._add_notes(f"{fixing.words(action)}\n{correction}",
-                                             folders[key])
+                try:
+                    return await self._add_notes(f"{fixing.words(action)}\n{correction}",
+                                                 folders[key])
+                except FilerError as e:
+                    log.warning("fix: moving into a folder failed (%s)", e)
             return []
 
         return await fixing.plan(previous, answer, gate, tags=ctx.tags, places=places,

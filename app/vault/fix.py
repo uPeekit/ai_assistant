@@ -168,7 +168,8 @@ async def plan(previous: list[VaultAction], answer: dict, gate, *, tags: list[st
                 out.said.append(texts.FIX_SET.format(item=what, value=change.get("value")))
         elif op == "move" and change.get("to") in places:
             key = change["to"]
-            moved = await move(its[i].action, key)
+            source = VaultAction(**current[0]) if len(current) == 1 else its[i].action
+            moved = await move(source, key)
             if moved:
                 changed[i] = moved
                 out.said.append(texts.FIX_MOVED.format(item=what, place=place_names[key]))

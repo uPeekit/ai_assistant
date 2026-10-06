@@ -356,10 +356,12 @@ class VaultPipeline:
             turn.error = type(e).__name__
             return turn
         if plan.unclear:
+            if plan.said:  # e.g. the one move that could not be done: name it
+                turn.error = "; ".join(plan.said)
             return turn
         # What the fix writes is checked like any answer; a web search is not part of a fix.
         actions = [a.model_copy(update={"research": "", "media": ""})
-                   for a in check(plan.write, self._index, correction)]
+                   for a in check(plan.write, self._index, correction, regroup=False)]
         scratch = VaultTurn()
         prepared: list[VaultAction] = []
         for action in actions:

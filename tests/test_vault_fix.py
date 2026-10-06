@@ -241,3 +241,71 @@ async def test_claude_down_changes_nothing_and_says_why(index):
         "молоко", "в продукты", undos)
     assert not turn.applied and turn.error
     assert "- [ ] молоко" in index.read(f"{texts.VAULT_TASKS_NOTE}.md")
+
+
+async def test_a_grocery_moved_to_tasks_lands_in_the_task_file(index):
+    undos = write(index, VaultAction(action="grocery", body=["батарейки"]))
+    script = Script(FIX_PROMPT={"changes": [{"key": "a1", "op": "move", "field": "",
+                                             "prop": "", "value": "", "to": "t"}],
+                                "add": [], "unclear": False})
+    turn = await pipe(index, script).fix("купить батарейки", "это в задачи", undos)
+
+    assert turn.applied
+    assert "- [ ] батарейки" in index.read(f"{texts.VAULT_TASKS_NOTE}.md")
+    assert "батарейки" not in index.read(f"{texts.VAULT_GROCERIES_NOTE}.md")
+    assert turn.reply_line() == texts.FIX_DONE.format(what=texts.FIX_MOVED.format(
+        item="батарейки", place=texts.VAULT_TASKS_NOTE))
+
+
+async def test_a_move_that_could_not_be_done_is_named_in_the_reply(index):
+    from app.vault.filer import FilerError
+
+    undos = write(index, VaultAction(action="task", text="Пикник на обочине", heading="дом"))
+    books = next(k for k, f in enumerate(context(index, "", NOW).folders, start=1)
+                 if f == "Книги")
+    script = Script(
+        FIX_PROMPT={"changes": [{"key": "a1", "op": "move", "field": "", "prop": "",
+                                 "value": "", "to": f"f{books}"}], "add": [],
+                    "unclear": False},
+        FOLDER_PROMPT=FilerError("down"))
+    turn = await pipe(index, script).fix("Пикник на обочине", "это книга", undos)
+
+    assert not turn.applied
+    assert turn.reply_line() == texts.FIX_FAILED.format(
+        error=texts.FIX_NOT_MOVED.format(item="Пикник на обочине"))
+
+
+async def test_a_failed_folder_question_leaves_that_item_where_it_was(index):
+    from app.vault.filer import FilerError
+
+    undos = write(index, VaultAction(action="task", text="Пикник на обочине", heading="дом"),
+                  VaultAction(action="task", text="позвонить", heading="дом"))
+    books = next(k for k, f in enumerate(context(index, "", NOW).folders, start=1)
+                 if f == "Книги")
+    script = Script(
+        FIX_PROMPT={"changes": [
+            {"key": "a1", "op": "move", "field": "", "prop": "", "value": "",
+             "to": f"f{books}"},
+            {"key": "a2", "op": "set", "field": "text", "prop": "", "value": "позвонить маме",
+             "to": ""}], "add": [], "unclear": False},
+        FOLDER_PROMPT=FilerError("down"))
+    turn = await pipe(index, script).fix("Пикник на обочине, позвонить",
+                                         "первое книга, второе позвонить маме", undos)
+
+    page = index.read(f"{texts.VAULT_TASKS_NOTE}.md")
+    assert turn.applied and "- [ ] позвонить маме" in page
+    assert "Пикник на обочине" in page  # the first task stayed where it was
+    assert texts.FIX_NOT_MOVED.format(item="Пикник на обочине") in turn.reply_line()
+
+
+async def test_a_set_then_a_move_of_the_same_item_keeps_the_new_words(index):
+    undos = write(index, VaultAction(action="task", text="молоко", heading="дом"))
+    script = Script(FIX_PROMPT={"changes": [
+        {"key": "a1", "op": "set", "field": "text", "prop": "", "value": "кефир", "to": ""},
+        {"key": "a1", "op": "move", "field": "", "prop": "", "value": "", "to": "g"}],
+        "add": [], "unclear": False})
+    turn = await pipe(index, script).fix("молоко", "не молоко, а кефир, в продукты", undos)
+
+    assert turn.applied
+    assert "- [ ] кефир" in index.read(f"{texts.VAULT_GROCERIES_NOTE}.md")
+    assert "молоко" not in index.read(f"{texts.VAULT_TASKS_NOTE}.md")
