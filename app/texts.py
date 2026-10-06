@@ -447,7 +447,11 @@ FIX_NOT_WRITTEN = "не записал: {items}"
 FIX_NOT_TAKEN_BACK = "старое осталось в {notes} — уберите руками"
 # A fix may drop something only when the correction says to: whole words, and word starts.
 # Found live: «ну это» made the model drop the task it was shown.
-FIX_DROP_WORDS = ("не", "нет", "без", "ненадо")
+FIX_DROP_WORDS = ("нет", "без", "ненадо")
+# «не» drops only before these word starts («не надо», «не нужно»): «не в задачи, а в продукты»
+# is a move, not a drop.
+FIX_DROP_AFTER_NE_WORD = "не"
+FIX_DROP_AFTER_NE = ("надо", "нужн")
 FIX_DROP_STEMS = ("убер", "убра", "удал", "лишн", "отмен", "ненуж", "выкин", "вычеркн")
 VAULT_WHAT = {
     "task": "задача в «{note}»",

@@ -159,6 +159,8 @@ class LocalClassifier:
             data = resp.json()
         except ValueError:  # a proxy's error page, a half-written reply
             raise ClassifyError("ollama answered something that is not JSON") from None
+        if not isinstance(data, dict):
+            raise ClassifyError("ollama answered something that is not an object")
         prompt_tokens = data.get("prompt_eval_count", 0) or 0
         if prompt_tokens >= self._num_ctx - CTX_MARGIN:
             raise ContextOverflow(

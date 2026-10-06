@@ -751,6 +751,17 @@ def test_pieces_cut_at_line_ends_and_only_hard_when_they_must():
     assert [len(p) for p in hard] == [4096, 904]
 
 
+def test_pieces_count_what_telegram_counts_utf16_units():
+    """An emoji outside the BMP is two units to Telegram: 3000 of them are 6000 units."""
+    from app.telegram.sending import pieces
+
+    text = "🌅" * 3000
+    parts = pieces(text)
+    assert len(parts) == 2
+    assert all(len(p.encode("utf-16-le")) // 2 <= 4096 for p in parts)
+    assert "".join(parts) == text
+
+
 async def test_a_long_reply_arrives_in_several_messages_with_the_buttons_under_the_last():
     long_text = "\n".join(f"• пункт {i}" for i in range(700))
     hs = build(reply=Reply(long_text, buttons=[[Button("u:7", "Undo")]], undo_id=7))

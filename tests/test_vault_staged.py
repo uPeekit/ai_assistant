@@ -636,6 +636,37 @@ async def test_a_target_call_that_failed_is_asked_again_rather_than_lost():
     assert [a["action"] for a in actions] == ["grocery"]
 
 
+async def test_a_target_call_that_fails_after_the_intent_failed_is_not_left_unretrieved():
+    """The intent call fails and the target call is cancelled, but the client turns the
+    cancellation into an error of its own (an HTTP connection closing does): that exception
+    must still be retrieved, or asyncio logs "Task exception was never retrieved"."""
+    import gc
+
+    class Down(Script):
+        async def __call__(self, system, schema, content, max_tokens=0):
+            if system == P.INTENT_PROMPT:
+                await asyncio.sleep(0)  # the target call is in flight
+                raise RuntimeError("down")
+            try:
+                await asyncio.sleep(1)
+            except asyncio.CancelledError:
+                raise RuntimeError("connection closed") from None
+            return {}, 0, 0
+
+    seen: list[str] = []
+    loop = asyncio.get_running_loop()
+    loop.set_exception_handler(lambda _loop, context: seen.append(context.get("message", "")))
+    try:
+        with pytest.raises(RuntimeError):
+            await StagedFiler(Down(), "haiku").file("купи молоко", ctx())
+        await asyncio.sleep(0.01)  # the cancelled target call ends with its own error
+        gc.collect()
+        await asyncio.sleep(0)
+    finally:
+        loop.set_exception_handler(None)
+    assert not any("never retrieved" in m for m in seen), seen
+
+
 def test_a_one_letter_word_does_not_vouch_for_every_word_it_begins():
     """«и» (and) began «икра»: a product nobody named passed the gate as said. A short word
     still matches its own longer form: «сыр» and «сыра»."""

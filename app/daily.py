@@ -48,9 +48,12 @@ class LastRun:
     def get(self) -> datetime | None:
         value = self._all().get(self._key)
         try:
-            return datetime.fromisoformat(value) if isinstance(value, str) else None
+            when = datetime.fromisoformat(value) if isinstance(value, str) else None
         except ValueError:
             return None
+        # A time without an offset (a hand-edited file) cannot be compared with the aware
+        # schedule: treated as never run rather than killing it.
+        return when if when is not None and when.tzinfo is not None else None
 
     def set(self, when: datetime) -> None:
         data = {**self._all(), self._key: when.isoformat()}

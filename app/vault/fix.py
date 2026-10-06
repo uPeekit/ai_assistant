@@ -71,8 +71,13 @@ def may_drop(correction: str) -> bool:
     """Does the correction ask for something to go? A drop is the one change that loses words,
     so it takes a word of the user's that says so, whatever the model answered."""
     words_said = re.findall(r"\w+", correction.casefold())
-    return any(w in texts.FIX_DROP_WORDS or w.startswith(texts.FIX_DROP_STEMS)
-               for w in words_said)
+    if any(w in texts.FIX_DROP_WORDS or w.startswith(texts.FIX_DROP_STEMS)
+           for w in words_said):
+        return True
+    # A bare "not" is how a move is said too ("not to tasks, to groceries"): it drops only
+    # as "not needed".
+    return any(w == texts.FIX_DROP_AFTER_NE_WORD and nxt.startswith(texts.FIX_DROP_AFTER_NE)
+               for w, nxt in zip(words_said, words_said[1:], strict=False))
 
 
 def describe(action: VaultAction, tasks_note: str) -> str:

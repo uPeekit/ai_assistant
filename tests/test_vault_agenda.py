@@ -347,3 +347,23 @@ async def test_a_broken_memory_file_does_not_stop_the_morning_message(tmp_path):
     await daily.stop()
     assert sent == [1]
     assert LastRun(path, "agenda").get() == datetime(2026, 9, 25, 9, 0, tzinfo=tallinn)
+
+
+async def test_a_naive_time_in_the_memory_file_does_not_stop_the_morning_message(tmp_path):
+    """A hand-edited file without an offset: comparing it with an aware time raised, and the
+    schedule's task died."""
+    from zoneinfo import ZoneInfo
+
+    from app.daily import LastRun
+
+    path = tmp_path / "daily_state.json"
+    path.write_text('{"agenda": "2026-09-25T09:00:00"}', encoding="utf-8")
+    tallinn = ZoneInfo("Europe/Tallinn")
+    sent: list[int] = []
+    daily = DailyMessage(lambda: _record(sent), time(9, 0), "Europe/Tallinn",
+                         now=lambda: datetime(2026, 9, 25, 9, 5, tzinfo=tallinn),
+                         remember=LastRun(path, "agenda"))
+    daily.start()
+    await asyncio.sleep(0.05)
+    await daily.stop()
+    assert sent == [1]

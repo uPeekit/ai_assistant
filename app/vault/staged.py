@@ -450,6 +450,9 @@ class _Run:
         # one small call, which is what a second of waiting on every message is worth.
         intent_task = asyncio.create_task(self._intent())
         target_task = asyncio.create_task(self._target(self.message))
+        # When the intent call fails, nobody awaits this one: its exception is still retrieved,
+        # or asyncio logs it as never retrieved.
+        target_task.add_done_callback(lambda t: t.cancelled() or t.exception())
         try:
             intent = await intent_task
         except BaseException:

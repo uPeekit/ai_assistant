@@ -401,3 +401,17 @@ async def test_an_answer_that_is_not_json_is_a_classifier_error_not_a_crash():
                                  transport=httpx.MockTransport(handler))
     with pytest.raises(ClassifyError):
         await classifier._ask([message("1")])
+
+
+async def test_an_answer_that_is_json_but_not_an_object_is_a_classifier_error_not_a_crash():
+    from app.mail.classify import ClassifyError
+    from app.mail.local import LocalClassifier
+    from tests.test_mail import message
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[])
+
+    classifier = LocalClassifier("http://x", "m", BUCKETS,
+                                 transport=httpx.MockTransport(handler))
+    with pytest.raises(ClassifyError):
+        await classifier._ask([message("1")])
