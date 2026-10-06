@@ -108,8 +108,8 @@ class VaultTurn:
         return [w.undo for w in self.writes if w.undo is not None]
 
     def reply_line(self) -> str:
-        if self.error:
-            why = texts.LLM_DOWN_SHORT.get(self.reason) or self.error
+        why = (texts.LLM_DOWN_SHORT.get(self.reason) or self.error) if self.error else ""
+        if why and not self.writes:
             return texts.VAULT_FAILED.format(error=why)
         if self.answer and not self.writes:
             return self.answer
@@ -120,8 +120,11 @@ class VaultTurn:
         what = ", ".join(w.what for w in self.writes[:MAX_SUMMARY])
         if len(self.writes) > MAX_SUMMARY:
             what += f" (+{len(self.writes) - MAX_SUMMARY})"
-        if self.remark:
-            what += f" — {self.remark}"
+        # What was written is said even when something else went wrong: those files are on
+        # disk and Undo reaches them, so a bare "not written" would be untrue twice over.
+        notes = "; ".join(n for n in (self.remark, why) if n)
+        if notes:
+            what += f" — {notes}"
         line = texts.VAULT_REPLY.format(what=what)
         if self.answer:
             return f"{line}\n{self.answer}"
@@ -276,12 +279,12 @@ class VaultPipeline:
             turn.hits += await asyncio.to_thread(
                 search, self._index, question.text, folder=question.folder,
                 tags=tuple(question.tags), props=question.props)
-        try:
-            turn.writes = await asyncio.to_thread(self._write_all, actions)
-        except (OSError, ValueError) as e:
-            log.warning("vault write failed: %s", e)
-            turn.error = type(e).__name__
+        turn.writes, failed = await asyncio.to_thread(self._write_all, actions)
+        if failed and not turn.writes:
+            turn.error = failed[0]
             return turn
+        if failed:
+            turn.remark = turn.remark or texts.VAULT_SOME_FAILED.format(n=len(failed))
         log.info("vault %s: %s", model,
                  ", ".join([*(f"{w.kind}:{w.note}" for w in turn.writes),
                             *([f"search:{len(turn.hits)} hits"] if turn.asked else []),
@@ -526,8 +529,18 @@ class VaultPipeline:
             return text
         return f"{text}\n\n{shopping}" if text else shopping
 
-    def _write_all(self, actions: list[VaultAction]) -> list[VaultWrite]:
-        return [self._writer.run(a) for a in actions]
+    def _write_all(self, actions: list[VaultAction]) -> tuple[list[VaultWrite], list[str]]:
+        """What was written, and the error of each action that could not be. One file that
+        cannot be written must not hide the ones already on disk, or cost them their Undo."""
+        writes: list[VaultWrite] = []
+        failed: list[str] = []
+        for action in actions:
+            try:
+                writes.append(self._writer.run(action))
+            except (OSError, ValueError) as e:
+                log.warning("vault write failed (%s): %s", action.action, e)
+                failed.append(type(e).__name__)
+        return writes, failed
 
     def _link_later(self, writes: list[VaultWrite]) -> None:
         if self._linker is None or not writes or not self._linking():

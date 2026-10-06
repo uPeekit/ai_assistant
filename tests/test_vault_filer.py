@@ -224,3 +224,42 @@ async def test_linker_leaves_the_task_and_inbox_notes_alone(index):
                                     heading="дом"))
     assert await linker.link(write) == 0
     assert "[[" not in index.read(write.path)
+
+
+# ---- one write failing does not hide the others ---------------------------------------------
+
+async def test_a_write_that_fails_does_not_cost_the_others_their_undo(index):
+    pipe = pipeline(index, {"actions": [
+        {"action": "task", "text": "первое", "heading": "дом"},
+        {"action": "log", "text": "второе"},
+        {"action": "task", "text": "третье", "heading": "дом"},
+    ]})
+    real = pipe._writer.run
+
+    def flaky(action):
+        if action.action == "log":
+            raise OSError("disk says no")
+        return real(action)
+
+    pipe._writer.run = flaky
+    turn = await pipe.handle("первое, второе, третье")
+
+    assert [w.kind for w in turn.writes] == ["task", "task"]
+    assert len(turn.undos) == 2
+    line = turn.reply_line()
+    assert line.startswith(texts.VAULT_REPLY.split("{")[0])
+    assert texts.VAULT_SOME_FAILED.format(n=1) in line
+    tasks = index.read(f"{texts.VAULT_TASKS_NOTE}.md")
+    assert "первое" in tasks and "третье" in tasks
+
+
+async def test_when_every_write_fails_the_reply_says_not_written(index):
+    pipe = pipeline(index, {"actions": [{"action": "task", "text": "зубы", "heading": "дом"}]})
+
+    def broken(action):
+        raise OSError("disk says no")
+
+    pipe._writer.run = broken
+    turn = await pipe.handle("зубы")
+    assert turn.writes == [] and turn.error == "OSError"
+    assert texts.VAULT_FAILED.split("{")[0] in turn.reply_line()

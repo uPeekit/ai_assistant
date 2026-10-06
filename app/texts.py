@@ -420,6 +420,8 @@ VAULT_WEB_UNCLEAR = "поиску нужен запрос точнее, запи
 VAULT_NOTHING_TO_MOVE = "не нашёл, что переносить — ничего не тронул"
 # Undo found the file changed since, in the very lines it would take back.
 VAULT_UNDO_LEFT = "↩️ Не отменил в {notes}: там с тех пор что-то изменили, и я не стал трогать."
+# Some of a message's writes failed after others were already on disk.
+VAULT_SOME_FAILED = "ещё {n} записать не удалось"
 VAULT_MOVE_UNCLEAR = "не понял, какие строки переносить — ничего не тронул"
 VAULT_WHAT = {
     "task": "задача в «{note}»",
