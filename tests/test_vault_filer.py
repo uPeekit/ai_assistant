@@ -282,3 +282,54 @@ async def test_a_failed_write_is_said_next_to_a_remark_already_made(index):
     line = turn.reply_line()
     assert texts.VAULT_WEB_OFF in line
     assert texts.VAULT_SOME_FAILED.format(n=1) in line
+
+
+# ---- the linker writes from the text as it is now --------------------------------------------
+
+class _Meanwhile(FakeAnthropic):
+    """A model call during which something else happens to the vault."""
+
+    def __init__(self, meanwhile, *answers) -> None:
+        super().__init__(*answers)
+        self._meanwhile = meanwhile
+
+    async def create(self, **kwargs):
+        self._meanwhile()
+        return await super().create(**kwargs)
+
+
+async def test_the_linker_keeps_a_line_written_while_the_model_was_thinking(index):
+    writer = VaultWriter(index, now=lambda: NOW)
+    write = writer.run(VaultAction(action="note", folder=texts.VAULT_NOTES_DIR, title="Мысль",
+                                   body=["перечитать Пелевина"]))
+
+    def next_message() -> None:
+        writer.run(VaultAction(action="append", note="Мысль", body=["и Сорокина тоже"]))
+
+    client = _Meanwhile(next_message,
+                        {"links": [{"phrase": "Пелевина", "note": "Чапаев и Пустота"}]})
+    assert await Linker(index, writer, model="m", client=client).link(write) == 1
+    text = index.read(write.path)
+    assert "[[Чапаев и Пустота|Пелевина]]" in text and "и Сорокина тоже" in text
+
+
+async def test_the_linker_does_not_bring_back_a_note_that_was_undone_meanwhile(index, tmp_path):
+    writer = VaultWriter(index, now=lambda: NOW)
+    write = writer.run(VaultAction(action="note", folder=texts.VAULT_NOTES_DIR, title="Мысль",
+                                   body=["перечитать Пелевина"]))
+    client = _Meanwhile(lambda: writer.undo(write.undo),
+                        {"links": [{"phrase": "Пелевина", "note": "Чапаев и Пустота"}]})
+    assert await Linker(index, writer, model="m", client=client).link(write) == 0
+    assert not (tmp_path / write.path).exists()
+
+
+async def test_a_linked_note_can_still_be_undone(index, tmp_path):
+    before = index.read(f"{texts.VAULT_AREAS_DIR}/дом.md")
+    writer = VaultWriter(index, now=lambda: NOW)
+    write = writer.run(VaultAction(action="append", note="дом",
+                                   body=["перечитать Чапаев и Пустота"]))
+    linker = Linker(index, writer, model="m", client=FakeAnthropic({"links": []}))
+    assert await linker.link(write) == 1  # the name is in the text: no model needed
+    assert "[[Чапаев и Пустота]]" in index.read(write.path)
+    assert writer.undo(write.undo) is True
+    assert index.read(write.path) == before
