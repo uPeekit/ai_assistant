@@ -514,7 +514,7 @@ message ─┬─ Notion pipeline (§4, unchanged)
                                     section), the model returns markdown, the writer
                                     writes it
                writer.VaultWriter   task / note / append / update / rewrite / log /
-                                    inbox, atomic, with the file's previous text kept
+                                    inbox, atomic, with the text before and after kept
                                     for Undo
                linker.Linker        after the reply: names and aliases, then a Haiku pass for
                                     the links matching cannot see
@@ -549,12 +549,18 @@ Rules that hold here:
 * **A write can be fixed in part** (`app/vault/fix.py`, spec
   `docs/superpowers/specs/2026-10-06-vault-fix-design.md`). Each `VaultUndo` keeps the action
   it carried out. The **Поправить** button, or a Telegram reply to the write's message, makes
-  the next message a correction: one call to the filer model sees the written actions as keyed
-  lines, the place list and the correction, and answers drop / set / move / add. Values pass
-  the staged gate over the original message, the correction and the written words; a drop
-  needs a word of the user's that asks for it (`texts.FIX_DROP_WORDS`). Code takes back the
-  changed writes and writes the new ones as one step (`VaultWriter.replace_writes`, nothing
-  touched if a line was edited by hand), and the new row's Undo removes everything back to
+  the next message a correction; a reply to the write's message is itself the correction and
+  outranks a pending press. Only vault-only writes are fixable: a turn Notion also wrote to
+  shows Undo only, and a reply to it is an ordinary message. Usually one call to the filer
+  model (a move into a folder asks that folder's question too; a turn that rewrote a note goes
+  to the change-a-note stage) sees the written actions as keyed lines, the place list and the
+  correction, and answers drop / set / move / add. Values pass the staged gate over the
+  original message, the correction and the written words; a drop needs a word of the user's
+  that asks for it (`texts.FIX_DROP_WORDS` as whole words, `texts.FIX_DROP_STEMS` as word
+  starts, and «не» only as «не надо / не нужно»). Code takes back the changed writes and
+  writes the new ones as one step (`VaultWriter.replace_writes`); the take-back is
+  all-or-nothing — nothing is touched if a line was edited by hand — but not the whole fix: a
+  new write that fails is named in the reply. The new row's Undo removes everything back to
   before the first message. Fix and Undo share one window and one expiry.
 * **Stays inside the vault**, and never touches `.obsidian/`.
 * A failure on either side is one line in the reply, never a failed message.

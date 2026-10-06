@@ -61,7 +61,7 @@ uses your Notion access token for anything other than talking to the Notion API.
 
 Next to Undo, an Obsidian reply has **Поправить**: press it (or reply to the bot's message)
 and say what is wrong — «не в задачи, а в продукты», «на пятницу», «кефир не надо», «и ещё
-яйца». Only that part changes; one small model call, and Undo then takes the whole thing back.
+яйца». Only that part changes; usually one small model call, and Undo then takes the whole thing back.
 
 ## Install
 
