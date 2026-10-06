@@ -653,3 +653,66 @@ async def test_cancel_forgets_a_fix_that_was_asked_for(staged_bot):
     reply = await bot.orch.handle_text(CHAT, USER, "купить хлеб")
     assert "FIX_PROMPT" not in bot.script.stages
     assert reply.text.startswith("✅ Obsidian —")
+
+
+async def test_a_fix_asked_for_and_left_is_forgotten_when_the_window_closes(staged_bot):
+    bot = staged_bot
+    _milk_task(bot.script)
+    first = await bot.orch.handle_text(CHAT, USER, "надо молоко")
+    await bot.orch.handle_callback(CHAT, USER, f"f:{first.undo_id}")
+    bot.orch._clock = Clock(NOW + timedelta(minutes=6))
+
+    bot.script.answers.update(TARGET_PROMPT={"target": "g"},
+                              GROCERY_PROMPT={"names": ["хлеб"]})
+    reply = await bot.orch.handle_text(CHAT, USER, "купить хлеб")
+
+    assert reply.text.startswith("✅ Obsidian —")
+    assert "FIX_PROMPT" not in bot.script.stages
+    assert "хлеб" in bot.index.read(f"{texts.VAULT_GROCERIES_NOTE}.md")
+
+
+async def test_a_reply_wins_over_a_pending_button_fix(staged_bot):
+    bot = staged_bot
+    _milk_task(bot.script)
+    first = await bot.orch.handle_text(CHAT, USER, "надо молоко")
+    bot.script.answers["TASKS_PROMPT"] = {"items": [{"text": "хлеб", "due": "", "repeat": "",
+                                                     "heading": "дом", "tag": "",
+                                                     "countdown": False}], "lookup": ""}
+    second = await bot.orch.handle_text(CHAT, USER, "надо хлеб")
+    bot.store.set_reply_message_id(first.undo_id, 5001)
+    bot.store.set_reply_message_id(second.undo_id, 5002)
+    await bot.orch.handle_callback(CHAT, USER, f"f:{first.undo_id}")
+
+    bot.script.answers["FIX_PROMPT"] = {"changes": [{"key": "a1", "op": "set", "field": "text",
+                                                     "prop": "", "value": "хлеб ржаной",
+                                                     "to": ""}], "add": [], "unclear": False}
+    await bot.orch.handle_text(CHAT, USER, "хлеб ржаной", reply_to=5002)
+
+    tasks = bot.index.read(f"{texts.VAULT_TASKS_NOTE}.md")
+    assert "- [ ] хлеб ржаной" in tasks and "- [ ] молоко" in tasks
+    assert bot.script.stages.count("FIX_PROMPT") == 1
+    # The reply used up the pending fix: the next message is an ordinary one.
+    bot.script.answers.update(TARGET_PROMPT={"target": "g"},
+                              GROCERY_PROMPT={"names": ["яйца"]})
+    later = await bot.orch.handle_text(CHAT, USER, "купить яйца")
+    assert later.text.startswith("✅ Obsidian —")
+    assert bot.script.stages.count("FIX_PROMPT") == 1
+
+
+async def test_a_reply_to_a_write_notion_was_part_of_is_an_ordinary_message(staged_bot):
+    from app.commands.executor import UndoRecord
+
+    bot = staged_bot
+    event = bot.store.new_event(telegram_user_id=USER, chat_id=CHAT, kind="text")
+    row_id = bot.store.add_execution(
+        event, CHAT, None, UndoRecord(kind="archive", page_id="p").model_dump_json(),
+        NOW + timedelta(minutes=5))
+    bot.store.set_reply_message_id(row_id, 5001)
+    bot.script.answers.update(INTENT_PROMPT={"intent": "add"}, TARGET_PROMPT={"target": "g"},
+                              GROCERY_PROMPT={"names": ["хлеб"]})
+
+    reply = await bot.orch.handle_text(CHAT, USER, "купить хлеб", reply_to=5001)
+
+    assert reply.text.startswith("✅ Obsidian —")
+    assert "FIX_PROMPT" not in bot.script.stages
+    assert "хлеб" in bot.index.read(f"{texts.VAULT_GROCERIES_NOTE}.md")

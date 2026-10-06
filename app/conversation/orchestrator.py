@@ -528,14 +528,17 @@ class Orchestrator:
         return self._vault is not None and self._on("obsidian")
 
     async def _message(self, turn: _Turn, text: str, reply_to: int | None) -> Reply:
-        """A fix, when the Fix button was pressed or the message replies to a write's reply;
-        otherwise an ordinary message."""
-        execution_id = self._fixing.pop(turn.chat_id, None)
-        if execution_id is None and reply_to is not None:
+        """A fix, when the message replies to a vault write's reply (the reply wins: it is the
+        more specific, more recent gesture) or the Fix button was pressed and its write can
+        still be fixed; otherwise an ordinary message. So are a pending fix whose window has
+        closed, and a reply to a write Notion was part of."""
+        pending = self._fixing.pop(turn.chat_id, None)
+        if reply_to is not None:
             row = self._store.execution_by_reply(turn.chat_id, reply_to)
-            execution_id = row["id"] if row is not None else None
-        if execution_id is not None:
-            return await self._fix(turn, text, execution_id)
+            if row is not None and UndoRecord.model_validate_json(row["undo"]).kind == "vault":
+                return await self._fix(turn, text, row["id"])
+        if pending is not None and self._fixable(turn, pending) is not None:
+            return await self._fix(turn, text, pending)
         return await self._text(turn, text)
 
     async def _text(self, turn: _Turn, text: str) -> Reply:
