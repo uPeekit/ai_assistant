@@ -160,12 +160,19 @@ def _progress(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return send
 
 
+def _replied_to(update: Update) -> int | None:
+    """The id of the message this one replies to: a reply to the bot's report of a write is a
+    fix of that write (the orchestrator decides which messages are such reports)."""
+    replied = update.message.reply_to_message if update.message is not None else None
+    return replied.message_id if replied is not None else None
+
+
 async def _on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     orch: Orchestrator = context.bot_data[_ORCH]
     async with _typing(context, update.effective_chat.id):
         reply = await orch.handle_text(
             update.effective_chat.id, update.effective_user.id, update.message.text,
-            progress=_progress(update, context),
+            progress=_progress(update, context), reply_to=_replied_to(update),
         )
     await _send(update, context, reply, context.bot_data[_STORE])
 
@@ -201,6 +208,7 @@ async def _on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         reply = await orch.handle_text(
             update.effective_chat.id, update.effective_user.id, transcript,
             kind="voice", transcript=transcript, progress=_progress(update, context),
+            reply_to=_replied_to(update),
         )
     await _send(update, context, reply, store)
 

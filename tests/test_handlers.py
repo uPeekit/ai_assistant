@@ -45,8 +45,9 @@ class FakeOrchestrator:
         self.order = order
 
     async def handle_text(self, chat_id, user_id, text, *, kind="text", transcript=None,
-                          progress=None):
+                          progress=None, reply_to=None):
         self.progress = progress
+        self.reply_to = reply_to
         if self.order is not None:
             self.order.append("handle_text")
         self.calls.append(("handle_text", chat_id, user_id, text, kind, transcript))
@@ -783,3 +784,21 @@ async def test_a_press_telegram_will_no_longer_acknowledge_is_still_handled():
 
     assert hs.orch.calls == [("handle_callback", CHAT_ID, ALLOWED_USER, "u:7")]
     assert [m["text"] for m in hs.bot.sent] == ["undone"]
+
+
+async def test_a_reply_to_one_of_the_bots_messages_names_that_message():
+    hs = build()
+    original = Message(message_id=4242, date=datetime.datetime.now(UTC), chat=_chat(),
+                       from_user=User(id=777, is_bot=True, first_name="bot"),
+                       text="✅ Obsidian — задача")
+    message = _bound(Message(message_id=9, date=datetime.datetime.now(UTC), chat=_chat(),
+                             from_user=_user(ALLOWED_USER), text="в продукты",
+                             reply_to_message=original), hs.bot)
+    update = Update(update_id=9, message=message)
+
+    assert await dispatch(hs.app, update, hs.context)
+    assert hs.orch.reply_to == 4242
+
+    plain = text_update(ALLOWED_USER, "купить хлеб", hs.bot, update_id=10)
+    assert await dispatch(hs.app, plain, hs.context)
+    assert hs.orch.reply_to is None

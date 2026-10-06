@@ -290,6 +290,12 @@ def _undo_buttons(execution_id: int | None) -> list[list[Button]]:
     return [[Button(f"u:{execution_id}", texts.BTN_UNDO)]]
 
 
+def _vault_buttons(execution_id: int) -> list[list[Button]]:
+    """Undo, and Fix: a vault-only write can be changed in part (app/vault/fix.py)."""
+    return [[Button(f"u:{execution_id}", texts.BTN_UNDO),
+             Button(f"f:{execution_id}", texts.BTN_FIX)]]
+
+
 def _prefixed(reply: Reply, prefix: str) -> Reply:
     return reply if not prefix else replace(reply, text=f"{prefix}\n{reply.text}")
 
@@ -405,6 +411,9 @@ class Orchestrator:
         # long-lived process does not accumulate one per chat it has ever seen.
         self._locks: dict[int, asyncio.Lock] = {}
         self._waiting: dict[int, int] = {}
+        # Chats whose next message is a fix, after the Fix button: chat -> execution id. In
+        # memory on purpose: a restart forgets it, and pressing the button again costs nothing.
+        self._fixing: dict[int, int] = {}
 
     @asynccontextmanager
     async def _chat_lock(self, chat_id: int) -> AsyncIterator[None]:
@@ -433,9 +442,13 @@ class Orchestrator:
     async def handle_text(
         self, chat_id: int, user_id: int, text: str, *, kind: str = "text",
         transcript: str | None = None, progress: Callable[[Reply], Awaitable[None]] | None = None,
+        reply_to: int | None = None,
     ) -> Reply:
+        """`reply_to` is the id of the bot's message this one replies to in Telegram, if any:
+        a reply to a write's message is a fix of that write."""
         async with self._chat_lock(chat_id):
-            return await self._turn(chat_id, user_id, kind, lambda t: self._text(t, text),
+            return await self._turn(chat_id, user_id, kind,
+                                    lambda t: self._message(t, text, reply_to),
                                     progress=progress, raw_input=text, transcription=transcript)
 
     async def handle_callback(
@@ -513,6 +526,17 @@ class Orchestrator:
 
     def _vault_on(self) -> bool:
         return self._vault is not None and self._on("obsidian")
+
+    async def _message(self, turn: _Turn, text: str, reply_to: int | None) -> Reply:
+        """A fix, when the Fix button was pressed or the message replies to a write's reply;
+        otherwise an ordinary message."""
+        execution_id = self._fixing.pop(turn.chat_id, None)
+        if execution_id is None and reply_to is not None:
+            row = self._store.execution_by_reply(turn.chat_id, reply_to)
+            execution_id = row["id"] if row is not None else None
+        if execution_id is not None:
+            return await self._fix(turn, text, execution_id)
+        return await self._text(turn, text)
 
     async def _text(self, turn: _Turn, text: str) -> Reply:
         called = address.strip(text, self._names)
@@ -1013,6 +1037,10 @@ class Orchestrator:
 
     async def _callback(self, turn: _Turn, data: str) -> Reply:
         prefix, _, rest = data.partition(":")
+        # Any button other than Fix means the chat has moved on from a fix it asked for.
+        self._fixing.pop(turn.chat_id, None)
+        if prefix == "f" and rest.isdigit():
+            return self._fix_ask(turn, int(rest))
         if prefix == "u" and rest.isdigit():
             return await self._undo(turn, int(rest))
         if prefix == "i" and rest.isdigit():
@@ -1093,7 +1121,64 @@ class Orchestrator:
             reply = await self._after_step(turn, reply)
         return reply
 
+    # ---- fixing part of a vault write -----------------------------------------------------
+
+    def _fixable(self, turn: _Turn, execution_id: int) -> tuple[dict, UndoRecord] | None:
+        """The row and its record, when that write can still be fixed: this chat's, within the
+        undo window, not undone, the vault's alone, and every write knowing what it did."""
+        row = self._store.get_execution(execution_id, turn.now)
+        if row is None or row["undone"] or row["chat_id"] != turn.chat_id:
+            return None
+        record = UndoRecord.model_validate_json(row["undo"])
+        if (record.kind != "vault" or not record.vault
+                or any(u.action is None for u in record.vault) or not self._vault_on()):
+            return None
+        return row, record
+
+    def _fix_too_late(self, turn: _Turn) -> Reply:
+        turn.audit(decision=_kind("FIX"), error="FIX_EXPIRED")
+        return Reply(texts.FIX_EXPIRED.format(minutes=max(1, self._s.undo_window_s // 60)))
+
+    def _fix_ask(self, turn: _Turn, execution_id: int) -> Reply:
+        if self._fixable(turn, execution_id) is None:
+            return self._fix_too_late(turn)
+        self._fixing[turn.chat_id] = execution_id
+        turn.audit(decision=_kind("FIX_ASK"))
+        return Reply(texts.FIX_ASK)
+
+    async def _fix(self, turn: _Turn, text: str, execution_id: int) -> Reply:
+        """Change part of what a turn wrote. The old row is done with once anything changed;
+        the new one carries the untouched writes and the new ones, so its Undo takes the whole
+        thing back to before the first message."""
+        found = self._fixable(turn, execution_id)
+        if found is None:
+            return self._fix_too_late(turn)
+        row, record = found
+        assert self._vault is not None
+        turn.audit(decision=_kind("FIX"))
+        turn.source_text = text
+        event = self._store.get_event(row["event_id"]) or {}
+        original = (event.get("raw_input") or event.get("transcription") or "").strip()
+        result = await self._vault.fix(original, text, record.vault)
+        if result.model:
+            turn.call(result.model, "fix", fixed=execution_id, writes=len(result.writes) or None,
+                      error=result.error or None, prompt_tokens=result.prompt_tokens,
+                      output_tokens=result.output_tokens)
+        line = result.reply_line()
+        if not result.applied:
+            return Reply(line)
+        self._store.mark_undone(execution_id)
+        undos = result.undos
+        if not undos:  # everything was dropped: nothing is left to take back
+            return Reply(line)
+        turn.execution_id = self._store.add_execution(
+            turn.event_id, turn.chat_id, None,
+            UndoRecord(kind="vault", vault=undos).model_dump_json(),
+            self._clock() + timedelta(seconds=self._s.undo_window_s))
+        return Reply(line, _vault_buttons(turn.execution_id), undo_id=turn.execution_id)
+
     async def _undo(self, turn: _Turn, execution_id: int | None) -> Reply:
+        self._fixing.pop(turn.chat_id, None)
         minutes = max(1, self._s.undo_window_s // 60)
         row = (self._store.get_execution(execution_id, turn.now) if execution_id is not None
                else self._store.latest_execution(turn.chat_id, turn.now))
@@ -1123,6 +1208,7 @@ class Orchestrator:
         return Reply(f"{texts.UNDONE}\n{kept}" if undone_some else kept)
 
     async def _cancel(self, turn: _Turn) -> Reply:
+        self._fixing.pop(turn.chat_id, None)
         self._sessions.drop(turn.chat_id)
         turn.audit(decision=_kind("CANCEL"))
         return await self._cancelled()
@@ -1466,9 +1552,9 @@ class Orchestrator:
             self._record_vault_undo(turn, undos)
             if not reply.buttons and turn.execution_id is not None:
                 # Notion wrote nothing, or is switched off: the vault's write is the only
-                # thing to take back, and it gets the same button a Notion write has. A reply
-                # that already carries buttons is a question; /undo still reaches the row.
-                reply = replace(reply, buttons=_undo_buttons(turn.execution_id),
+                # thing to take back or fix, and it gets the buttons for both. A reply that
+                # already carries buttons is a question; /undo still reaches the row.
+                reply = replace(reply, buttons=_vault_buttons(turn.execution_id),
                                 undo_id=turn.execution_id)
         line = result.reply_line()
         if not line:
