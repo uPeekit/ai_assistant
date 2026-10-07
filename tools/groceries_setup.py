@@ -45,6 +45,7 @@ not done
 filename includes {texts.VAULT_GROCERIES_NOTE}
 group by filename
 hide task count
+hide toolbar
 hide backlink
 hide edit button
 hide postpone button

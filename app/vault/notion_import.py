@@ -306,9 +306,9 @@ class NotionImporter:
                 "author": _prop(row, "author"),
                 "date": _day(_prop(row, "Date")),
                 "url": _prop(row, "URL"),
-                "event_posted": _prop(row, "event_posted"),
-                "vyvody_posted": _prop(row, "vyvody_posted"),
-                "notion": row.get("url"),
+                # No event_posted, no vyvody_posted, no link back to Notion: the user dropped
+                # all three from the meetings on 2026-10-07. Conclusions are text now
+                # (`vyvody`), written by hand, so there is nothing to carry over.
             }, body), r)
         if rows:
             self._add(f"{CLUB_DIR}.base", _club_base())
@@ -413,8 +413,7 @@ def _books_base() -> str:
 def _club_base() -> str:
     return _base(CLUB_DIR, [{
         "type": "table", "name": texts.VAULT_CLUB_VIEW,
-        "order": ["file.name", "note.book", "note.author", "note.date", "note.event_posted",
-                  "note.vyvody_posted"],
+        "order": ["file.name", "note.book", "note.author", "note.date", "note.vyvody"],
     }], texts.VAULT_CLUB_COLUMNS)
 
 

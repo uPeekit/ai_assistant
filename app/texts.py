@@ -321,8 +321,7 @@ VAULT_BOOK_VIEWS = {"Reading": "Читаю", "To read": "Хочу прочита
 VAULT_BOOKS_ALL_VIEW = "Все"
 VAULT_BOOKS_COLUMNS = {"status": "Статус", "author": "Автор", "created": "Добавлена"}
 VAULT_CLUB_VIEW = "Встречи"
-VAULT_CLUB_COLUMNS = {"book": "Книга", "author": "Автор", "date": "Дата",
-                      "event_posted": "Анонс", "vyvody_posted": "Выводы"}
+VAULT_CLUB_COLUMNS = {"book": "Книга", "author": "Автор", "date": "Дата", "vyvody": "Выводы"}
 VAULT_HOME_TODAY = "Сегодня и просрочено"
 VAULT_HOME_DOING = "В работе"
 VAULT_HOME_SOON = "Скоро"
