@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import threading
 from collections.abc import Callable
 from datetime import datetime
@@ -24,6 +25,9 @@ from app.vault.names import safe_name, unique
 log = logging.getLogger(__name__)
 
 TRASH_DIR = ".trash"
+# A property value that is one wiki link: `[[Authors/Name]]`, `[[Name]]`, `[[Name|shown as]]`.
+# Group 1 is the folder part with its slash, when there is one.
+_LINK = re.compile(r"^\[\[((?:[^\]|/]+/)+)?[^\]|/]+(?:\|[^\]]*)?\]\]$")
 MAX_LINE = 2000
 
 
@@ -313,7 +317,7 @@ class VaultWriter:
         siblings = [n for n in self._index.notes if n.folder == folder]
         if len(siblings) < 2:
             return props
-        out = dict(props)
+        out = self._linked(siblings, props)
         shared = set.intersection(*(set(n.props) for n in siblings))
         for key in sorted(shared):
             if not all(isinstance(n.props[key], bool) for n in siblings):
@@ -321,6 +325,30 @@ class VaultWriter:
             given = out.get(key)
             out[key] = (given if isinstance(given, bool)
                         else str(given).strip().casefold() in ("true", "yes"))
+        return out
+
+    @staticmethod
+    def _linked(siblings: list, props: dict) -> dict:
+        """`props` with plain text turned into a link wherever the folder keeps that property
+        as one.
+
+        The user's books store the author as a link into an authors folder, so a click makes
+        the author's note there rather than in the vault's root. The model sends a
+        name; the folder says what shape it takes. A property that is a link in most
+        siblings becomes a link, into the folder most of them point at; anything else
+        (a folder that keeps it as text, a value that is already a link) is left as it is."""
+        out = dict(props)
+        for key, value in props.items():
+            text = str(value).strip() if isinstance(value, str) else ""
+            if not text or text.startswith("[["):
+                continue
+            values = [n.props.get(key) for n in siblings if n.props.get(key)]
+            links = [m for m in (_LINK.match(str(v).strip()) for v in values) if m]
+            if not values or len(links) * 2 <= len(values):
+                continue
+            folders = [m.group(1) or "" for m in links]
+            folder = max(set(folders), key=folders.count)
+            out[key] = f"[[{folder}{text}]]"
         return out
 
     def _append(self, action: VaultAction) -> VaultWrite:
@@ -343,8 +371,11 @@ class VaultWriter:
         text = previous
         changed = False
         if action.props:
+            siblings = [n for n in self._index.notes
+                        if n.folder == note.folder and n.path != note.path]
+            props = self._linked(siblings, action.props)
             text = mdedit.set_props(text, {k: (None if v == "" else v)
-                                           for k, v in action.props.items()})
+                                           for k, v in props.items()})
             changed = True
         if action.task or action.done is not None or action.due:
             line = mdedit.find_task(text, action.task or action.text or note.name)

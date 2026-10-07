@@ -208,6 +208,42 @@ def test_a_new_note_gets_the_tick_boxes_every_note_in_its_folder_has(tmp_path):
     assert frontmatter.split(index.read(other.path))[0] == {}
 
 
+def test_a_property_the_folder_keeps_as_links_is_written_as_a_link_into_the_same_folder(tmp_path):
+    """The user's books store `author: '[[Авторы/Виктор Пелевин]]'`, so a click on an author
+    creates the author's note in «Авторы» rather than in the vault's root. A book the bot files
+    follows the folder: the author it was given becomes the same kind of link. A folder that
+    keeps the property as text keeps getting text."""
+    from app.vault.index import VaultIndex
+    from app.vault.writer import VaultWriter
+
+    (tmp_path / "Книги").mkdir()
+    for name in ("Омон Ра", "Жизнь насекомых", "Бесы"):
+        (tmp_path / f"Книги/{name}.md").write_text(
+            "---\nstatus: Read\nauthor: '[[Авторы/Виктор Пелевин]]'\n---\n", encoding="utf-8")
+    (tmp_path / "Кнуб").mkdir()
+    for name in ("2026-09-21 Кувшинки", "2026-09-28 Розы"):
+        (tmp_path / f"Кнуб/{name}.md").write_text("---\nauthor: Мишель Бюсси\n---\n",
+                                                 encoding="utf-8")
+    index = VaultIndex(tmp_path)
+    index.refresh()
+    writer = VaultWriter(index)
+
+    book = writer.run(VaultAction(action="note", folder="Книги", title="Доктор Живаго",
+                                  props={"author": "Борис Пастернак", "status": "To read"}))
+    assert frontmatter.split(index.read(book.path))[0]["author"] == "[[Авторы/Борис Пастернак]]"
+    linked = writer.run(VaultAction(action="note", folder="Книги", title="Чапаев и Пустота",
+                                    props={"author": "[[Авторы/Виктор Пелевин]]"}))
+    assert frontmatter.split(index.read(linked.path))[0]["author"] == "[[Авторы/Виктор Пелевин]]"
+    meeting = writer.run(VaultAction(action="note", folder="Кнуб", title="Пикник",
+                                     props={"author": "Стругацкие"}))
+    assert frontmatter.split(index.read(meeting.path))[0]["author"] == "Стругацкие"
+
+    # Changing the property on an existing book follows the same rule.
+    writer.run(VaultAction(action="update", note="Бесы", props={"author": "Фёдор Достоевский"}))
+    assert frontmatter.split(index.read("Книги/Бесы.md"))[0]["author"] == \
+        "[[Авторы/Фёдор Достоевский]]"
+
+
 def test_update_sets_properties_and_ticks_a_task(writer, index):
     write = writer.run(VaultAction(action="update", note="Чапаев",
                                     props={"status": "Read", "author": ""}))
