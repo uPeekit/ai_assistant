@@ -159,11 +159,34 @@ class GmailIMAP:
 
     # ---- plumbing --------------------------------------------------------------------
 
-    def _open(self) -> imaplib.IMAP4_SSL:
+    def set_seen(self, uids: list[str], validity: str, seen: bool = True) -> int:
+        """Mark these letters read (or unread again); returns how many were asked for.
+
+        The one write this module makes, and only when the user presses the digest's
+        button. Refuses when the mailbox was renumbered since the digest (UIDVALIDITY
+        changed): the same numbers would now name other letters."""
+        if not uids:
+            return 0
+        try:
+            with self._open(readonly=False) as box:
+                now = self._validity(box)
+                if validity and now and now != validity:
+                    raise MailboxError("the mailbox was renumbered since that digest")
+                flag = "+FLAGS" if seen else "-FLAGS"
+                ok, _ = box.uid("STORE", ",".join(uids), flag, "(\\Seen)")
+                if ok != "OK":
+                    raise MailboxError(f"store failed: {ok}")
+                return len(uids)
+        except (imaplib.IMAP4.error, OSError) as e:
+            raise MailboxError(f"{type(e).__name__}: {e}") from None
+
+    def _open(self, readonly: bool = True) -> imaplib.IMAP4_SSL:
         box = imaplib.IMAP4_SSL(self._host, self._port, timeout=TIMEOUT_S)
         try:
             box.login(self._address, self._password)
-            box.select(FOLDER, readonly=True)  # readonly: the server may not change a flag
+            # Read-only unless a flag is being set on the user's say-so (set_seen): a
+            # read-only select is what keeps reading the mail from ever changing it.
+            box.select(FOLDER, readonly=readonly)
         except Exception:
             with suppress(Exception):
                 box.logout()

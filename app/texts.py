@@ -19,6 +19,9 @@ BTN_OTHER = "Другое"
 BTN_ADD_NEW = "Добавить как новое"
 BTN_UNDO_ALL = "Отменить всё"
 BTN_FIX = "Поправить"
+# Under a mail digest: mark every letter it listed as read, and the way back.
+BTN_MAIL_READ = "✓ Отметить прочитанными"
+BTN_MAIL_UNREAD = "↩ Вернуть непрочитанными"
 
 # ---- values -------------------------------------------------------------------------------
 
@@ -517,6 +520,10 @@ ADDRESS_OPENERS = ("эй", "ей", "hey", "ok", "окей", "ну", "слуша�
 
 # ---- mail digest ------------------------------------------------------------------------------
 
+MAIL_MARKED = "Отмечено прочитанными: {n}"
+MAIL_UNMARKED = "Снова непрочитанные: {n}"
+MAIL_MARK_GONE = "Этот дайджест слишком старый — отметьте письма в почте"
+MAIL_MARK_FAILED = "Не получилось: {error}"
 MAIL_HEADER = "📬 Почта — {n} писем:"
 MAIL_BUCKET = "\n{bucket} ({n}):"
 MAIL_ITEM = "• {sender} — {summary}"

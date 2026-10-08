@@ -33,7 +33,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatAction
 from telegram.error import NetworkError, TelegramError
 from telegram.ext import (
@@ -66,17 +66,22 @@ _SETTINGS = "settings"
 _SPEECH = "speech"
 _DISCOVERY = "discovery"
 _STORE = "store"
+# The mail service, when mail is on: its digests' buttons are answered here, not by the
+# conversation (they are not a message to understand).
+MAIL = "mail"
+MAIL_READ, MAIL_UNREAD = "mr", "mu"
 
 
 def register(
     app: Application, orch: Orchestrator, settings: Settings, speech: SpeechToText,
-    discovery: Discovery, store: AuditStore,
+    discovery: Discovery, store: AuditStore, mail=None,
 ) -> None:
     app.bot_data[_ORCH] = orch
     app.bot_data[_SETTINGS] = settings
     app.bot_data[_SPEECH] = speech
     app.bot_data[_DISCOVERY] = discovery
     app.bot_data[_STORE] = store
+    app.bot_data[MAIL] = mail
 
     gate = allowed_filter(settings)
     app.add_handler(CommandHandler(["start", "help"], _cmd_help, filters=gate))
@@ -95,6 +100,9 @@ def register(
     app.add_handler(
         MessageHandler((filters.VOICE | filters.AUDIO | filters.VIDEO_NOTE) & gate, _on_voice)
     )
+    # Before the general one: a mail button is answered here and never reaches it.
+    app.add_handler(CallbackQueryHandler(_on_mail_callback,
+                                         pattern=rf"^({MAIL_READ}|{MAIL_UNREAD}):"))
     app.add_handler(CallbackQueryHandler(_on_callback))
     app.add_error_handler(error_handler)
 
@@ -245,6 +253,37 @@ async def _on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                                            progress=_progress(update, context))
     await _clear_keyboard(query)
     await _send(update, context, reply, context.bot_data[_STORE])
+
+
+def mail_keyboard(digest_id: str, *, read: bool) -> InlineKeyboardMarkup:
+    """The digest's one button: mark its letters read, or — once they are — unread again."""
+    if read:
+        return InlineKeyboardMarkup([[InlineKeyboardButton(
+            texts.BTN_MAIL_UNREAD, callback_data=f"{MAIL_UNREAD}:{digest_id}")]])
+    return InlineKeyboardMarkup([[InlineKeyboardButton(
+        texts.BTN_MAIL_READ, callback_data=f"{MAIL_READ}:{digest_id}")]])
+
+
+async def _on_mail_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """The "mark as read" button under a digest: every letter that digest listed is flagged
+    read in Gmail, the answer says how many, and the button becomes the way back."""
+    settings: Settings = context.bot_data[_SETTINGS]
+    if _guard_callback(update, settings) is None:
+        return
+    query = update.callback_query
+    prefix, _, digest_id = (query.data or "").partition(":")
+    service = context.bot_data.get(MAIL)
+    if service is None:
+        ok, said = False, texts.MAIL_MARK_GONE
+    else:
+        ok, said = await service.mark(digest_id, seen=prefix == MAIL_READ)
+    # The answer is the whole reply: a short notice over the chat, no new message.
+    with contextlib.suppress(TelegramError):
+        await query.answer(text=said)
+    if ok:
+        with contextlib.suppress(TelegramError):
+            await query.edit_message_reply_markup(
+                reply_markup=mail_keyboard(digest_id, read=prefix == MAIL_READ))
 
 
 async def _clear_keyboard(query) -> None:

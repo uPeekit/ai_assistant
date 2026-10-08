@@ -78,6 +78,7 @@ from app.mail.buckets import Buckets
 from app.mail.classify import Classifier
 from app.mail.imap import GmailIMAP
 from app.mail.local import LocalClassifier
+from app.mail.marks import DigestMarks
 from app.mail.service import MailService, MailState, digest, shadow_digest
 from app.notion.descriptions import Descriptions, WorkspaceNote
 from app.notion.direct import DirectNotionProvider
@@ -88,7 +89,7 @@ from app.notion.provider import NotionProvider
 from app.speech.base import SpeechToText
 from app.speech.whisper_local import WhisperLocal
 from app.switches import Switches
-from app.telegram.handlers import register
+from app.telegram.handlers import mail_keyboard, register
 from app.telegram.sending import send_text
 from app.tuning import Defaults, Tuning
 from app.validation.policy import Policy, Thresholds
@@ -340,6 +341,7 @@ def _mail_digest(settings: Settings, switches: Switches, buckets_file: Buckets, 
     service = MailService(
         GmailIMAP(settings.gmail_address, password), classifier,
         MailState(settings.db_path.with_name("mail_state.json")),
+        marks=DigestMarks(settings.db_path.with_name("mail_digests.json")),
         max_per_run=settings.mail_max_per_run, source=buckets_file.parsed, shadows=shadows,
     )
 
@@ -354,14 +356,17 @@ def _mail_digest(settings: Settings, switches: Switches, buckets_file: Buckets, 
             return
         text = f"{text}\n\n{warning}".strip() if warning else text
 
-        async def to_everyone(body: str) -> None:
+        async def to_everyone(body: str, markup=None) -> None:
             for chat_id in sorted(settings.allowed_user_ids):
                 try:
-                    await send_text(application().bot, chat_id, body)
+                    await send_text(application().bot, chat_id, body, markup)
                 except Exception:
                     log.exception("could not send the mail digest to a chat")
 
-        await to_everyone(text)
+        # The real digest carries «mark these as read», for exactly the letters it lists. The
+        # comparison digests below cover the same letters and get no button of their own.
+        digest_id = service.remember(run)
+        await to_everyone(text, mail_keyboard(digest_id, read=False) if digest_id else None)
         # The local models only start once the real digest is out — a slow or hung one must not
         # hold up the digest the user relies on — and each sends its own message as it finishes.
         async for shadow in service.compare(run):
@@ -481,7 +486,7 @@ def build(
 
     token = settings.telegram_bot_token.get_secret_value() or _PLACEHOLDER_TOKEN
     telegram_app = Application.builder().token(token).build()
-    register(telegram_app, orchestrator, settings, speech, discovery, store)
+    register(telegram_app, orchestrator, settings, speech, discovery, store, mail=mail)
 
     # `app` is assigned below, after these closures are defined but before either is ever called
     # (PTB only calls post_init/post_shutdown once run_polling() — or a test — invokes them), so

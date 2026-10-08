@@ -282,7 +282,7 @@ async def test_the_digest_sender_sends_the_real_digest_before_any_local_model_ru
         async def aclose(self) -> None:
             pass
 
-    async def send_message(chat_id, body):
+    async def send_message(chat_id, body, **kw):
         label = next((m for m in ("first", "second") if f"({m}," in body), "real")
         events.append(f"send:{label}")
 
@@ -340,7 +340,7 @@ async def test_a_local_mail_model_writes_the_digest_itself_with_no_claude_needed
     def no_claude(*a, **kw):
         raise AssertionError("Claude must not be built for a local mail model")
 
-    async def send_message(chat_id, body):
+    async def send_message(chat_id, body, **kw):
         sent.append(body)
 
     monkeypatch.setattr(main, "GmailIMAP", lambda *a: FakeMailbox([([message("10")], "1")]))

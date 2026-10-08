@@ -1,7 +1,9 @@
 """One digest run: read what arrived since last time, sort it, and write the message.
 
-Read-only by construction — the mailbox is opened read-only and no code path here can change a
-message. State (where the last run stopped) lives in a small JSON file next to the database."""
+Reading is read-only by construction — the mailbox is opened read-only to read. The one
+change it can make is the digest's own button (`mark`): it flags exactly the letters that
+digest listed as read, or unread again. State (where the last run stopped) lives in a small
+JSON file next to the database."""
 
 from __future__ import annotations
 
@@ -18,6 +20,7 @@ from app import texts
 from app.mail.classify import OTHER, Classifier, Sorted
 from app.mail.imap import GmailIMAP, MailboxError, Message
 from app.mail.local import LocalClassifier
+from app.mail.marks import DigestMarks
 
 log = logging.getLogger(__name__)
 
@@ -41,6 +44,8 @@ class MailRun:
     error: str = ""
     prompt_tokens: int = 0
     output_tokens: int = 0
+    # The mailbox generation these uids belong to, for marking them read later.
+    validity: str = ""
 
     @property
     def empty(self) -> bool:
@@ -114,8 +119,9 @@ class MailService:
                  state: MailState,
                  *, buckets: list[str] | None = None, max_per_run: int = 40,
                  source: Callable[[], tuple[list[str], dict[str, str]]] | None = None,
-                 shadows: list | None = None) -> None:
+                 shadows: list | None = None, marks: DigestMarks | None = None) -> None:
         self._box = mailbox
+        self.marks = marks
         self._classifier = classifier
         self._shadows = list(shadows or [])
         self._state = state
@@ -175,8 +181,31 @@ class MailService:
         log.info("mail: %d message(s), buckets %s", len(sorted_),
                  ", ".join(sorted({s.bucket for s in sorted_})))
         run = MailRun(sorted=sorted_, prompt_tokens=prompt_tokens,
-                      output_tokens=output_tokens)
+                      output_tokens=output_tokens, validity=now_validity)
         return run
+
+    def remember(self, run: MailRun) -> str | None:
+        """Record which letters this digest covered; the id goes in its button. None when
+        there is nothing to mark: no mail, a failed run, or no record kept."""
+        if self.marks is None or not run.sorted:
+            return None
+        return self.marks.add([s.message.uid for s in run.sorted], run.validity)
+
+    async def mark(self, digest_id: str, *, seen: bool) -> tuple[bool, str]:
+        """Mark every letter of one digest read (or unread again), and what to tell the
+        user. Only that digest's letters: a later digest has its own button."""
+        found = self.marks.get(digest_id) if self.marks is not None else None
+        if found is None:
+            return False, texts.MAIL_MARK_GONE
+        uids, validity = found
+        try:
+            n = await asyncio.to_thread(self._box.set_seen, uids, validity, seen)
+        except MailboxError as e:
+            log.warning("could not mark a digest's mail: %s", e)
+            return False, texts.MAIL_MARK_FAILED.format(error=e)
+        log.info("mail: %d letter(s) of digest %s marked %s", n, digest_id,
+                 "read" if seen else "unread")
+        return True, (texts.MAIL_MARKED if seen else texts.MAIL_UNMARKED).format(n=n)
 
     async def compare(self, run: MailRun) -> AsyncIterator[ShadowRun]:
         """The same mail through each local model, yielded as each one finishes.
