@@ -159,7 +159,9 @@ async def test_pipeline_writes_and_says_what_it_did(index):
             {"name": "status", "value": "Read"}]},
     ]}).handle("купи лампочки и отметь что дочитал чапаева")
     assert [w.kind for w in turn.writes] == ["task", "update"]
-    assert "Obsidian —" in turn.reply_line()
+    assert turn.reply_line().splitlines() == [
+        "✅ Obsidian:", "• задача «купить лампочки» · #home",
+        "• обновлено «Чапаев и Пустота»: status → Read"]
     assert "- [ ] купить лампочки #home" in index.read(f"{texts.VAULT_TASKS_NOTE}.md")
     assert "status: Read" in index.read(f"{texts.VAULT_BOOKS_DIR}/Чапаев и Пустота.md")
     assert len(turn.undos) == 2
@@ -266,8 +268,10 @@ async def test_a_write_that_fails_does_not_cost_the_others_their_undo(index):
     assert [w.kind for w in turn.writes] == ["task", "task"]
     assert len(turn.undos) == 2
     line = turn.reply_line()
-    assert line.startswith(texts.VAULT_REPLY.split("{")[0])
-    assert texts.VAULT_SOME_FAILED.format(n=1) in line
+    assert line.startswith(texts.VAULT_REPLY_LIST)
+    # The failure is said last, after the two writes that did happen.
+    assert line.splitlines()[-1] == texts.VAULT_LIST_NOTE.format(
+        notes=texts.VAULT_SOME_FAILED.format(n=1))
     tasks = index.read(f"{texts.VAULT_TASKS_NOTE}.md")
     assert "первое" in tasks and "третье" in tasks
 

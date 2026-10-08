@@ -26,7 +26,7 @@ from app.llm.rewrite import RewriteError, Rewriter
 from app.llm.rewrite import TooLong as RewriteTooLong
 from app.vault import agenda as agenda_mod
 from app.vault import fix as fixing
-from app.vault import frontmatter, mdedit
+from app.vault import frontmatter, mdedit, summary
 from app.vault.filer import GROCERY_LIST, Filer, FilerError, check, context, doubtful
 from app.vault.index import VaultIndex
 from app.vault.linker import Linker
@@ -120,15 +120,24 @@ class VaultTurn:
             return self._found()
         if not self.writes:
             return ""
-        what = ", ".join(w.what for w in self.writes[:MAX_SUMMARY])
-        if len(self.writes) > MAX_SUMMARY:
-            what += f" (+{len(self.writes) - MAX_SUMMARY})"
         # What was written is said even when something else went wrong: those files are on
         # disk and Undo reaches them, so a bare "not written" would be untrue twice over.
         notes = "; ".join(n for n in (self.remark, why) if n)
-        if notes:
-            what += f" — {notes}"
-        line = texts.VAULT_REPLY.format(what=what)
+        tail = f" — {notes}" if notes else ""
+        if len(self.writes) == 1:
+            line = texts.VAULT_REPLY.format(what=self.writes[0].what + tail)
+        else:
+            # Several writes are a list, one per line: a dozen tasks, each with its tags
+            # and date, do not fit one line and are the part the user wants to check.
+            listed = [texts.VAULT_LIST_ITEM.format(what=w.what)
+                      for w in self.writes[:summary.MAX_LISTED]]
+            if len(self.writes) > summary.MAX_LISTED:
+                listed.append(texts.VAULT_LIST_MORE.format(
+                    n=len(self.writes) - summary.MAX_LISTED))
+            # What went wrong goes last, on its own line, after the writes it qualifies.
+            if notes:
+                listed.append(texts.VAULT_LIST_NOTE.format(notes=notes))
+            line = "\n".join([texts.VAULT_REPLY_LIST, *listed])
         if self.answer:
             return f"{line}\n{self.answer}"
         return f"{line}\n{self._found()}" if self.asked else line

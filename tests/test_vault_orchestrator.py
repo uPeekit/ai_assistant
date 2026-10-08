@@ -272,7 +272,9 @@ async def test_a_plan_reaches_the_vault_once_from_the_message_and_one_button_und
     assert len(client.seen) == 1  # one filer call for the message, none per step
     tasks = bot.index.read(f"{texts.VAULT_TASKS_NOTE}.md")
     assert "- [ ] хлеб 📅 2026-09-22" in tasks and "- [ ] молоко 📅 2026-09-22" in tasks
-    assert "Obsidian —" in reply.text  # reported once, under the plan's closing line
+    # Reported once, under the plan's closing line: both tasks, each with its date.
+    assert "✅ Obsidian:\n• задача «хлеб» · 📅 сегодня\n• задача «молоко» · 📅 сегодня" \
+        in reply.text
 
     # The vault's undo sits on the plan's own batch row: "Отменить всё" reverts both stores.
     batch_row = executions(bot)[-1]

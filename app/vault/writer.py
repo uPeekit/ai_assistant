@@ -17,7 +17,7 @@ from pathlib import Path, PurePosixPath
 from pydantic import BaseModel, ConfigDict
 
 from app import texts
-from app.vault import frontmatter, groceries, mdedit, revert
+from app.vault import frontmatter, groceries, mdedit, revert, summary
 from app.vault.frontmatter import render
 from app.vault.index import SKIP_DIRS, VaultIndex
 from app.vault.names import safe_name, unique
@@ -84,15 +84,16 @@ class VaultWrite(BaseModel):
     kind: str
     path: str
     note: str
-    # What exactly was written, when the note's name is not the interesting part: the
-    # products a grocery write touched.
+    # What exactly was written (app/vault/summary.py): the task with its tags and date, the
+    # note with its folder and properties, the products a grocery write touched.
     detail: str = ""
     undo: VaultUndo | None = None
 
     @property
     def what(self) -> str:
-        return texts.VAULT_WHAT.get(self.kind, "{note}").format(note=self.note,
-                                                                 detail=self.detail)
+        template = (texts.VAULT_WHAT_DETAIL.get(self.kind) if self.detail else None) or \
+            texts.VAULT_WHAT.get(self.kind, "{note}")
+        return template.format(note=self.note, detail=self.detail)
 
 
 def task_line(action: VaultAction, countdown_tag: str) -> str:
@@ -131,6 +132,9 @@ class VaultWriter:
         # back a text that lacks the other's line. One lock for the vault: a write is
         # milliseconds, and there is one user.
         self._lock = threading.RLock()
+
+    def _today(self):
+        return self._now().date()
 
     # ---- files -----------------------------------------------------------------------
 
@@ -288,7 +292,8 @@ class VaultWriter:
         else:
             updated = mdedit.append_to(text, [line])
         undo = self._write(rel, updated or f"{text}\n{line}\n", previous)
-        return VaultWrite(kind="task", path=rel, note=texts.VAULT_TASKS_NOTE, undo=undo)
+        return VaultWrite(kind="task", path=rel, note=texts.VAULT_TASKS_NOTE, undo=undo,
+                          detail=summary.task(action, self._today(), self._tag_source()))
 
     def _note(self, action: VaultAction) -> VaultWrite:
         folder = action.folder.strip("/") or texts.VAULT_NOTES_DIR
@@ -304,7 +309,8 @@ class VaultWriter:
             props["tags"] = tags
         props = self._shaped(folder, props)
         undo = self._write(rel, render(props, "\n".join(action.body)), None)
-        return VaultWrite(kind="note", path=rel, note=name, undo=undo)
+        return VaultWrite(kind="note", path=rel, note=name, undo=undo,
+                          detail=summary.note(name, folder, props))
 
     def _shaped(self, folder: str, props: dict) -> dict:
         """`props` with the tick boxes every note already in `folder` has.
@@ -361,7 +367,8 @@ class VaultWriter:
         if updated is None:  # the heading is gone: the note's end is still the right place
             updated = mdedit.append_to(previous, lines) or previous
         undo = self._write(note.path, updated, previous)
-        return VaultWrite(kind="append", path=note.path, note=note.name, undo=undo)
+        return VaultWrite(kind="append", path=note.path, note=note.name, undo=undo,
+                          detail=summary.lines(lines))
 
     def _update(self, action: VaultAction) -> VaultWrite:
         note = self._index.by_name(action.note)
@@ -390,7 +397,8 @@ class VaultWriter:
         if not changed:
             return self._inbox(action)
         undo = self._write(note.path, text, previous)
-        return VaultWrite(kind="update", path=note.path, note=note.name, undo=undo)
+        return VaultWrite(kind="update", path=note.path, note=note.name, undo=undo,
+                          detail=summary.update(action, self._today()))
 
     def _rewrite(self, action: VaultAction) -> VaultWrite:
         """Replace a note's text (or one section of it) with text already written by the
@@ -451,7 +459,8 @@ class VaultWriter:
         line = f"- {self._now().strftime('%H:%M')} {action.text.strip()}"
         updated = mdedit.append_to(previous or "", [line]) or line
         undo = self._write(rel, updated, previous)
-        return VaultWrite(kind="log", path=rel, note=day, undo=undo)
+        return VaultWrite(kind="log", path=rel, note=day, undo=undo,
+                          detail=summary.text(action.text))
 
     def _inbox(self, action: VaultAction) -> VaultWrite:
         rel = f"{texts.VAULT_INBOX_NOTE}.md"
@@ -459,4 +468,6 @@ class VaultWriter:
         line = f"- {(action.text or action.title or ' '.join(action.body)).strip()[:MAX_LINE]}"
         updated = mdedit.append_to(previous or "", [line]) or line
         undo = self._write(rel, updated, previous)
-        return VaultWrite(kind="inbox", path=rel, note=texts.VAULT_INBOX_NOTE, undo=undo)
+        return VaultWrite(kind="inbox", path=rel, note=texts.VAULT_INBOX_NOTE, undo=undo,
+                          detail=summary.text(action.text or action.title
+                                              or " ".join(action.body)))

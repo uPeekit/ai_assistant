@@ -465,6 +465,26 @@ VAULT_WHAT = {
     "grocery": "в список продуктов: {detail}",
     "grocery_done": "куплено: {detail}",
 }
+# The same, when the writer said what exactly it wrote (app/vault/summary.py builds {detail}).
+VAULT_WHAT_DETAIL = {
+    "task": "задача {detail}",
+    "note": "заметка {detail}",
+    "append": "дописано в «{note}»{detail}",
+    "update": "обновлено «{note}»{detail}",
+    "log": "в дневник: {detail}",
+    "inbox": "в «{note}» — не понял, куда это: {detail}",
+}
+# A reply with several writes lists them, one per line, under this.
+VAULT_REPLY_LIST = "✅ Obsidian:"
+VAULT_LIST_ITEM = "• {what}"
+VAULT_LIST_MORE = "• … и ещё {n}"
+VAULT_LIST_NOTE = "⚠️ {notes}"
+VAULT_SUM_TODAY = "сегодня"
+VAULT_SUM_TOMORROW = "завтра"
+VAULT_WEEKDAYS_SHORT = ("пн", "вт", "ср", "чт", "пт", "сб", "вс")
+VAULT_SUM_NOTE = "«{name}» в «{folder}»"
+VAULT_SUM_REOPENED = "{task} снова открыта"
+VAULT_SUM_CLEARED = "пусто"
 
 # ---- the vault's agenda: the morning message and the "what now" answer -------------------------
 
