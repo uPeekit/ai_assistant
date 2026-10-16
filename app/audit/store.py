@@ -1,0 +1,240 @@
+from __future__ import annotations
+
+import sqlite3
+import threading
+from datetime import UTC, datetime
+from pathlib import Path
+
+from app.audit.migrate import MigrationError, apply, discover, pending
+
+EVENT_COLUMNS = frozenset(
+    {"message_id", "kind", "raw_input", "transcription", "llm_model", "llm_context",
+     "llm_response", "interpretation", "candidate_scores", "validation_result", "decision",
+     "clarification_state", "command", "executed", "notion_page_id", "error", "duration_ms",
+     "telegram_user_id", "chat_id"}
+)
+
+
+def _iso(dt: datetime) -> str:
+    return dt.astimezone(UTC).isoformat()
+
+
+class AuditStore:
+    def __init__(self, path: Path) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._path = path
+        self._lock = threading.RLock()
+        self._conn = sqlite3.connect(path, check_same_thread=False, timeout=5.0)
+        self._conn.row_factory = sqlite3.Row
+        self._conn.execute("PRAGMA foreign_keys = ON")
+
+    def migrate(self) -> None:
+        with self._lock:
+            apply(self._path)
+
+    def assert_schema_current(self) -> None:
+        with self._lock:
+            todo = pending(self._conn, discover())
+        if todo:
+            versions = ", ".join(f"{m.version:04d}" for m in todo)
+            raise MigrationError(f"database schema out of date; pending migrations: {versions}. "
+                                 "Run: python -m tools.migrate --apply")
+
+    def close(self) -> None:
+        with self._lock:
+            self._conn.close()
+
+    # events
+    def last_page(self, chat_id: int, *, within: int = 20) -> str | None:
+        """The Notion page this chat last wrote to, or None.
+
+        Read from the audit rows rather than kept in memory, so a restart does not lose
+        it: an edit of "the page we were just talking about" has to work in the evening
+        too. Only the chat's last `within` events are considered - a page from last week
+        is not what "that page" means, and offering it would resolve a vague message to
+        somewhere the user has long stopped thinking about."""
+        row = self._conn.execute(
+            "SELECT notion_page_id FROM "
+            "(SELECT id, notion_page_id FROM events WHERE chat_id = ? "
+            " ORDER BY id DESC LIMIT ?) "
+            "WHERE notion_page_id IS NOT NULL ORDER BY id DESC LIMIT 1",
+            (chat_id, within),
+        ).fetchone()
+        return row[0] if row else None
+
+    def new_event(self, *, telegram_user_id: int, chat_id: int, kind: str, **cols) -> int:
+        with self._lock:
+            cols.update(telegram_user_id=telegram_user_id, chat_id=chat_id, kind=kind)
+            self._check_cols(cols)
+            cols["ts"] = _iso(datetime.now(UTC))
+            keys = ", ".join(cols)
+            marks = ", ".join("?" for _ in cols)
+            cur = self._conn.execute(f"INSERT INTO events ({keys}) VALUES ({marks})",
+                                     list(cols.values()))
+            self._conn.commit()
+            return int(cur.lastrowid)
+
+    def update_event(self, event_id: int, **cols) -> None:
+        with self._lock:
+            self._check_cols(cols)
+            if not cols:
+                return
+            sets = ", ".join(f"{k} = ?" for k in cols)
+            self._conn.execute(f"UPDATE events SET {sets} WHERE id = ?",
+                               [*cols.values(), event_id])
+            self._conn.commit()
+
+    def get_event(self, event_id: int) -> dict | None:
+        with self._lock:
+            row = self._conn.execute("SELECT * FROM events WHERE id = ?",
+                                     (event_id,)).fetchone()
+            return dict(row) if row else None
+
+    # sessions
+    def save_session(self, chat_id: int, payload: str, expires_at: datetime) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO sessions (chat_id, payload, expires_at) VALUES (?, ?, ?) "
+                "ON CONFLICT(chat_id) DO UPDATE SET payload = excluded.payload, "
+                "expires_at = excluded.expires_at",
+                (chat_id, payload, _iso(expires_at)),
+            )
+            self._conn.commit()
+
+    def get_session(self, chat_id: int, now: datetime) -> str | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT payload, expires_at FROM sessions WHERE chat_id = ?", (chat_id,)
+            ).fetchone()
+            if row is None:
+                return None
+            if row["expires_at"] <= _iso(now):
+                self.delete_session(chat_id)
+                return None
+            return row["payload"]
+
+    def delete_session(self, chat_id: int) -> None:
+        with self._lock:
+            self._conn.execute("DELETE FROM sessions WHERE chat_id = ?", (chat_id,))
+            self._conn.commit()
+
+    def expired_sessions(self, now: datetime) -> list[tuple[int, str]]:
+        """Rows at or past expiry, without deleting them (used to discover sweep candidates)."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT chat_id, payload FROM sessions WHERE expires_at <= ?", (_iso(now),)
+            ).fetchall()
+            return [(int(row["chat_id"]), row["payload"]) for row in rows]
+
+    def pop_session(self, chat_id: int) -> str | None:
+        """Read and delete one session's payload under a single lock acquisition."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT payload FROM sessions WHERE chat_id = ?", (chat_id,)
+            ).fetchone()
+            if row is None:
+                return None
+            self._conn.execute("DELETE FROM sessions WHERE chat_id = ?", (chat_id,))
+            self._conn.commit()
+            return row["payload"]
+
+    def pop_expired_session(self, chat_id: int, now: datetime) -> str | None:
+        """Delete and return one session's payload only if it is still expired at `now`, with
+        the expiry re-check and the delete under one lock acquisition. Guards a sweeper that
+        scanned candidates earlier (via expired_sessions) against a concurrent save_session that
+        renewed the row in the meantime: if the row is missing, or was renewed to an expires_at
+        past `now` since it was last observed, this returns None and leaves the row untouched."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT payload FROM sessions WHERE chat_id = ? AND expires_at <= ?",
+                (chat_id, _iso(now)),
+            ).fetchone()
+            if row is None:
+                return None
+            self._conn.execute("DELETE FROM sessions WHERE chat_id = ?", (chat_id,))
+            self._conn.commit()
+            return row["payload"]
+
+    # executions
+    def add_execution(
+        self, event_id: int, chat_id: int, reply_message_id: int | None, undo: str,
+        expires_at: datetime,
+    ) -> int:
+        with self._lock:
+            cur = self._conn.execute(
+                "INSERT INTO executions (event_id, chat_id, reply_message_id, undo, expires_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (event_id, chat_id, reply_message_id, undo, _iso(expires_at)),
+            )
+            self._conn.commit()
+            return int(cur.lastrowid)
+
+    def update_execution_undo(self, execution_id: int, undo: str) -> None:
+        """Replace an execution's undo record — used when the Obsidian side finishes after the
+        Notion write, so one Undo button reverts both."""
+        with self._lock:
+            self._conn.execute("UPDATE executions SET undo = ? WHERE id = ?",
+                               (undo, execution_id))
+            self._conn.commit()
+
+    def get_execution(self, execution_id: int, now: datetime) -> dict | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM executions WHERE id = ? AND expires_at > ?",
+                (execution_id, _iso(now)),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def execution_by_reply(self, chat_id: int, reply_message_id: int) -> dict | None:
+        """The write whose reply is this Telegram message, expired or not: the caller says
+        "too late" for an expired one, rather than treating the reply as a new message."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM executions WHERE chat_id = ? AND reply_message_id = ? "
+                "ORDER BY id DESC LIMIT 1",
+                (chat_id, reply_message_id),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def latest_execution(self, chat_id: int, now: datetime,
+                         user_id: int | None = None) -> dict | None:
+        """The chat's newest write that can still be undone — with `user_id`, the newest of
+        that sender's (a group chat's /undo)."""
+        with self._lock:
+            if user_id is None:
+                row = self._conn.execute(
+                    "SELECT * FROM executions WHERE chat_id = ? AND undone = 0 "
+                    "AND expires_at > ? ORDER BY id DESC LIMIT 1",
+                    (chat_id, _iso(now)),
+                ).fetchone()
+            else:
+                row = self._conn.execute(
+                    "SELECT x.* FROM executions x JOIN events e ON e.id = x.event_id "
+                    "WHERE x.chat_id = ? AND e.telegram_user_id = ? AND x.undone = 0 "
+                    "AND x.expires_at > ? ORDER BY x.id DESC LIMIT 1",
+                    (chat_id, user_id, _iso(now)),
+                ).fetchone()
+            return dict(row) if row else None
+
+    def set_reply_message_id(self, execution_id: int, reply_message_id: int) -> None:
+        """Fill in the Telegram message id of the reply that carried the Undo button. It cannot
+        be set at insert time — the row is written while the command runs, before the reply
+        exists — so the transport (Plan 3b) records it afterwards and uses it to edit that same
+        message when the undo window closes. Without this the column could never be filled."""
+        with self._lock:
+            self._conn.execute(
+                "UPDATE executions SET reply_message_id = ? WHERE id = ?",
+                (reply_message_id, execution_id),
+            )
+            self._conn.commit()
+
+    def mark_undone(self, execution_id: int) -> None:
+        with self._lock:
+            self._conn.execute("UPDATE executions SET undone = 1 WHERE id = ?", (execution_id,))
+            self._conn.commit()
+
+    @staticmethod
+    def _check_cols(cols: dict) -> None:
+        bad = set(cols) - EVENT_COLUMNS
+        if bad:
+            raise ValueError(f"unknown event columns: {sorted(bad)}")

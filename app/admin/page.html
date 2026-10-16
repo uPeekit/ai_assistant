@@ -1,0 +1,990 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Notion AI Bot — админка</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    margin: 0 auto;
+    padding: 16px;
+    max-width: 900px;
+  }
+  h1 { font-size: 1.25rem; }
+  p.meta, p.hint { color: #666; font-size: 0.85rem; }
+  .notice {
+    background: #fff3cd;
+    color: #664d03;
+    padding: 8px 12px;
+    border-radius: 6px;
+    margin: 12px 0;
+  }
+  .empty { color: #666; }
+  .target {
+    border: 1px solid #999;
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 12px;
+  }
+  .target .path { font-size: 0.8rem; color: #666; }
+  .target h2 { margin: 4px 0 8px; font-size: 1.05rem; }
+  .target textarea {
+    width: 100%;
+    min-height: 3em;
+    font: inherit;
+    padding: 4px;
+  }
+  table.fields { width: 100%; border-collapse: collapse; margin-top: 8px; }
+  table.fields th, table.fields td {
+    text-align: left;
+    padding: 4px 6px;
+    font-size: 0.9rem;
+    border-bottom: 1px solid #ddd;
+  }
+  table.fields input[type="text"] { width: 100%; font: inherit; padding: 2px 4px; }
+  table.fields tr.options td { border-bottom: 1px solid #ddd; padding-left: 24px; }
+  .option-row { display: flex; gap: 8px; align-items: center; margin: 2px 0; }
+  .option-row .option-name { min-width: 10em; font-size: 0.85rem; }
+  .option-row input { flex: 1; }
+  #workspace-note, #mail-buckets { width: 100%; min-height: 6em; font: inherit; padding: 4px; }
+  #switches { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; }
+  details { border: 1px solid #ddd; border-radius: 6px; margin: 10px 0; padding: 6px 12px; }
+  details[open] { padding-bottom: 14px; }
+  summary { cursor: pointer; font-size: 1.1em; font-weight: 600; padding: 6px 0; }
+  details h3 { font-size: 1em; margin: 14px 0 4px; }
+  label.field { display: block; margin: 8px 0 2px; font-weight: 600; }
+  label.field input { display: block; width: 100%; font: inherit; padding: 4px;
+                      font-weight: normal; margin-top: 2px; }
+  .target.is-hidden { opacity: 0.55; }
+  .inbox-row { margin: 8px 0; font-size: 0.9rem; }
+  .inbox-row label { margin-left: 4px; }
+  #save-bar {
+    position: sticky;
+    bottom: 0;
+    background: Canvas;
+    padding: 12px 0;
+    border-top: 1px solid #999;
+  }
+  #save-bar button {
+    font-size: 1rem;
+    padding: 8px 24px;
+    cursor: pointer;
+  }
+  #save-status { margin-left: 12px; }
+</style>
+</head>
+<body>
+<h1>Настройки ассистента</h1>
+<p class="hint">
+  Всё на этой странице хранится локально и применяется со следующего сообщения — перезапускать
+  бота не нужно. Пустое поле означает «как по умолчанию».
+</p>
+<p class="meta" id="fetched-at"></p>
+<div id="load-error" class="notice" hidden></div>
+
+<details open>
+  <summary>Что включено</summary>
+  <p class="hint">
+    Куда бот пишет ваши сообщения. Если выключить Notion, останется только Obsidian — бот
+    продолжит работать и вопросов задавать не будет.
+  </p>
+  <div id="switches">
+    <label><input type="checkbox" id="switch-notion"> Notion</label>
+    <label><input type="checkbox" id="switch-obsidian"> Obsidian (хранилище заметок)</label>
+    <label><input type="checkbox" id="switch-linker"> Ссылки между заметками (Obsidian)</label>
+    <label><input type="checkbox" id="switch-mail"> Сводка по почте</label>
+  </div>
+</details>
+
+<details>
+  <summary>Общее</summary>
+  <label class="field">Имя бота
+    <input type="text" id="tuning-bot_name" placeholder="Робо,Robo">
+  </label>
+  <p class="hint">
+    Через запятую — все написания, которыми вы к нему обращаетесь. Имя в начале или в конце
+    сообщения бот убирает; в середине фразы это просто слово. Пусто — без имени.
+  </p>
+  <label class="field">Утренняя сводка, время
+    <input type="text" id="tuning-agenda_at" placeholder="09:00">
+  </label>
+  <p class="hint">Что просрочено, что сегодня и завтра. Несколько времён — через запятую.</p>
+  <h3>Сайты, ссылки на которые бот не открывает</h3>
+  <p class="hint">
+    Ссылку в сообщении бот открывает и читает — так он узнаёт название, цену, содержание. Ссылки
+    на эти сайты он не открывает: документы и банки всё равно закрыты, а читает страницы сторонний
+    сервис. Через запятую или с новой строки, поддомены тоже считаются. Пусто — список по
+    умолчанию.
+  </p>
+  <textarea id="tuning-never_open"></textarea>
+</details>
+
+<details>
+  <summary>Notion</summary>
+  <div id="notice-inbox-locked" class="notice" hidden>
+    Инбокс задан переменной окружения <code>INBOX_TARGET_ID</code> в <code>.env</code> — выбор
+    ниже недоступен, пока она установлена.
+  </div>
+  <h3>Заметка о воркспейсе</h3>
+  <p class="hint">
+    Как устроен ваш Notion — своими словами. Бот получает её с каждым сообщением. Например:
+    «Все задачи — в базе TODO. Страницы дом и работа — это виды TODO по тегам».
+  </p>
+  <textarea id="workspace-note"></textarea>
+  <h3>Слова, по которым бот идёт искать в интернете</h3>
+  <p class="hint">
+    Поиск занимает минуты и стоит денег, поэтому он запускается только если в сообщении есть
+    одно из этих слов (достаточно начала слова). Через запятую.
+  </p>
+  <textarea id="tuning-web_words"></textarea>
+  <h3>Дополнение к промпту поиска</h3>
+  <p class="hint">
+    Добавляется к инструкции исследователя — не заменяет её. Например: «всегда указывай цены в
+    евро», «для рецептов сначала список покупок».
+  </p>
+  <textarea id="tuning-research_note"></textarea>
+  <h3>Цели</h3>
+  <div id="empty-state" class="empty" hidden>
+    Список целей пуст: бот ещё не выполнил обнаружение воркспейса Notion, либо оно недоступно.
+    Запустите бота и обновите эту страницу.
+  </div>
+  <div id="targets"></div>
+</details>
+
+<details>
+  <summary>Obsidian</summary>
+  <p class="hint" id="vault-note"></p>
+  <p class="hint">
+    Правила раскладки бот читает в самом хранилище — заметка <code>_bot.md</code>, её удобно
+    править прямо в Obsidian, в том числе с телефона.
+  </p>
+  <label class="field">Тэг обратного отсчёта
+    <input type="text" id="tuning-countdown_tag" placeholder="отсчёт">
+  </label>
+  <p class="hint">Им бот помечает задачи, до срока которых считает дни.</p>
+  <label class="field">Свойства с датой
+    <input type="text" id="tuning-date_props" placeholder="date, дата, when, due, start">
+  </label>
+  <p class="hint">
+    Из каких свойств заметки брать дату события — встречи клуба, поездки, дни рождения.
+  </p>
+  <h3>Дополнение к промпту связей</h3>
+  <p class="hint">
+    Добавляется к инструкции, по которой бот расставляет ссылки между заметками. Например:
+    «не связывай заметки по общим словам вроде „проект“».
+  </p>
+  <textarea id="tuning-linker_note"></textarea>
+</details>
+
+<details>
+  <summary>Почта</summary>
+  <label class="field">Время сводок
+    <input type="text" id="tuning-mail_at" placeholder="12:00,19:00">
+  </label>
+  <p class="hint">Сводка охватывает всё, что пришло с прошлой.</p>
+  <h3>Корзины</h3>
+  <p class="hint">
+    По каким корзинам бот раскладывает письма. Одна строка — одна корзина:
+    <code>имя: что в неё класть</code>. Описание важнее имени — именно по нему бот решает.
+    Порядок строк — порядок разделов в сводке.
+  </p>
+  <textarea id="mail-buckets"></textarea>
+</details>
+
+<details>
+  <summary>Чаты</summary>
+  <p class="hint">
+    В личном чате у вас полный доступ — как раньше. Группа получает свою часть хранилища: она
+    видит только заметки с её тэгом в свойствах (<code>tags</code>) и задачи с этим тэгом, а
+    новые заметки бот кладёт в её папку. Чего группе нельзя — бот отвечает «здесь так нельзя» и
+    ничего не пишет. Отменить или поправить запись может только тот, кто о ней просил (и вы).
+  </p>
+  <p class="hint">
+    Чтобы подключить группу: добавьте бота в группу и сделайте его администратором (иначе
+    Telegram может не показывать ему упоминания), затем напишите в группе что-нибудь — она
+    появится ниже в «Замеченных группах». В группе бот отвечает только когда к нему обращаются:
+    @упоминание, ответ на его сообщение или его имя в начале.
+  </p>
+  <div id="chats"></div>
+  <h3>Замеченные группы</h3>
+  <div id="seen-chats"></div>
+  <datalist id="vault-tags"></datalist>
+  <datalist id="vault-folders"></datalist>
+</details>
+
+<details>
+  <summary>Напоминания</summary>
+  <p class="hint">
+    Напоминание ставится сообщением — «напомни завтра купить хлеб», «напоминай каждый
+    понедельник в 8». Без времени бот напоминает в 09:00. Здесь — правила: напоминать заранее о
+    встречах (заметки с датой) и о задачах с тэгом, в выбранный чат.
+  </p>
+  <div id="reminder-rules"></div>
+  <button type="button" id="add-rule">Добавить правило</button>
+  <h3>Ближайшие напоминания</h3>
+  <p class="hint">Отметьте, какие отменить, и нажмите «Сохранить».</p>
+  <div id="reminders"></div>
+</details>
+
+<details>
+  <summary>Источники</summary>
+  <p class="hint">
+    Документы Google, по которым бот отвечает на вопросы, — только чтение. В личном чате бот
+    видит все источники и ищет по всему Google Диску; группа — только отмеченные для неё.
+    Как читать документ (что значат ответы формы, что лежит в таблице) — опишите своими
+    словами в поле «Как читать»: бот передаёт это модели как есть.
+  </p>
+  <p class="hint" id="google-status"></p>
+  <div id="sources"></div>
+  <label class="field">Новый источник — ссылка на документ, таблицу, форму или папку
+    <input type="text" id="new-source-link" placeholder="https://docs.google.com/…">
+  </label>
+  <button type="button" id="add-source">Добавить источник</button>
+</details>
+
+<div id="save-bar">
+  <button id="save-button" type="button">Сохранить</button>
+  <span id="save-status"></span>
+</div>
+
+<script>
+"use strict";
+
+var state = { targets: [], inboxLocked: false, chats: [], seen: [], chatsOn: false,
+              rules: [], reminders: [], chatChoices: [], remindersOn: false,
+              sources: [], google: {}, sourcesOn: false };
+
+function el(tag, attrs, children) {
+  var node = document.createElement(tag);
+  attrs = attrs || {};
+  Object.keys(attrs).forEach(function (key) {
+    if (key === "text") {
+      node.textContent = attrs[key];
+    } else {
+      node.setAttribute(key, attrs[key]);
+    }
+  });
+  (children || []).forEach(function (child) { node.appendChild(child); });
+  return node;
+}
+
+function fieldRow(target, field) {
+  var row = el("tr");
+  row.appendChild(el("td", { text: field.name + " (" + field.type + ")" }));
+
+  var reqCell = el("td");
+  var reqBox = el("input", { type: "checkbox" });
+  reqBox.checked = !!field.required;
+  reqBox.className = "field-required";
+  reqBox.dataset.targetId = target.id;
+  reqBox.dataset.fieldId = field.id;
+  if (field.type === "title") {
+    // Notion's title property is always required; unchecking here would have no effect
+    // once discovery re-applies the real property flags, so don't offer a control that lies.
+    reqBox.disabled = true;
+  }
+  reqCell.appendChild(reqBox);
+  if (field.type === "title") {
+    reqCell.appendChild(el("span", { text: " (заголовок обязателен всегда)" }));
+  }
+  row.appendChild(reqCell);
+
+  var descCell = el("td");
+  var descInput = el("input", { type: "text" });
+  descInput.value = field.description || "";
+  descInput.placeholder = "Описание поля для LLM";
+  descInput.className = "field-description";
+  descInput.dataset.targetId = target.id;
+  descInput.dataset.fieldId = field.id;
+  descCell.appendChild(descInput);
+  row.appendChild(descCell);
+
+  return row;
+}
+
+// Options of a select/multi-select/status field, each with its own description: an option
+// with one may be chosen by meaning ("home" for anything about the house), one without only
+// when the message names it.
+function optionsRow(target, field) {
+  var row = el("tr", { class: "options" });
+  var cell = el("td", { colspan: "3" });
+  cell.appendChild(el("div", {
+    class: "hint",
+    text: "Варианты «" + field.name + "»: с описанием бот выбирает по смыслу, без — только " +
+      "если вариант назван",
+  }));
+  field.options.forEach(function (o) {
+    var line = el("div", { class: "option-row" });
+    line.appendChild(el("span", { class: "option-name", text: o.name }));
+    var input = el("input", { type: "text" });
+    input.value = o.description || "";
+    input.placeholder = "когда выбирать «" + o.name + "»";
+    input.className = "option-description";
+    input.dataset.targetId = target.id;
+    input.dataset.fieldId = field.id;
+    input.dataset.optionId = o.id;
+    line.appendChild(input);
+    cell.appendChild(line);
+  });
+  row.appendChild(cell);
+  return row;
+}
+
+function targetBox(target) {
+  var box = el("div", { class: "target" });
+  box.appendChild(el("div", { class: "path", text: target.path }));
+  box.appendChild(el("h2", { text: target.name }));
+
+  var desc = el("textarea");
+  desc.value = target.description || "";
+  // Notion's own description is what the LLM sees until you write one here, so show it as the
+  // hint rather than as a value: saving an untouched box then keeps it untouched.
+  desc.placeholder = target.notion_description
+    ? "Из Notion: " + target.notion_description
+    : "Для чего эта база или страница — своими словами, для LLM";
+  desc.className = "target-description";
+  desc.dataset.targetId = target.id;
+  box.appendChild(desc);
+
+  if (target.fields.length) {
+    var table = el("table", { class: "fields" });
+    table.appendChild(el("tr", {}, [
+      el("th", { text: "Поле" }),
+      el("th", { text: "Обязательно" }),
+      el("th", { text: "Описание поля" }),
+    ]));
+    target.fields.forEach(function (f) {
+      table.appendChild(fieldRow(target, f));
+      if (f.options && f.options.length) { table.appendChild(optionsRow(target, f)); }
+    });
+    box.appendChild(table);
+  }
+
+  var inboxRow = el("div", { class: "inbox-row" });
+  var radioId = "inbox-" + target.id;
+  var radio = el("input", { type: "radio", name: "inbox", value: target.id, id: radioId });
+  radio.checked = !!target.is_inbox;
+  radio.disabled = state.inboxLocked;
+  inboxRow.appendChild(radio);
+  inboxRow.appendChild(el("label", {
+    for: radioId, text: " инбокс — сюда бот складывает всё, что не смог распознать",
+  }));
+  box.appendChild(inboxRow);
+
+  var localRow = el("div", { class: "inbox-row" });
+  var localId = "local-" + target.id;
+  var local = el("input", { type: "checkbox", id: localId });
+  local.className = "target-local-only";
+  local.dataset.targetId = target.id;
+  local.checked = !!target.local_only;
+  localRow.appendChild(local);
+  localRow.appendChild(el("label", {
+    for: localId,
+    text: " только локально — описание и содержимое не уходят в Claude; такие сообщения " +
+      "разбирает локальная модель (сам текст сообщения Claude всё равно видит)",
+  }));
+  box.appendChild(localRow);
+
+  var hiddenRow = el("div", { class: "inbox-row" });
+  var hiddenId = "hidden-" + target.id;
+  var hidden = el("input", { type: "checkbox", id: hiddenId });
+  hidden.className = "target-hidden";
+  hidden.dataset.targetId = target.id;
+  hidden.checked = !!target.hidden;
+  if (target.hidden) { box.classList.add("is-hidden"); }
+  hidden.addEventListener("change", function () {
+    box.classList.toggle("is-hidden", hidden.checked);
+  });
+  hiddenRow.appendChild(hidden);
+  hiddenRow.appendChild(el("label", {
+    for: hiddenId,
+    text: " скрыть от бота — например, страница, которая лишь показывает базу с фильтром " +
+      "(бот тогда пишет в саму базу)",
+  }));
+  box.appendChild(hiddenRow);
+
+  return box;
+}
+
+function render() {
+  var list = document.getElementById("targets");
+  list.innerHTML = "";
+  document.getElementById("empty-state").hidden = state.targets.length !== 0;
+  document.getElementById("notice-inbox-locked").hidden = !state.inboxLocked;
+
+  var noneRow = el("div", { class: "inbox-row" });
+  var noneRadio = el("input", { type: "radio", name: "inbox", value: "", id: "inbox-none" });
+  noneRadio.checked = !state.targets.some(function (t) { return t.is_inbox; });
+  noneRadio.disabled = state.inboxLocked;
+  noneRow.appendChild(noneRadio);
+  noneRow.appendChild(el("label", { for: "inbox-none", text: " инбокс не выбран" }));
+  list.appendChild(noneRow);
+
+  state.targets.forEach(function (t) { list.appendChild(targetBox(t)); });
+}
+
+function showFetchedAt(iso) {
+  var line = document.getElementById("fetched-at");
+  if (!iso) {
+    line.textContent = "Notion ещё не опрашивался — данных нет.";
+    return;
+  }
+  var d = new Date(iso);
+  line.textContent = "Данные из Notion получены: " + d.toLocaleString("ru-RU");
+}
+
+function showLoadError(message) {
+  var box = document.getElementById("load-error");
+  box.textContent = message
+    ? "Не удалось загрузить список целей (" + message + "). Проверьте, что бот запущен, " +
+      "и обновите страницу."
+    : "";
+  box.hidden = !message;
+}
+
+// Always resolves: a failed /api/targets must say so on the page rather than leave a blank one
+// behind an unhandled promise rejection nobody sees without the browser console open.
+function load() {
+  return fetch("/api/targets")
+    .then(function (r) {
+      if (!r.ok) { throw new Error("HTTP " + r.status); }
+      return r.json();
+    })
+    .then(function (data) {
+      state.targets = data.targets || [];
+      state.inboxLocked = !!data.inbox_locked;
+      document.getElementById("workspace-note").value = data.workspace_note || "";
+      var tuning = data.tuning || {};
+      ["bot_name", "agenda_at", "mail_at", "web_words", "countdown_tag", "date_props",
+       "research_note", "linker_note", "never_open"].forEach(function (name) {
+        var el = document.getElementById("tuning-" + name);
+        if (el) { el.value = tuning[name] || ""; }
+      });
+      document.getElementById("vault-note").textContent = data.obsidian_vault
+        ? "Хранилище: " + data.obsidian_vault
+        : "Хранилище не настроено: укажите OBSIDIAN_VAULT в .env.";
+      // One bucket per line. An old single-line list is broken only where a "name:" follows a
+      // comma — the parser's own rule — because a description may contain commas of its own.
+      document.getElementById("mail-buckets").value =
+        (data.mail_buckets || "").split(/,\s*(?=[^\s,:]+\s*:)/).join("\n");
+      var switches = data.switches || {};
+      ["notion", "obsidian", "linker", "mail"].forEach(function (name) {
+        var el = document.getElementById("switch-" + name);
+        el.checked = switches[name] !== false;
+      });
+      state.chatsOn = !!data.chats;
+      state.chats = data.chats ? data.chats.chats || [] : [];
+      state.seen = data.chats ? data.chats.seen || [] : [];
+      fillList("vault-tags", data.vault_tags);
+      fillList("vault-folders", data.vault_folders);
+      renderChats();
+      state.remindersOn = !!data.reminder_rules;
+      state.rules = data.reminder_rules || [];
+      state.reminders = data.reminders || [];
+      state.chatChoices = data.chat_choices || [];
+      renderRules();
+      renderReminders();
+      state.sourcesOn = !!data.sources;
+      state.sources = data.sources || [];
+      state.google = data.google || {};
+      renderSources();
+      showLoadError("");
+      showFetchedAt(data.fetched_at || null);
+      render();
+    })
+    .catch(function (e) {
+      showLoadError(e && e.message ? e.message : "ошибка сети");
+    });
+}
+
+// ---- chats ----------------------------------------------------------------------------------
+
+var RIGHTS = [
+  ["ask", "Вопросы"],
+  ["add", "Новые заметки и дописывание"],
+  ["tasks", "Новые задачи"],
+  ["tick", "Отмечать задачи"],
+  ["change", "Менять заметки"],
+  ["move", "Перемещать"],
+];
+
+function fillList(id, values) {
+  var list = document.getElementById(id);
+  list.textContent = "";
+  (values || []).forEach(function (v) {
+    var option = document.createElement("option");
+    option.value = v;
+    list.appendChild(option);
+  });
+}
+
+function labelled(text, input) {
+  var label = document.createElement("label");
+  label.className = "field";
+  label.textContent = text;
+  label.appendChild(input);
+  return label;
+}
+
+function textInput(cls, value, listId) {
+  var input = document.createElement("input");
+  input.type = "text";
+  input.className = cls;
+  input.value = value || "";
+  if (listId) { input.setAttribute("list", listId); }
+  return input;
+}
+
+function checkbox(cls, checked, text) {
+  var label = document.createElement("label");
+  var box = document.createElement("input");
+  box.type = "checkbox";
+  box.className = cls;
+  box.checked = !!checked;
+  label.appendChild(box);
+  label.appendChild(document.createTextNode(" " + text));
+  return label;
+}
+
+function renderChats() {
+  var root = document.getElementById("chats");
+  root.textContent = "";
+  if (!state.chats.length) {
+    var empty = document.createElement("p");
+    empty.className = "hint";
+    empty.textContent = "Групп пока нет.";
+    root.appendChild(empty);
+  }
+  state.chats.forEach(function (chat, i) {
+    var box = document.createElement("div");
+    box.className = "target chat";
+    box.dataset.chatId = String(chat.chat_id);
+    var head = document.createElement("h2");
+    head.textContent = (chat.title || "Группа") + " (" + chat.chat_id + ")";
+    box.appendChild(head);
+    box.appendChild(labelled("Название", textInput("chat-title", chat.title)));
+    box.appendChild(checkbox("chat-enabled", chat.enabled !== false, "Включён"));
+    box.appendChild(document.createElement("br"));
+    box.appendChild(checkbox("chat-full", chat.full, "Полный доступ (как в личном чате)"));
+    var rights = document.createElement("div");
+    rights.className = "chat-rights";
+    RIGHTS.forEach(function (r) {
+      var label = checkbox("chat-right", (chat.rights || []).indexOf(r[0]) >= 0, r[1]);
+      label.querySelector("input").dataset.right = r[0];
+      rights.appendChild(label);
+      rights.appendChild(document.createElement("br"));
+    });
+    box.appendChild(rights);
+    box.appendChild(labelled("Тэг группы", textInput("chat-tag", chat.tag, "vault-tags")));
+    box.appendChild(labelled("Папка для новых заметок",
+                             textInput("chat-folder", chat.folder, "vault-folders")));
+    var note = document.createElement("textarea");
+    note.className = "chat-instruction";
+    note.value = chat.instruction || "";
+    box.appendChild(labelled("Что бот знает об этой группе", note));
+    var remove = document.createElement("button");
+    remove.type = "button";
+    remove.textContent = "Убрать группу";
+    remove.addEventListener("click", function () {
+      state.chats = collectChats();
+      state.chats.splice(i, 1);
+      renderChats();
+    });
+    box.appendChild(remove);
+    root.appendChild(box);
+  });
+  var seen = document.getElementById("seen-chats");
+  seen.textContent = "";
+  var listed = state.chats.map(function (c) { return c.chat_id; });
+  var fresh = state.seen.filter(function (s) { return listed.indexOf(s.chat_id) < 0; });
+  if (!fresh.length) {
+    var none = document.createElement("p");
+    none.className = "hint";
+    none.textContent = "Нет — бот ещё не видел ни одной новой группы.";
+    seen.appendChild(none);
+  }
+  fresh.forEach(function (s) {
+    var row = document.createElement("p");
+    row.textContent = (s.title || "Без названия") + " (" + s.chat_id + ") ";
+    var add = document.createElement("button");
+    add.type = "button";
+    add.textContent = "Добавить";
+    add.addEventListener("click", function () {
+      state.chats = collectChats();
+      state.chats.push({chat_id: s.chat_id, title: s.title || "", enabled: true, full: false,
+                        rights: ["ask", "add", "tasks"], tag: "", folder: "",
+                        instruction: ""});
+      renderChats();
+    });
+    row.appendChild(add);
+    seen.appendChild(row);
+  });
+}
+
+function collectChats() {
+  var boxes = Array.prototype.slice.call(document.querySelectorAll("#chats .chat"));
+  return boxes.map(function (box) {
+    var rights = Array.prototype.slice.call(box.querySelectorAll(".chat-right"))
+      .filter(function (el) { return el.checked; })
+      .map(function (el) { return el.dataset.right; });
+    return {
+      chat_id: Number(box.dataset.chatId),
+      title: box.querySelector(".chat-title").value,
+      enabled: box.querySelector(".chat-enabled").checked,
+      full: box.querySelector(".chat-full").checked,
+      rights: rights,
+      tag: box.querySelector(".chat-tag").value,
+      folder: box.querySelector(".chat-folder").value,
+      instruction: box.querySelector(".chat-instruction").value,
+    };
+  });
+}
+
+// ---- sources --------------------------------------------------------------------------------
+
+var KIND_NAMES = {doc: "документ", sheet: "таблица", form: "форма", folder: "папка"};
+
+function renderSources() {
+  var status = document.getElementById("google-status");
+  var google = state.google || {};
+  status.textContent = google.sign_in_needed
+    ? "Вход в Google не действует: на компьютере с ботом запустите python -m tools.google_login"
+    : (google.error ? "Последняя ошибка Google: " + google.error : "");
+  var info = {};
+  (google.sources || []).forEach(function (s) { info[s.id] = s; });
+  var root = document.getElementById("sources");
+  root.textContent = "";
+  if (!state.sources.length) {
+    var empty = document.createElement("p");
+    empty.className = "hint";
+    empty.textContent = "Источников пока нет.";
+    root.appendChild(empty);
+  }
+  var groups = state.chatChoices.filter(function (c) { return !c.private; });
+  state.sources.forEach(function (src, i) {
+    var box = document.createElement("div");
+    box.className = "target source";
+    box.dataset.id = src.id || "";
+    box.dataset.fileId = src.file_id || "";
+    box.dataset.kind = src.kind || "";
+    box.dataset.link = src.link || "";
+    var head = document.createElement("h2");
+    var seen = info[src.id] || {};
+    head.textContent = (src.title || seen.title || src.link || src.file_id) + " · " +
+      (KIND_NAMES[src.kind] || "ссылка");
+    box.appendChild(head);
+    var meta = document.createElement("p");
+    meta.className = "hint";
+    meta.textContent = seen.sections === undefined ? "Ещё не прочитан." :
+      "Частей: " + seen.sections + (seen.files ? ", файлов: " + seen.files : "");
+    box.appendChild(meta);
+    box.appendChild(labelled("Название (необязательно)", textInput("source-title", src.title)));
+    if (src.kind === "doc" || src.kind === "folder" || !src.kind) {
+      var split = document.createElement("select");
+      split.className = "source-split";
+      [["pieces", "кусками"], ["headings", "по заголовкам (Заголовок 1/2)"]].forEach(
+        function (o) {
+          var option = document.createElement("option");
+          option.value = o[0];
+          option.textContent = o[1];
+          if ((src.split || "pieces") === o[0]) { option.selected = true; }
+          split.appendChild(option);
+        });
+      box.appendChild(labelled("Как делить документы", split));
+    }
+    var note = document.createElement("textarea");
+    note.className = "source-instruction";
+    note.value = src.instruction || "";
+    box.appendChild(labelled("Как читать", note));
+    if (groups.length) {
+      var who = document.createElement("div");
+      who.appendChild(document.createTextNode("Видят группы: "));
+      groups.forEach(function (g) {
+        var label = checkbox("source-chat", (src.chats || []).indexOf(g.chat_id) >= 0,
+                             chatName(g));
+        label.querySelector("input").dataset.chatId = String(g.chat_id);
+        who.appendChild(label);
+      });
+      box.appendChild(who);
+    }
+    var remove = document.createElement("button");
+    remove.type = "button";
+    remove.textContent = "Убрать источник";
+    remove.addEventListener("click", function () {
+      state.sources = collectSources();
+      state.sources.splice(i, 1);
+      renderSources();
+    });
+    box.appendChild(remove);
+    root.appendChild(box);
+  });
+}
+
+function collectSources() {
+  var boxes = Array.prototype.slice.call(document.querySelectorAll("#sources .source"));
+  return boxes.map(function (box) {
+    var source = {
+      title: box.querySelector(".source-title").value,
+      instruction: box.querySelector(".source-instruction").value,
+      chats: Array.prototype.slice.call(box.querySelectorAll(".source-chat"))
+        .filter(function (el) { return el.checked; })
+        .map(function (el) { return Number(el.dataset.chatId); }),
+    };
+    var split = box.querySelector(".source-split");
+    if (split) { source.split = split.value; }
+    if (box.dataset.id) { source.id = box.dataset.id; }
+    if (box.dataset.fileId) {
+      source.file_id = box.dataset.fileId;
+      source.kind = box.dataset.kind;
+    } else {
+      source.link = box.dataset.link;
+    }
+    return source;
+  });
+}
+
+document.getElementById("add-source").addEventListener("click", function () {
+  var input = document.getElementById("new-source-link");
+  var link = input.value.trim();
+  if (!link) { return; }
+  state.sources = collectSources();
+  state.sources.push({link: link, title: "", instruction: "", chats: [], split: "pieces"});
+  input.value = "";
+  renderSources();
+});
+
+// ---- reminders ----------------------------------------------------------------------------
+
+function chatName(c) {
+  if (c.private) { return "Личный чат (" + c.chat_id + ")"; }
+  return (c.title || "Группа") + " (" + c.chat_id + ")";
+}
+
+function chatSelect(value) {
+  var select = document.createElement("select");
+  select.className = "rule-chat";
+  var known = false;
+  state.chatChoices.forEach(function (c) {
+    var option = document.createElement("option");
+    option.value = String(c.chat_id);
+    option.textContent = chatName(c);
+    if (Number(value) === c.chat_id) { option.selected = true; known = true; }
+    select.appendChild(option);
+  });
+  // A rule whose group is no longer listed keeps its chat: picking the first option instead
+  // would quietly send the group's reminders to a private chat on the next save.
+  if (value !== undefined && value !== "" && !known) {
+    var missing = document.createElement("option");
+    missing.value = String(value);
+    missing.textContent = "Чат " + value + " (не в списке)";
+    missing.selected = true;
+    select.appendChild(missing);
+  }
+  return select;
+}
+
+function renderRules() {
+  var root = document.getElementById("reminder-rules");
+  root.textContent = "";
+  if (!state.rules.length) {
+    var empty = document.createElement("p");
+    empty.className = "hint";
+    empty.textContent = "Правил пока нет.";
+    root.appendChild(empty);
+  }
+  state.rules.forEach(function (rule, i) {
+    var box = document.createElement("div");
+    box.className = "target rule";
+    box.dataset.ruleId = rule.id || "";
+    box.dataset.createdAt = rule.created_at || "";
+    var kind = document.createElement("select");
+    kind.className = "rule-kind";
+    [["notes", "Заметки с датой (встречи)"], ["tasks", "Задачи с тэгом"]].forEach(function (k) {
+      var option = document.createElement("option");
+      option.value = k[0];
+      option.textContent = k[1];
+      if (rule.kind === k[0]) { option.selected = true; }
+      kind.appendChild(option);
+    });
+    box.appendChild(labelled("Что", kind));
+    box.appendChild(labelled("Папка (для заметок)",
+                             textInput("rule-folder", rule.folder, "vault-folders")));
+    box.appendChild(labelled("Тэг", textInput("rule-tag", rule.tag, "vault-tags")));
+    box.appendChild(labelled("Свойство с датой (пусто — как в настройках Obsidian)",
+                             textInput("rule-date-prop", rule.date_prop)));
+    var days = document.createElement("input");
+    days.type = "number";
+    days.min = "0";
+    days.max = "60";
+    days.className = "rule-days";
+    days.value = rule.days_before === undefined ? 1 : rule.days_before;
+    box.appendChild(labelled("За сколько дней", days));
+    box.appendChild(labelled("Во сколько", textInput("rule-time", rule.time || "09:00")));
+    box.appendChild(labelled("В какой чат", chatSelect(rule.chat_id)));
+    var remove = document.createElement("button");
+    remove.type = "button";
+    remove.textContent = "Убрать правило";
+    remove.addEventListener("click", function () {
+      state.rules = collectRules();
+      state.rules.splice(i, 1);
+      renderRules();
+    });
+    box.appendChild(remove);
+    root.appendChild(box);
+  });
+}
+
+function collectRules() {
+  var boxes = Array.prototype.slice.call(document.querySelectorAll("#reminder-rules .rule"));
+  return boxes.map(function (box) {
+    var rule = {
+      kind: box.querySelector(".rule-kind").value,
+      folder: box.querySelector(".rule-folder").value,
+      tag: box.querySelector(".rule-tag").value,
+      date_prop: box.querySelector(".rule-date-prop").value,
+      days_before: Number(box.querySelector(".rule-days").value || 0),
+      time: box.querySelector(".rule-time").value,
+      chat_id: Number(box.querySelector(".rule-chat").value),
+    };
+    if (box.dataset.ruleId) { rule.id = box.dataset.ruleId; }
+    if (box.dataset.createdAt) { rule.created_at = box.dataset.createdAt; }
+    return rule;
+  });
+}
+
+function renderReminders() {
+  var root = document.getElementById("reminders");
+  root.textContent = "";
+  if (!state.reminders.length) {
+    var none = document.createElement("p");
+    none.className = "hint";
+    none.textContent = "Напоминаний нет.";
+    root.appendChild(none);
+  }
+  var names = {};
+  state.chatChoices.forEach(function (c) { names[c.chat_id] = chatName(c); });
+  state.reminders.forEach(function (r) {
+    var text = r.due + " — " + r.text + (r.repeat ? " (" + r.repeat + ")" : "") + " · " +
+      (names[r.chat_id] || r.chat_id);
+    var label = checkbox("reminder-cancel", false, "Отменить: " + text);
+    label.querySelector("input").dataset.reminderId = String(r.id);
+    root.appendChild(label);
+    root.appendChild(document.createElement("br"));
+  });
+}
+
+function collectCancelled() {
+  return Array.prototype.slice.call(document.querySelectorAll(".reminder-cancel"))
+    .filter(function (el) { return el.checked; })
+    .map(function (el) { return Number(el.dataset.reminderId); });
+}
+
+document.getElementById("add-rule").addEventListener("click", function () {
+  state.rules = collectRules();
+  var first = state.chatChoices.length ? state.chatChoices[0].chat_id : 0;
+  state.rules.push({kind: "notes", folder: "", tag: "", date_prop: "", days_before: 1,
+                    time: "09:00", chat_id: first});
+  renderRules();
+});
+
+function collectBody() {
+  var checkedInbox = document.querySelector('input[name="inbox"]:checked');
+  var inboxId = checkedInbox ? checkedInbox.value : "";
+  var targets = {};
+  // Matched by dataset rather than a selector: Notion option ids are free-form strings.
+  var optionInputs = Array.prototype.slice.call(
+    document.querySelectorAll(".option-description")
+  );
+  state.targets.forEach(function (t) {
+    var descEl = document.querySelector(
+      '.target-description[data-target-id="' + t.id + '"]'
+    );
+    var fields = {};
+    t.fields.forEach(function (f) {
+      var reqEl = document.querySelector(
+        '.field-required[data-target-id="' + t.id + '"][data-field-id="' + f.id + '"]'
+      );
+      var fdescEl = document.querySelector(
+        '.field-description[data-target-id="' + t.id + '"][data-field-id="' + f.id + '"]'
+      );
+      var options = {};
+      optionInputs.forEach(function (input) {
+        if (input.dataset.targetId === t.id && input.dataset.fieldId === f.id) {
+          options[input.dataset.optionId] = input.value;
+        }
+      });
+      fields[f.id] = {
+        description: fdescEl ? fdescEl.value : "",
+        required: reqEl ? reqEl.checked : false,
+        options: options,
+      };
+    });
+    var localEl = document.querySelector(
+      '.target-local-only[data-target-id="' + t.id + '"]'
+    );
+    var hiddenEl = document.querySelector('.target-hidden[data-target-id="' + t.id + '"]');
+    targets[t.id] = {
+      description: descEl ? descEl.value : "",
+      inbox: t.id === inboxId,
+      local_only: localEl ? localEl.checked : false,
+      hidden: hiddenEl ? hiddenEl.checked : false,
+      fields: fields,
+    };
+  });
+  var body = {
+    targets: targets,
+    workspace_note: document.getElementById("workspace-note").value,
+    tuning: ["bot_name", "agenda_at", "mail_at", "web_words", "countdown_tag", "date_props",
+             "research_note", "linker_note", "never_open"].reduce(function (acc, name) {
+      var el = document.getElementById("tuning-" + name);
+      if (el) { acc[name] = el.value; }
+      return acc;
+    }, {}),
+    mail_buckets: document.getElementById("mail-buckets").value
+      .split("\n").map(function (s) { return s.trim(); })
+      .filter(function (s) { return s.length; }).join(","),
+    switches: {
+      notion: document.getElementById("switch-notion").checked,
+      obsidian: document.getElementById("switch-obsidian").checked,
+      linker: document.getElementById("switch-linker").checked,
+      mail: document.getElementById("switch-mail").checked,
+    },
+  };
+  // Only when the server sent chats: an empty list would otherwise remove every group.
+  if (state.chatsOn) { body.chats = collectChats(); }
+  // Same rule: only what the server sent can be saved back, or an empty list wipes them.
+  if (state.sourcesOn) { body.sources = collectSources(); }
+  if (state.remindersOn) {
+    body.reminder_rules = collectRules();
+    body.cancel_reminders = collectCancelled();
+  }
+  return body;
+}
+
+document.getElementById("save-button").addEventListener("click", function () {
+  var status = document.getElementById("save-status");
+  status.textContent = "Сохранение…";
+  fetch("/api/descriptions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(collectBody()),
+  })
+    .then(function (r) {
+      if (!r.ok) { throw new Error("http " + r.status); }
+      return r.json();
+    })
+    .then(function (data) {
+      status.textContent = "Сохранено, изменено целей: " + data.saved;
+      return load();
+    })
+    .catch(function () {
+      status.textContent = "Ошибка сохранения — попробуйте ещё раз.";
+    });
+});
+
+load();
+</script>
+</body>
+</html>

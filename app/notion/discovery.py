@@ -1,0 +1,402 @@
+from __future__ import annotations
+
+import asyncio
+import logging
+from collections.abc import Callable
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
+
+from app import texts
+from app.notion import props
+from app.notion.descriptions import Descriptions, TargetMeta
+from app.notion.errors import NotionError
+from app.notion.mapper import WORKSPACE_ROOT_ID
+from app.notion.provider import NotionProvider
+from app.notion.snapshot import (
+    DB_OPERATIONS,
+    PAGE_OPERATIONS,
+    Field,
+    Item,
+    Option,
+    Target,
+    WorkspaceSnapshot,
+)
+
+log = logging.getLogger(__name__)
+STALE_MAX = timedelta(hours=1)
+CONCURRENCY = 3
+
+
+def now_utc() -> datetime:
+    return datetime.now(UTC)
+
+
+def _parse_time(s: str | None) -> datetime:
+    if not s:
+        return datetime.min.replace(tzinfo=UTC)
+    return datetime.fromisoformat(s.replace("Z", "+00:00"))
+
+
+class Discovery:
+    def __init__(
+        self,
+        provider: NotionProvider,
+        descriptions: Descriptions,
+        *,
+        items_per_target: int = 50,
+        ttl_s: int = 60,
+        clock: Callable[[], datetime] = now_utc,
+        inbox_target_id: str = "",
+        workspace_root: bool = False,
+    ) -> None:
+        self._p = provider
+        # Offer "the top level of the workspace" as a place to create pages. Only a personal
+        # access token (or a public integration) may create pages there; an internal
+        # integration gets a 400, which the bot reports like any other rejected write.
+        self._workspace_root = workspace_root
+        self._desc = descriptions
+        self._items_per_target = items_per_target
+        self._ttl = timedelta(seconds=ttl_s)
+        self._clock = clock
+        self._inbox_target_id = inbox_target_id
+        self._last: WorkspaceSnapshot | None = None
+        self._force = False
+        # Monotonic count of invalidate() calls, so get() can tell "the invalidation I started
+        # this refresh for" from "somebody invalidated the cache while I was fetching" and only
+        # clear the flag in the first case. Without it, a save on the admin page (a different
+        # thread) made during an in-flight refresh was swallowed for a whole TTL: the admin sets
+        # _force, the refresh already under way clears it, and the snapshot it stores predates
+        # the save — while the README promises the save takes effect with no restart.
+        self._invalidations = 0
+        self._lock = asyncio.Lock()
+        self._refreshing: asyncio.Task[None] | None = None
+
+    @property
+    def last(self) -> WorkspaceSnapshot | None:
+        return self._last
+
+    def invalidate(self) -> None:
+        """Forces the next `get()` to refetch. Called from the admin server's HTTP thread as well
+        as from the event loop, so it does the two cheapest possible stores and nothing else."""
+        self._invalidations += 1
+        self._force = True
+
+    def note_new_item(self, target_id: str, item_id: str, title: str, url: str = "") -> None:
+        """A row or sub-page a write just created, put straight into the cached snapshot.
+
+        A plan's next step may well refer to what the step before it made, and the whole
+        snapshot used to be thrown away after every write to make sure it could — which meant a
+        plan of sixteen books re-read the entire workspace sixteen times, most of its wall
+        clock. Patching the one thing that changed leaves the rest of the cache alone. Anything
+        this cannot express (an unknown target, a write with no id) falls back to a refetch.
+
+        A field a step *changed* is not patched: `Item` only carries the title (and a hint),
+        the title is what later steps resolve by, and the TTL catches the rest."""
+        target = self._last.target(target_id) if self._last else None
+        if target is None or not item_id or not title:
+            self.invalidate()
+            return
+        if any(i.id == item_id for i in target.items):
+            return
+        target.items.insert(
+            0, Item(id=item_id, title=title, hint=None, last_edited=self._clock(), url=url))
+        del target.items[self._items_per_target:]
+
+    def note_new_page(self, page_id: str, title: str, parent_page_id: str, url: str = "") -> None:
+        """A page a step just created, added to the cached snapshot as a place of its own.
+
+        The next step of a plan usually writes *into* the page the step before it made, and it
+        names it by title — so until the page is a target, that step cannot resolve and falls
+        back to the model, which is handed a context the page is missing from and picks some
+        other page. (It did: a plan that created a page about Japanese torii gates filed its
+        contents under an unrelated borsch recipe, reasoning that this must be the page the
+        plan had just made.)
+        Re-reading the whole workspace would also fix it, at fifteen requests a step."""
+        snap = self._last
+        if snap is None or not page_id or not title:
+            self.invalidate()
+            return
+        if snap.target(page_id) is not None:
+            return
+        parent = snap.target(parent_page_id) if parent_page_id else None
+        snap.targets.append(Target(
+            id=page_id, kind="page", name=title,
+            path=f"{parent.path} / {title}" if parent else title, description="",
+            parent_page_id=parent_page_id or None, database_id=None, fields=[], items=[],
+            operations=PAGE_OPERATIONS, url=url,
+        ))
+
+    async def get(self) -> WorkspaceSnapshot:
+        """The workspace as it was last read. A snapshot past its TTL is still served — and
+        replaced behind the answer — because re-reading it costs about fifteen Notion requests
+        and several seconds, which is half the time a short message takes and all of it spent
+        after the user has already said what they want. An explicit invalidate (a save on the
+        admin page, /refresh) still waits, and so does the very first read of a run."""
+        last = self._last
+        if last is not None and not self._force:
+            age = self._clock() - last.fetched_at
+            if age < self._ttl:
+                return last
+            if age < STALE_MAX:
+                self._refresh_behind()
+                return last
+        async with self._lock:
+            now = self._clock()
+            seen = self._invalidations
+            needs_refresh = (
+                self._last is None
+                or self._force
+                or now - self._last.fetched_at >= self._ttl
+            )
+            if not needs_refresh:
+                return self._last
+            try:
+                snap = await self._refresh_locked()
+            except Exception as e:
+                if self._last and now - self._last.fetched_at < STALE_MAX:
+                    log.warning(
+                        "discovery failed (%s); using stale snapshot", type(e).__name__
+                    )
+                    return self._last
+                raise
+            if self._invalidations == seen:
+                self._force = False  # nobody invalidated while we were fetching
+            return snap
+
+    async def refresh(self) -> WorkspaceSnapshot:
+        async with self._lock:
+            return await self._refresh_locked()
+
+    def _refresh_behind(self) -> None:
+        """Start a refresh nobody waits for. One at a time: while it runs, callers keep getting
+        the snapshot it is replacing. A failure is logged and the old snapshot simply stays."""
+        if self._refreshing is not None and not self._refreshing.done():
+            return
+
+        async def run() -> None:
+            try:
+                async with self._lock:
+                    await self._refresh_locked()
+            except Exception as e:
+                log.warning("background discovery failed: %s", type(e).__name__)
+
+        self._refreshing = asyncio.create_task(run())
+
+    async def settled(self) -> None:
+        """Wait for a refresh running behind an answer (tests, and shutdown)."""
+        if self._refreshing is not None and not self._refreshing.done():
+            await asyncio.shield(self._refreshing)
+
+    # ---- internals -------------------------------------------------------
+
+    async def _refresh_locked(self) -> WorkspaceSnapshot:
+        results = await self._p.search()
+        pages = [r for r in results if r.get("object") == "page"]
+        ds_ids = [r["id"] for r in results if r.get("object") == "data_source"]
+
+        sem = asyncio.Semaphore(CONCURRENCY)
+
+        async def fetch_ds(ds_id: str) -> tuple[dict, list[dict]]:
+            async with sem:
+                ds = await self._p.get_data_source(ds_id)
+                items = await self._p.query_data_source(
+                    ds_id,
+                    sorts=[{"timestamp": "last_edited_time", "direction": "descending"}],
+                    page_size=self._items_per_target,
+                )
+            return ds, items
+
+        fetched = await asyncio.gather(*(fetch_ds(i) for i in ds_ids))
+        sources = {ds["id"]: ds for ds, _ in fetched}
+        items_by_ds = {ds["id"]: rows for ds, rows in fetched}
+
+        db_ids = {ds.get("parent", {}).get("database_id") for ds in sources.values()}
+        db_ids.discard(None)
+
+        async def fetch_db(db_id: str) -> tuple[str, dict]:
+            async with sem:
+                try:
+                    return db_id, await self._p.get_database(db_id)
+                except NotionError as e:
+                    log.warning("database %s not readable: %s", db_id, e.code)
+                    return db_id, {}
+
+        databases = dict(await asyncio.gather(*(fetch_db(i) for i in db_ids)))
+
+        # relation targets not visible via search: try one query, else empty
+        for ds in sources.values():
+            for prop in ds.get("properties", {}).values():
+                rel = (
+                    prop.get("relation", {}).get("data_source_id")
+                    if prop.get("type") == "relation"
+                    else None
+                )
+                if rel and rel not in items_by_ds:
+                    try:
+                        items_by_ds[rel] = await self._p.query_data_source(
+                            rel, page_size=self._items_per_target
+                        )
+                    except NotionError:
+                        items_by_ds[rel] = []
+
+        top_pages = [
+            p for p in pages if p.get("parent", {}).get("type") in ("workspace", "page_id")
+        ]
+        page_by_id = {p["id"]: p for p in top_pages}
+        titles = {pid: props.page_title(p) for pid, p in page_by_id.items()}
+        for db_id, _db in databases.items():
+            titles[db_id] = ""  # databases are transparent in paths
+        for ds in sources.values():
+            titles[ds["id"]] = props.plain_text(ds.get("title", []))
+
+        def parent_page_of(parent: dict) -> str | None:
+            t = parent.get("type")
+            if t == "page_id":
+                return parent.get("page_id")
+            if t == "database_id":
+                db = databases.get(parent["database_id"], {})
+                return parent_page_of(db.get("parent", {})) if db else None
+            return None
+
+        def path_of(name: str, parent_page_id: str | None) -> str:
+            chain = [name]
+            seen = set()
+            pid = parent_page_id
+            while pid and pid in page_by_id and pid not in seen:
+                seen.add(pid)
+                chain.append(titles[pid])
+                pid = parent_page_of(page_by_id[pid].get("parent", {}))
+            return " / ".join(reversed(chain))
+
+        discovered: dict[str, tuple[str, dict[str, str]]] = {}
+        targets: list[Target] = []
+
+        for ds_id, ds in sources.items():
+            name = titles[ds_id] or props.UNTITLED
+            db_id = ds.get("parent", {}).get("database_id")
+            parent_page = (
+                parent_page_of(databases.get(db_id, {}).get("parent", {})) if db_id else None
+            )
+            field_names: dict[str, str] = {}
+            fields: list[Field] = []
+            for pname, prop in ds.get("properties", {}).items():
+                ftype = props.field_type(prop)
+                options: list[Option] = []
+                rel_ds = None
+                if ftype in ("select", "multi_select", "status"):
+                    options = [
+                        Option(o["id"], o["name"]) for o in prop.get(ftype, {}).get("options", [])
+                    ]
+                elif ftype == "relation":
+                    rel_ds = prop.get("relation", {}).get("data_source_id")
+                    options = [
+                        Option(r["id"], props.page_title(r)) for r in items_by_ds.get(rel_ds, [])
+                    ]
+                fields.append(
+                    Field(
+                        id=prop["id"], name=pname, type=ftype, required=ftype == "title",
+                        options=options, relation_data_source_id=rel_ds, description="",
+                    )
+                )
+                field_names[prop["id"]] = pname
+            items = [
+                Item(id=r["id"], title=props.page_title(r), hint=props.item_hint(r),
+                     last_edited=_parse_time(r.get("last_edited_time")),
+                     url=r.get("url", ""))
+                for r in items_by_ds.get(ds_id, [])
+            ]
+            discovered[ds_id] = (name, field_names)
+            targets.append(Target(
+                id=ds_id, kind="database", name=name, path=path_of(name, parent_page),
+                description=props.plain_text(ds.get("description", [])),
+                parent_page_id=parent_page, database_id=db_id, fields=fields, items=items,
+                operations=DB_OPERATIONS, url=ds.get("url", ""),
+            ))
+
+        children: dict[str, list[dict]] = {}
+        for p in top_pages:
+            pp = parent_page_of(p.get("parent", {}))
+            if pp:
+                children.setdefault(pp, []).append(p)
+
+        for pid, p in page_by_id.items():
+            name = titles[pid]
+            parent_page = parent_page_of(p.get("parent", {}))
+            kids = sorted(
+                children.get(pid, []), key=lambda c: c.get("last_edited_time", ""), reverse=True
+            )
+            items = [Item(id=c["id"], title=titles[c["id"]], hint=None,
+                          last_edited=_parse_time(c.get("last_edited_time")),
+                          url=c.get("url", ""))
+                     for c in kids[: self._items_per_target]]
+            discovered[pid] = (name, {})
+            targets.append(Target(
+                id=pid, kind="page", name=name, path=path_of(name, parent_page), description="",
+                parent_page_id=parent_page, database_id=None, fields=[], items=items,
+                operations=PAGE_OPERATIONS, url=p.get("url", ""),
+            ))
+
+        if self._workspace_root:
+            discovered[WORKSPACE_ROOT_ID] = (texts.ROOT_TARGET_NAME, {})
+            targets.append(Target(
+                id=WORKSPACE_ROOT_ID, kind="page", name=texts.ROOT_TARGET_NAME,
+                path=texts.ROOT_TARGET_NAME, description=texts.ROOT_TARGET_DESCRIPTION,
+                parent_page_id=None, database_id=None, fields=[], items=[],
+                operations=frozenset({"create_page"}), url="https://www.notion.so",
+            ))
+
+        meta = self._desc.ensure(discovered)
+        targets = [self._apply_meta(t, meta.get(t.id)) for t in targets]
+        targets = self._resolve_inbox(targets, self._inbox_target_id)
+        targets.sort(key=lambda t: t.path)
+        self._last = WorkspaceSnapshot(fetched_at=self._clock(), targets=targets)
+        # Once a minute per message, always the same number: the turn's own summary line says
+        # what the workspace cost, and a changed count still shows up in startup's own report.
+        log.debug("discovered %d targets", len(targets))
+        return self._last
+
+    @staticmethod
+    def _apply_meta(t: Target, m: TargetMeta | None) -> Target:
+        if m is None:
+            return t
+        fields = []
+        for f in t.fields:
+            fm = m.fields.get(f.id)
+            if fm is None:
+                fields.append(f)
+                continue
+            options = [replace(o, description=fm.options.get(o.id, "")) for o in f.options]
+            fields.append(Field(
+                id=f.id, name=f.name, type=f.type,
+                required=f.required or fm.required,
+                options=options, relation_data_source_id=f.relation_data_source_id,
+                description=fm.description,
+            ))
+        return Target(
+            id=t.id, kind=t.kind, name=t.name, path=t.path,
+            description=m.description or t.description,
+            parent_page_id=t.parent_page_id, database_id=t.database_id, fields=fields,
+            items=t.items, operations=t.operations, url=t.url, is_inbox=m.inbox,
+            local_only=m.local_only, hidden=m.hidden,
+        )
+
+    @staticmethod
+    def _resolve_inbox(targets: list[Target], inbox_target_id: str) -> list[Target]:
+        """Applies the single-inbox invariant: INBOX_TARGET_ID (when set) wins outright over
+        every targets.yaml flag; otherwise, if more than one target was flagged in the yaml,
+        the lowest id wins and the rest lose the flag (logged, since it usually means a stale
+        entry from a deleted/renamed target)."""
+        if inbox_target_id:
+            if not any(t.id == inbox_target_id for t in targets):
+                log.warning(
+                    "INBOX_TARGET_ID %r matches no discovered target; inbox is disabled",
+                    inbox_target_id,
+                )
+            return [replace(t, is_inbox=t.id == inbox_target_id) for t in targets]
+        flagged = sorted(t.id for t in targets if t.is_inbox)
+        if len(flagged) <= 1:
+            return targets
+        winner = flagged[0]
+        log.warning("multiple inbox targets flagged (%s); using %s",
+                    ", ".join(flagged), winner)
+        return [replace(t, is_inbox=t.id == winner) for t in targets]

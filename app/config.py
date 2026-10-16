@@ -1,0 +1,178 @@
+from functools import cached_property
+from pathlib import Path
+from typing import Literal
+
+from pydantic import Field, SecretStr, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def Prob(default: float) -> float:
+    return Field(default, ge=0.0, le=1.0)
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+    telegram_bot_token: SecretStr = SecretStr("")
+    telegram_allowed_user_ids: str = ""
+    notion_token: SecretStr
+    notion_version: str = "2025-09-03"
+
+    ollama_base_url: str = "http://127.0.0.1:11434"
+    llm_model: str = "mistral-nemo:12b"
+    llm_temperature: float = 0.0
+    llm_num_ctx: int = 8192
+    llm_timeout_s: float = 120.0
+    # How long Ollama keeps the model loaded after a request. Its own default, 5m, means a
+    # message after any short pause reloads the model: measured 32 s instead of 16 s. "-1"
+    # keeps it loaded for good (always fast, but holds the GPU); "0" unloads right away.
+    llm_keep_alive: str = "30m"
+
+    # Claude answers first when a key is set; the local model above is the fallback (offline,
+    # rate-limited, out of credit). LLM_CLOUD=false keeps everything on this machine.
+    anthropic_api_key: SecretStr = SecretStr("")
+    claude_model: str = "claude-haiku-4-5"
+    claude_timeout_s: float = 30.0
+    llm_cloud: bool = True
+    # "Find X on the web and write it to Y": Claude with web search. Sonnet digs deeper and
+    # writes the better note, for about three times what Haiku costs — a search already costs
+    # far more than an ordinary message, and this is the call whose quality you read.
+    research_model: str = "claude-sonnet-5"
+    research_max_searches: int = Field(4, ge=1, le=20)
+    # Site searches and page reads together, per lookup; past it the model is told to answer.
+    research_max_reads: int = Field(8, ge=1, le=40)
+    # After this the tools are switched off and the model answers with what it found.
+    research_soft_deadline_s: float = Field(90.0, ge=15.0, le=900.0)
+    # The backstop: only fires when one call hangs. The user is told it was cut short.
+    research_deadline_s: float = Field(180.0, ge=30.0, le=1800.0)
+    # Optional: Jina Reader works without a key at ~20 pages a minute; a key raises that.
+    jina_api_key: SecretStr = SecretStr("")
+    # Multi-step goals: the model that splits a goal into steps and checks after each one. Its
+    # own knowledge fills the steps ("all of Pelevin's novels"): Haiku listed 8, one of them
+    # wrong; Sonnet listed 15, all right.
+    plan_model: str = "claude-sonnet-5"
+    # A message the interpreter did not understand (an unknown intent, or a question of its
+    # own) is read once more by this model before the user is asked. Empty: never.
+    escalate_model: str = "claude-sonnet-5"
+
+    # Rewriting text the user already wrote (a page consolidated into one plan, a note
+    # trimmed). Sonnet: this is their own writing, and Haiku loses facts while shortening.
+    rewrite_model: str = "claude-sonnet-5"
+
+    # What to call the bot. Several spellings separated by commas ("Robo,Robbie"): the
+    # name is taken off the front or the back of a message before anything reads it, so
+    # "Robo, buy milk" is a shopping item and not a note about someone called Robo.
+    bot_name: str = ""
+
+    # The Obsidian vault written next to Notion: a folder on this machine. Empty = off.
+    # Nothing about this pipeline depends on Notion, so NOTION_ENABLED=false leaves a working
+    # Obsidian-only bot.
+    obsidian_vault: Path | None = None
+    # When the bot sends the morning agenda from the vault (HH:MM, in TIMEZONE). Empty: never.
+    daily_digest_at: str = "09:00"
+    obsidian_enabled: bool = True
+    notion_enabled: bool = True
+    # The vault's own interpreter ("which note is this?") and the linker. Both are small jobs
+    # on a small context: Haiku.
+    filer_model: str = "claude-haiku-4-5"
+    # How the vault reads a message: "single" asks one question about everything at once;
+    # "staged" asks intent, then one target, then that target's details (app/vault/staged.py).
+    # Staged since 0.6.10: on the 53 real messages where the two disagreed, the user judged
+    # staged right 36 times, both fine 10, single right 4, neither 3.
+    filer_mode: str = "staged"
+    # Asked the same question when the light filer's answer is visibly off (an empty note, an
+    # inbox line). "" turns the second reading off.
+    filer_strong_model: str = "claude-sonnet-5"
+    linker_model: str = "claude-haiku-4-5"
+    linker_enabled: bool = True
+    # Answers a question about the vault from the notes its search found (app/vault/answer.py).
+    # "" turns it off: the reply is then the list of notes found.
+    vault_answer_model: str = "claude-haiku-4-5"
+    # Obsidian's Omnisearch plugin, asked over its local HTTP server while the app runs (its
+    # setting "HTTP server"). 0: never asked.
+    omnisearch_port: int = 51361
+
+    # Mail: read-only triage over IMAP with a Gmail app password (no OAuth, no token that
+    # expires weekly). The bot only ever reads — there is no code path that marks, deletes or
+    # sends. Empty address or password = off.
+    gmail_address: str = ""
+    gmail_app_password: SecretStr = SecretStr("")
+    # When to send the digest, comma-separated wall-clock times in TIMEZONE.
+    mail_digest_at: str = "12:00,19:00"
+    # "name: what belongs in it", comma-separated on this one line; a description may contain
+    # commas, since a new bucket starts only where a "name:" follows one. The description is
+    # what the classifier follows — a bare name leaves it guessing. Empty falls back to
+    # texts.MAIL_BUCKETS_DEFAULT.
+    mail_buckets: str = ""
+    # claude-... sorts through the API; any other name is a local Ollama model (no key needed).
+    mail_model: str = "claude-haiku-4-5"
+    mail_max_per_run: int = Field(40, ge=1, le=200)
+    # Local Ollama models, comma-separated, that each sort the same mail again, so their
+    # digests can be read side by side with the real one — one message each, in this order.
+    # Empty is off, which is the normal state: it is a trial, not a feature. They run one after
+    # another and each is unloaded when done, so they never share the card.
+    mail_shadow_model: str = ""
+    # How many emails to try in one local request. More at once sorts better (the model tells
+    # buckets apart by contrast); a request that overflows the context is split and retried.
+    mail_shadow_batch: int = Field(20, ge=1, le=200)
+
+    whisper_model: str = "large-v3-turbo"
+    whisper_device: str = "auto"
+    whisper_compute_type: str = "int8"
+    whisper_language: str = "ru"
+
+    timezone: str = "UTC"
+    locale: str = "ru"
+
+    db_path: Path = Path("data/bot.sqlite")
+    targets_file: Path = Path("data/targets.yaml")
+    schema_cache_ttl_s: int = 60
+    items_per_target: int = Field(15, ge=1, le=100)
+    admin_ui_port: int = 8787
+
+    policy_intent_min: float = Prob(0.85)
+    policy_target_min: float = Prob(0.85)
+    policy_target_margin: float = Prob(0.10)
+    policy_field_min: float = Prob(0.75)
+    policy_date_min: float = Prob(0.80)
+
+    session_ttl_s: int = 900
+    undo_window_s: int = 300
+    log_level: str = "INFO"
+    log_file: str = "logs/bot.log"  # rotating, redacted like stderr; empty disables it
+
+    # auto: save on every unresolvable path and offer the button; button: only on button press;
+    # off: no inbox, no button.
+    inbox_mode: Literal["auto", "button", "off"] = "auto"
+    # Notion page/data-source id that overrides the targets.yaml `inbox: true` flag.
+    inbox_target_id: str = ""
+
+    @field_validator("telegram_allowed_user_ids")
+    @classmethod
+    def _allowlist_digits(cls, v: str) -> str:
+        for p in (x.strip() for x in v.split(",") if x.strip()):
+            if not p.isdigit():
+                raise ValueError(f"bad user id: {p!r}")
+        return v
+
+    def require_telegram(self) -> None:
+        """Raise a clear error when the bot itself is started without Telegram settings."""
+        missing = []
+        if not self.telegram_bot_token.get_secret_value():
+            missing.append("TELEGRAM_BOT_TOKEN")
+        if not self.allowed_user_ids:
+            missing.append("TELEGRAM_ALLOWED_USER_IDS")
+        if missing:
+            raise ValueError("missing in .env: " + ", ".join(missing))
+
+    @cached_property
+    def allowed_user_ids(self) -> frozenset[int]:
+        return frozenset(int(p) for p in self.telegram_allowed_user_ids.split(",") if p.strip())
+
+    @cached_property
+    def mail_shadow_models(self) -> list[str]:
+        return [m.strip() for m in self.mail_shadow_model.split(",") if m.strip()]
+
+
+def load_settings() -> Settings:
+    return Settings()

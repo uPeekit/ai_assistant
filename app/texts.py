@@ -1,0 +1,607 @@
+"""Every Russian user-facing string the bot can send, in one place. The only other files
+allowed to hold Cyrillic literals are app/llm/prompts.py (the LLM system prompt) and
+app/llm/context.py (weekday names) — those speak Russian to the local model, not to the user.
+
+This module is a leaf: it imports only app.validation.policy, for the QType type used to
+annotate QUESTION. app.conversation.reply.py and app.notion.props.py both import from here."""
+
+from __future__ import annotations
+
+from app.validation.policy import QType
+
+# ---- buttons ----------------------------------------------------------------------------------
+
+BTN_CANCEL = "Отмена"
+BTN_INBOX = "В разное"
+BTN_UNDO = "Отменить"
+BTN_CONFIRM = "Да"
+BTN_OTHER = "Другое"
+BTN_ADD_NEW = "Добавить как новое"
+BTN_UNDO_ALL = "Отменить всё"
+BTN_FIX = "Поправить"
+# Under a mail digest: mark every letter it listed as read, and the way back.
+BTN_MAIL_READ = "✓ Отметить прочитанными"
+BTN_MAIL_UNREAD = "↩ Вернуть непрочитанными"
+
+# ---- values -------------------------------------------------------------------------------
+
+BOOL_YES = "Да"
+BOOL_NO = "Нет"
+# How a plan step may spell a tick box (app.conversation.steps reads the planner's own words).
+BOOL_WORDS_TRUE = frozenset({"да", "true", "yes", "1", "+", "готово", "есть"})
+BOOL_WORDS_FALSE = frozenset({"нет", "false", "no", "0", "-"})
+FIELD_CLEARED = "очищено"  # a Written.value of None: the field was explicitly cleared (e.g.
+                            # "убери магазин у молока"), not missing/undefined
+UNTITLED = "(без названия)"  # title fallback for a page with no title text; shared with
+                              # app.notion.props.page_title
+
+# ---- clarification questions, keyed by Question.type (QType) --------------------------------
+
+QUESTION: dict[QType, str] = {
+    # Says what the bot understood (a misread intent is invisible otherwise) and points at
+    # [Другое], so a single-candidate question is never a choice between one wrong answer and
+    # throwing the message away.
+    "target": "Не уверен, куда это: понял как «{intent}». Выберите вариант или нажмите "
+              "«Другое» и напишите, что имели в виду.",
+    "intent_confirm": "Похоже, вы хотите {intent}. Верно?",
+    "item": "Какой элемент?",
+    "item_not_found": "Не нашёл «{item_text}» в списке.",
+    "field_required": "Какое значение указать для поля «{field_name}»?",
+    "field_ambiguous": "Уточните значение поля «{field_name}»:",
+    "date": "Дата «{field_name}»: {value}. Верно?",
+    "field_confirm": "«{field_name}»: {value}. Верно?",
+    "content_required": "Что написать?",
+    "nothing_to_write": "Не понял, что именно изменить.",
+    "clarify": "{question}",  # the model's own question, as it wrote it
+}
+
+# Target-naming variants of four of the templates above, for when the caller knows the target's
+# name (FLOWS.md's wording names it, e.g. "...в «Покупки»"). A separate template — rather than
+# an optional segment inside QUESTION[q.type] — keeps the target-less default free of dangling
+# quotes or empty «» when no name is available.
+QUESTION_WITH_TARGET: dict[QType, str] = {
+    "item": "Какой элемент в «{target_name}»?",
+    "field_required": "{target_name}: какое значение указать для поля «{field_name}»?",
+    "content_required": "Что написать в «{target_name}»?",
+    "nothing_to_write": "Не понял, что именно изменить в «{target_name}».",
+}
+
+# Question.proposed for intent_confirm carries the raw intent value ("create"/"update"/
+# "append"/"search"); this maps it to a Russian verb phrase for the question text.
+INTENT_LABELS: dict[str, str] = {
+    "create": "добавить запись",
+    "update": "изменить запись",
+    "append": "дописать текст",
+    "rewrite": "переписать текст",
+    "search": "найти",
+    "plan": "выполнить несколько действий",
+}
+INTENT_UNKNOWN_LABEL = "запрос"
+
+# ---- execution results ------------------------------------------------------------------------
+
+# Both stores answer in the same shape — «значок сторона — что сделано» — so a reply that
+# touched both reads as two lines of one answer instead of a Notion sentence with an Obsidian
+# afterthought. The Obsidian half of it lives in VAULT_REPLY / VAULT_FAILED below.
+DONE_CREATE_ITEM = "✅ Notion — добавлено в «{target_name}»: {item_title}"
+# The row was already in the table: nothing written, nothing changed in it.
+ALREADY_THERE = "↩️ Notion — уже есть в «{target_name}»: {item_title} (ничего не менял)"
+DONE_UPDATE = "✅ Notion — обновлено в «{target_name}»: {item_title}"
+DONE_CREATE_PAGE = "✅ Notion — создано в «{target_name}»: {item_title}"
+DONE_APPEND = "✅ Notion — дописано в «{target_name}»: {item_title}"
+DONE_REWRITE = "✅ Notion — переписано в «{target_name}»: {item_title}"
+DONE_EDIT = "✅ Notion — правки в «{target_name}»: {item_title}"
+# What an edit script changed, assembled from the parts that are not zero. The counts are
+# the whole receipt: an edit touches places, so "was 137 lines" says nothing about it.
+EDIT_REPLACED = "изменено строк: {n}"
+EDIT_ADDED = "добавлено: {n}"
+EDIT_REMOVED = "убрано: {n}"
+# Always said out loud when a picture or a file was removed, never folded into the count:
+# that is the one removal the user cannot see undone from the numbers alone. Undo brings
+# it back whole, but at the end of the page — Notion cannot say where it belonged.
+EDIT_REMOVED_MEDIA = ("убрано вложений: {n} — «{undo}» вернёт их, но в конец страницы")
+# What a rewrite actually did, in numbers: the one thing the user cannot see from the
+# preview, and the thing that tells them whether to press Undo.
+REWRITE_SIZE = "Было {before} строк → стало {after}"
+REWRITE_KEPT = "Не трогал (не текст): {n}"
+# Said when the text shrank by more than four fifths: allowed, but worth noticing.
+REWRITE_SHRANK = "⚠️ Текста стало сильно меньше — если это не то, нажмите «{undo}»."
+# The first lines of the new text, so the user sees what happened without opening Notion.
+REWRITE_PREVIEW_LINES = 6
+REWRITE_PREVIEW_MORE = "…"
+DONE_LINK = "Открыть: {url}"
+
+# ---- multi-step plans -------------------------------------------------------------------------
+
+# Sent before a web search starts: it takes minutes, and silence reads as a hang.
+SEARCHING_THE_WEB = "🔎 Ищу в интернете, это займёт пару минут…"
+
+PLAN_HEADER = "🗂 План: {goal}"
+PLAN_STEP = "Шаг {n}. {text}"
+PLAN_DONE = "🏁 Готово — {summary} (шагов выполнено: {done} из {total})"
+PLAN_STOPPED = "⏹ План остановлен: {summary} (шагов выполнено: {done} из {total})"
+# A plan whose question nobody answered in time: the plan is gone, and saying so beats leaving
+# the user to notice that the remaining steps never happened.
+PLAN_ABANDONED = " План «{goal}» отменён, невыполненных шагов: {left}."
+
+SEARCH_HEADER = "🔍 Notion — нашёл:"
+SEARCH_EMPTY = "🔍 Notion — ничего не нашёл."
+
+# ---- standalone replies -----------------------------------------------------------------------
+
+# The inbox target is whatever the user flagged in targets.yaml, so all three of these name it
+# at send time rather than baking one name into the sentence.
+INBOX_SAVED = "Сохранил в «{target_name}»: {url}"
+INBOX_SAVED_EXPIRED = "Вопрос устарел — сохранил сообщение в «{target_name}»."
+INBOX_FAILED = "Не удалось сохранить в «{target_name}»."
+# Short notes filed next to a message rescued into the inbox, so the user can tell later why it
+# is there rather than in the target it was meant for (inbox.py trims them to MAX_NOTE). A page
+# inbox keeps the note as a second paragraph under the text.
+INBOX_NOTE = "Причина: {reason}"
+INBOX_NOTE_UNANSWERED = "Остался без ответа вопрос: {question}"
+CANCELLED = "Отменено — ничего не записал."
+# Appended to CANCELLED only while no inbox page is flagged: that is exactly when the user has
+# just thrown away a message they may have wanted kept, with no [В разное] button to offer.
+CANCELLED_NO_INBOX = ("Чтобы такие сообщения можно было сохранить кнопкой «В разное», "
+                      "выберите страницу для них в настройках: {admin_url}")
+CANCELLED_NO_INBOX_NO_ADMIN = ("Чтобы такие сообщения можно было сохранить кнопкой «В разное», "
+                               "укажите страницу для них в INBOX_TARGET_ID в .env.")
+# Sent the moment a voice note arrives, before the download and `speech.transcribe` — the first
+# one of a run loads (and, the very first time, downloads ~1.5 GB of) the Whisper model, which can
+# take minutes during which the bot would otherwise be indistinguishable from a dead one.
+VOICE_TRANSCRIBING = "Расшифровываю голосовое сообщение…"
+UNDONE = "↩️ Отменено."
+ENTER_VALUE = "Введите значение."  # answer to [Другое]: the next message is free text (F12→F4)
+# [Другое] on a target or intent question: the next message is re-read together with the
+# original one, so a short correction is enough.
+ENTER_CORRECTION = "Напишите, что имели в виду — например: «добавь в TODO»."
+# A delivered keyboard cannot be withdrawn, so the inbox offer can be pressed again after
+# it has already done its job; the second press is refused with this instead of saving twice.
+INBOX_ALREADY_SAVED = "Это сообщение уже сохранено."
+
+# ---- errors (documentation/ERRORS.md), keyed by error code ------------------------------------
+
+# Placeholders here are filled by app.conversation.orchestrator, which degrades to
+# ERRORS["INTENT_UNKNOWN"] for any template it cannot fill — so a template may only ask for a
+# value its caller actually has. The two validator-issued REJECTs (SEM_TYPE, SEM_UNSUPPORTED_OP)
+# arrive without a candidate; their placeholder comes from Issue.detail. test_texts.py pins the
+# placeholder set of every code against that.
+ERRORS: dict[str, str] = {
+    # A rewrite of a page that has no text on it at all (only pictures, only sub-pages).
+    "REWRITE_EMPTY": "На «{target_name}» нет текста, который можно переписать — картинки, "
+                      "файлы и подстраницы я не трогаю.",
+    # The model read the page and found nothing the instruction applies to.
+    "REWRITE_NOTHING": "Не нашёл на «{target_name}», что именно поправить — ничего не изменил.",
+    "REWRITE_UNAVAILABLE": "Переписать текст сейчас не могу: для этого нужен Claude.",
+    "REWRITE_FAILED": "Не удалось переписать текст ({error}). Ничего не изменил.",
+    "REWRITE_TOO_LONG": "«{target_name}» слишком длинная, чтобы менять её за один раз. "
+                        "Ничего не изменил.",
+    # Both stores are switched off on the admin page: there is nowhere to write.
+    "NOTHING_ENABLED": "Обе стороны выключены — включите Notion или Obsidian на странице "
+                        "настроек.",
+    # A plan step named a place the workspace does not have; the model offered a different one,
+    # and a step writes without asking, so nothing is written at all.
+    "STEP_WRONG_TARGET": "Не нашёл, куда записать: «{target_name}».",
+    "STT_EMPTY": "Не разобрал голосовое сообщение. Повторите или напишите текстом.",
+    "STT_FAILED": "Ошибка распознавания речи.",
+    "DISCOVERY_FAILED": "Notion недоступен.",
+    "LLM_UNAVAILABLE": "Модель недоступна. Попробуйте позже.",
+    "LLM_INVALID_OUTPUT": "Не удалось разобрать запрос.",
+    "INTENT_UNKNOWN": "Не понял, что нужно сделать в Notion.",
+    "SEM_UNKNOWN_KEY": "Не удалось сопоставить запрос с Notion.",
+    "SEM_TYPE": "Не удалось разобрать значение поля «{field_name}».",
+    "SEM_UNSUPPORTED_OP": "Эта операция недоступна для «{target_name}».",
+    "NOTION_4XX": "Notion отклонил операцию: {message}.",
+    "NOTION_5XX": "Notion временно недоступен.",
+    "UNDO_EXPIRED": "Отменить уже нельзя (прошло больше {minutes} минут).",
+    "UNDO_FAILED": "Не удалось отменить: {message}.",
+    "SESSION_EXPIRED": "Вопрос устарел. Повторите запрос.",
+    "nothing_to_write": "Не понял, что именно изменить.",
+    "item_not_found": "Не нашёл «{item_text}» в списке.",
+    "INTERNAL": "Не удалось обработать сообщение.",
+    "WEB_UNAVAILABLE": "Поиск в интернете работает только с Claude (ANTHROPIC_API_KEY в .env).",
+    "WEB_FAILED": "Не удалось ничего найти в интернете.",
+    "LINK_ANSWER_FAILED": "Не получилось ответить по ссылке — попробуйте спросить ещё раз.",
+    # A search that ran past its deadline: it was cut short, not empty.
+    "WEB_TIMEOUT": "Поиск в интернете шёл дольше {minutes} мин — прервал его. "
+                    "Попробуйте запрос покороче или по частям.",
+    "PLAN_UNAVAILABLE": "Планы из нескольких шагов работают только с Claude (ANTHROPIC_API_KEY).",
+    "PLAN_FAILED": "Не удалось составить план.",
+}
+
+# ---- /start, /help, /refresh, /targets (app.telegram.handlers) --------------------------------
+
+HELP_TEXT = (
+    "Я сохраняю и обновляю записи в Notion по текстовым и голосовым сообщениям.\n"
+    "Просто напишите или наговорите, что нужно сделать — я найду подходящий раздел.\n\n"
+    "Команды:\n"
+    "/start — начать работу\n"
+    "/help — это сообщение\n"
+    "/undo — отменить последнее действие\n"
+    "/cancel — отменить текущий вопрос\n"
+    "/refresh — обновить список разделов Notion\n"
+    "/targets — показать список разделов\n\n"
+    "Сообщение, которое не удалось отнести ни к одному разделу, попадает в «разное» "
+    "(если этот раздел настроен).\n\n"
+    "Ещё умею: оформлять текст (списки, заголовки, чекбоксы), создавать страницы — внутри "
+    "другой или в корне воркспейса, и искать в интернете: «найди рецепт борща и запиши в "
+    "медиа», «найди визуальные референсы для скамейки из дуба в проекты»."
+)
+
+REFRESH_DONE = "Обновлено. Разделов: {count}."
+
+# The command menu Telegram shows behind the "/" button, published by app.main._register_commands
+# via set_my_commands. Keys are command names without the slash; the order here is the order the
+# menu shows. Every command registered in app.telegram.handlers.register belongs here, and
+# HELP_TEXT lists the same set in prose.
+COMMANDS: dict[str, str] = {
+    "start": "Начать работу",
+    "help": "Что умеет бот и какие есть команды",
+    "undo": "Отменить последнее действие",
+    "cancel": "Отменить текущий вопрос",
+    "refresh": "Обновить список разделов Notion",
+    "targets": "Показать список разделов",
+}
+
+TARGETS_HEADER = "Разделы Notion:"
+TARGETS_NONE_YET = "Список разделов ещё не загружен. Отправьте /refresh."
+# t.kind ("database"/"page") -> a Russian noun for the /targets tree line.
+TARGET_KIND_LABELS: dict[str, str] = {"database": "база данных", "page": "страница"}
+TARGETS_INBOX_MARKER = "(разное)"
+TARGETS_HIDDEN_MARKER = "(скрыта от бота)"
+# The synthetic target for a new top-level page (discovery's workspace_root).
+ROOT_TARGET_NAME = "Корень воркспейса"
+ROOT_TARGET_DESCRIPTION = (
+    "Верхний уровень Notion: сюда создаётся новая самостоятельная страница, когда пользователь "
+    "просит создать страницу в корне / на верхнем уровне / отдельно, не внутри другой страницы."
+)
+
+# ---- a page as numbered lines, for the editing model (app/notion/to_markdown.py) --------------
+
+# A block that is a thing rather than a sentence: its text cannot be edited, but it can be
+# removed. Named in the user's language so the model reads the page the way the user sees it.
+OUTLINE_MEDIA = "<вложение {what}>"
+# A block nothing may touch: a sub-page, a database, a table, a column layout.
+OUTLINE_KEPT = "<не трогать: {what}>"
+
+# ---- when Claude cannot be used (app/llm/health.py) -------------------------------------------
+
+# A few words for a line that is already about a failure ("Obsidian — не записано: …").
+LLM_DOWN_SHORT: dict[str, str] = {
+    "credit": "закончились кредиты Claude",
+    "key": "ключ Claude не принят",
+    "limit": "слишком много запросов к Claude",
+    "down": "Claude не отвечает",
+}
+# The whole sentence, appended to a reply at most once an hour. It says what broke, what that
+# costs the user right now, and what to do about it — a warning that names none of the three
+# is the silence it replaces.
+LLM_DOWN_NOTE: dict[str, str] = {
+    "credit": ("⚠️ На счёте Anthropic закончились кредиты. Пока отвечает локальная модель — она "
+               "заметно хуже, а Obsidian ничего не записывает. "
+               "Пополнить: https://console.anthropic.com/settings/billing"),
+    "key": ("⚠️ Claude не принимает ключ — проверьте ANTHROPIC_API_KEY. Пока отвечает локальная "
+            "модель, Obsidian ничего не записывает."),
+    "limit": ("⚠️ Слишком много запросов к Claude подряд. Отвечает локальная модель; "
+              "через несколько минут всё вернётся само."),
+    "down": ("⚠️ Claude сейчас не отвечает. Отвечает локальная модель — она заметно хуже, "
+             "а Obsidian ничего не записывает."),
+}
+
+# ---- LLM-facing keys --------------------------------------------------------------------------
+
+# Keys of the `pending` block the orchestrator adds to the request context when the next message
+# is a free-text answer to the question already on screen (app/llm/context.py puts it into the
+# payload verbatim). Russian because the whole context speaks Russian to the local model; these
+# are the only strings in this module the user never sees. The block carries names and question
+# text only — never a Notion id, never a context key.
+PENDING_QUESTION = "вопрос"
+PENDING_TARGET = "цель"
+PENDING_TEXT = "исходный_текст"
+
+# ---- Obsidian vault ---------------------------------------------------------------------------
+
+# The vault's layout: folder and note names the user sees in Obsidian. Renaming one here
+# renames it for every note written later, not for notes already in the vault.
+VAULT_TASKS_NOTE = "Задачи"
+VAULT_ARCHIVE_NOTE = "Задачи — архив"
+VAULT_AREAS_DIR = "Области"
+VAULT_NOTES_DIR = "Заметки"
+# Templater's templates. Not notes: the index skips them and the writer never writes there.
+VAULT_TEMPLATES_DIR = "Шаблоны"
+VAULT_FILES_DIR = "Вложения"
+VAULT_DAILY_DIR = "Дневник"
+VAULT_HOME_NOTE = "Главная"
+VAULT_NO_TAG_HEADING = "Без тэга"
+VAULT_COUNTDOWN_TAG = "отсчёт"
+# Frontmatter properties a note may carry its own date in (a meeting, a trip, a birthday).
+VAULT_DATE_PROPS = ("date", "дата", "when", "due", "start")
+# The grocery page: a registry, not a to-do list (app/vault/groceries.py). Every product has
+# one permanent line — ticked means in stock, unticked means buy it — so the page never grows
+# except for a genuinely new product, and nothing is ever archived. The home page finds the
+# unticked ones by file name, so the lines carry no tag.
+# Words in front of a product that are not part of its name, so "купить 2 л молока"
+# registers as "молока". Units are only stripped after a number — on their own
+# they would eat the product ("г" is also the start of "гречка").
+# Letters that sort out of alphabetical order by code point, folded before sorting the
+# grocery page: ё sits after я, so a product starting with it would land at the bottom
+# of an otherwise alphabetical list.
+VAULT_SORT_FOLD = {"ё": "е"}
+# Word beginnings that mean a message names a time. A date the model returns counts only when
+# the message has a digit or one of these: a model asked for a date tends to supply one.
+# Words that ask for a whole set of chores («всё что нужно взять», «список дел для переезда»).
+# Without one, a lookup on the task file is the model inventing work: «надо внести траты»
+# came back as a five-step checklist.
+# Asking for something to be worked out rather than written down («сравни варианты и
+# придумай план поездки»): the vault may search for it, as it does for «найди».
+VAULT_COMPOSE_CUES = ("придума", "спланир", "сравни", "составь план", "составь маршрут",
+                      "подбери", "посоветуй")
+VAULT_SET_CUES = ("все", "всё", "всех", "весь", "вся", "список", "перечисл",
+                  "что взять", "что нужно", "что надо", "полный", "целиком")
+# Words that say a time of day without a number of its own ("в час дня", "утром"): with
+# one of them, a task's time need not repeat a number from the message.
+VAULT_CLOCK_CUES = ("утр", "вечер", "дня", "ночи", "полдень", "полдн", "полноч", "час")
+# A request to tick tasks off, as opposed to a report of something done.
+VAULT_TICK_CUES = ("отметь", "отметить", "отмечай", "вычеркн", "закрой", "закрыть",
+                   "галочк")
+VAULT_DATE_CUES = (
+    "сегодн", "завтр", "послезавтр", "вчера", "понедельник", "вторник", "сред", "четверг",
+    "пятниц", "суббот", "воскресен", "недел", "месяц", "выходн", "через", "январ", "феврал",
+    "март", "апрел", "мая", "май", "июн", "июл", "август", "сентябр", "октябр", "ноябр",
+    "декабр", "утр", "вечер", "ноч", "числ", "каждый", "каждую", "каждое", "ежедневн",
+    "today", "tomorrow",
+)
+VAULT_GROCERY_UNITS = ("л", "мл", "кг", "г", "гр", "шт", "уп")
+# Containers, which are unambiguous enough to strip on their own ("пачка соли").
+VAULT_GROCERY_PACKS = ("пачк", "банк", "бутыл", "пара", "пары")
+# Both tenses: "buy milk" names a product to get, "bought milk" names the same product as
+# already got, and the name has to survive either.
+VAULT_BUY_WORDS = ("купить", "купи", "куплю", "купили", "купила", "купил",
+                   "закупился", "закупить", "заказать", "закажи", "заказали", "заказала",
+                   "заказал", "взять", "возьми", "взяли", "взяла", "взял", "есть")
+VAULT_GROCERIES_NOTE = "Продукты"
+VAULT_GROCERIES_INTRO = ("Отмеченные — есть дома. Снимите галочку с того, что нужно "
+                         "купить — оно появится на Главной. Сроков и повторов здесь не бывает.")
+# The answer to "что надо купить?"
+VAULT_GROCERIES_LIST = "🛒 Купить: {items}"
+VAULT_GROCERIES_EMPTY = "🛒 Всё есть — покупать нечего."
+# One line in the morning digest, only when something is actually needed.
+VAULT_GROCERIES_DIGEST = "🛒 Продукты ({n}): {items}"
+VAULT_INBOX_NOTE = "Разное"
+# A question answered from the vault: the header, one line per hit, and the empty answer.
+VAULT_SEARCH_HEADER = "🔍 Obsidian — нашёл:"
+VAULT_SEARCH_HIT = "• {name}{line}"
+VAULT_SEARCH_TASK = "• {line}"
+VAULT_SEARCH_EMPTY = "🔍 Obsidian — ничего не нашёл."
+# An answer read from the notes (app/vault/answer.py), then the notes it came from.
+VAULT_ANSWER = "🔍 {answer}"
+VAULT_ANSWER_SOURCES = "📎 {links}"
+# Words a question is built from rather than about: they match everything and mean nothing.
+SEARCH_STOP_WORDS = frozenset({
+    "найди", "найти", "покажи", "напомни", "скажи", "дай", "хочу", "нужно", "надо",
+    "страница", "страницу", "страницы", "заметка", "заметку", "заметки", "файл",
+    "мою", "моя", "мои", "моего", "меня", "тебя", "себе", "там", "тут", "здесь",
+    "что", "чего", "какие", "какой", "какая", "когда", "куда", "если", "было", "есть",
+    "про", "для", "это", "этот", "эта", "вообще", "потом", "ещё", "еще",
+})
+# One line per write, appended to the reply: what the Obsidian side did.
+VAULT_REPLY = "✅ Obsidian — {what}"
+VAULT_FAILED = "⚠️ Obsidian — не записано: {error}"
+# A group chat with its own scope (app/chats.py, app/vault/scope.py).
+# Chat answers and memory (app/conversation/memory.py, app/vault/answer.py).
+MEMORY_USER = "Пользователь"
+MEMORY_BOT = "Ассистент"
+POINTED_ANSWER = "последний ответ ассистента"
+POINTED_EARLIER = "ответ ассистента раньше"
+POINTED_QUOTE = "сообщение, на которое отвечают"
+ANSWER_GENERAL = "💬 {answer}"
+ANSWER_WEB = "🌐 {answer}"
+ANSWER_SEARCHING = "🔎 Ищу в интернете…"
+ANSWER_WEB_ASK = "🌐 Чтобы поискать, уточните: {question}"
+ANSWER_WEB_FAILED = "🌐 Поискать в интернете не получилось: {error}"
+# A question that asks to write something down is filed, not answered.
+VAULT_WRITE_CUES = ("запиш", "сохран", "добав", "созда", "заметк", "внес", "план",
+                    "отмет", "в список", "в задач", "напомн", "занеси")
+# Words that point back at something said before ("запиши это"): whole words, and stems.
+BACK_WORDS = ("это", "этот", "эту", "эти", "то", "тот", "ту", "выше")
+BACK_STEMS = ("последн", "написал", "сказал", "предыдущ", "прислал", "скинул")
+# Google sources (app/google/): how their text is laid out for the answerer.
+GOOGLE_PIECE = "{title} (часть {n})"
+GOOGLE_ROWS = "{title} (строки, часть {n})"
+GOOGLE_COLUMN = "колонка {n}"
+GOOGLE_SUMMARY = "{title} (сводка: наибольшие и наименьшие значения)"
+GOOGLE_SCORES = "Больше всего баллов — {top}\nМеньше всего баллов — {bottom}"
+GOOGLE_CUT = "[… дальше не показано]"
+GOOGLE_EXTREMES = "{column}: больше всего — {top}; меньше всего — {bottom}"
+GOOGLE_QUESTIONS = "Вопросы:"
+GOOGLE_CORRECT = "верный ответ"
+GOOGLE_RESPONSES = "Ответов: {n}"
+GOOGLE_RESPONSE = "Ответ {n}"
+GOOGLE_SCORE = "баллы {score}"
+GOOGLE_SIGN_IN = ("⚠️ Google: вход больше не действует — документы Google в ответах не "
+                  "участвуют. На компьютере с ботом запустите: "
+                  "python -m tools.google_login")
+# Reminders (app/reminders/).
+REMINDER = "⏰ {text}"
+REMINDER_LATE = "⏰ (с опозданием на {delay}) {text}"
+REMINDER_MINUTES = "{n} мин"
+REMINDER_HOURS = "{n} ч"
+REMINDER_DAYS = "{n} дн."
+REMIND_SET = "⏰ Напомню {when}: {text}"
+REMIND_AT = "{day} в {time}"
+REMIND_REPEAT = "{rule}, ближайшее — {when}"
+REMIND_WHEN = "⏰ Когда напомнить? Напишите дату или время — «завтра в 10», «в пятницу»."
+REMIND_PAST = "⏰ Это время уже прошло: {when}. Напишите другое."
+REMIND_NONE = "⏰ Напоминаний нет."
+REMIND_LIST = "⏰ Напоминания:"
+REMIND_ITEM = "• {when} — {text}"
+REMIND_CANCELLED = "⏰ Отменил: {text}"
+REMIND_NOT_FOUND = "⏰ Не нашёл такого напоминания."
+FIX_REMINDER_KEPT = "⏰ Напоминание осталось как было — если надо, отмените его и поставьте заново."
+REMIND_OFF = "⏰ Напоминания здесь не настроены."
+# Repeat rules as the reply says them (app/reminders/repeat.py words).
+REMIND_EVERY = {"day": "каждый день", "week": "каждую неделю", "month": "каждый месяц",
+                "year": "каждый год"}
+REMIND_EVERY_N = {"day": "раз в {n} дн.", "week": "раз в {n} нед.", "month": "раз в {n} мес.",
+                  "year": "раз в {n} г."}
+REMIND_ON_DAYS = "по {days}"
+REMIND_DAYS_SHORT = ("пн", "вт", "ср", "чт", "пт", "сб", "вс")
+# A message that counts from now ("через 2 часа"): its time need not repeat a number.
+VAULT_RELATIVE_CUES = ("через",)
+# A question about reminders ("какие у меня напоминания") is the remind stage's, not a
+# search of the notes; and the words a reminder's text should not start with.
+VAULT_REMIND_CUES = ("напомин", "напомни")
+REMIND_LEADING = ("про", "о", "об", "обо", "насчёт", "насчет")
+REMINDER_RULE_TODAY = "Сегодня: {label}"
+REMINDER_RULE_TOMORROW = "Завтра: {label}"
+REMINDER_RULE_DAYS = "Через {n} дн.: {label}"
+SCOPE_NOT_HERE = "🚫 Здесь так нельзя: {kinds}."
+SCOPE_NOTHING = "🤷 Не понял, что записать или найти."
+SCOPE_NOT_YOURS = "Это может отменить или поправить только тот, кто об этом просил."
+SCOPE_KINDS = {
+    "update": "менять или отмечать записанное", "rewrite": "переписывать заметки",
+    "move": "переносить", "log": "дневник", "grocery": "продукты", "inbox": "входящие",
+    "append": "дописывать в эту заметку", "note": "новые заметки", "task": "новые задачи",
+    "search": "вопросы", "agenda": "вопросы", "link_answer": "вопросы",
+    "reminder": "напоминания", "reminder_list": "напоминания",
+    "reminder_cancel": "напоминания",
+}
+# Said in place of the Obsidian line when a rewrite was asked for and there is no model to
+# do it with.
+# The editor read the note and found nothing the instruction applies to. Not a breakage,
+# so it must not read like one.
+VAULT_NOTHING_TO_CHANGE = "не нашёл, что именно поправить"
+VAULT_REWRITE_OFF = "некому переписать — нужен Claude"
+# A move the editor could not pin down to lines: nothing is cut, nothing is copied.
+# A note that asked for a web search and was written without what it would have found.
+# A set the user asked for, every item of which the vault already has.
+VAULT_ALL_THERE = "всё это уже есть — ничего не менял"
+VAULT_WEB_OFF = "поиск в интернете не подключён, записал без него"
+VAULT_WEB_FAILED = "в интернете ничего не нашлось, записал без найденного"
+VAULT_WEB_UNCLEAR = "поиску нужен запрос точнее, записал без найденного"
+VAULT_NOTHING_TO_MOVE = "не нашёл, что переносить — ничего не тронул"
+# Undo found the file changed since, in the very lines it would take back.
+VAULT_UNDO_LEFT = "↩️ Не отменил в {notes}: там с тех пор что-то изменили, и я не стал трогать."
+# Some of a message's writes failed after others were already on disk.
+VAULT_SOME_FAILED = "ещё {n} записать не удалось"
+# A note (or the section named) is longer than the editing model may read in one go.
+VAULT_TOO_LONG = "заметка слишком длинная, чтобы менять её целиком — назовите раздел"
+VAULT_MOVE_UNCLEAR = "не понял, какие строки переносить — ничего не тронул"
+# Fixing part of what was just written (app/vault/fix.py).
+FIX_ASK = "✏️ Что поправить? Напишите или надиктуйте."
+FIX_EXPIRED = "Поправить уже нельзя (прошло больше {minutes} минут)."
+FIX_UNCLEAR = "не понял, что поправить — ничего не менял"
+FIX_DONE = "✏️ Obsidian — поправлено: {what}"
+FIX_FAILED = "⚠️ Obsidian — не поправил: {error}"
+FIX_MOVED = "«{item}» → «{place}»"
+FIX_SET = "«{item}» — {value}"
+FIX_DROPPED = "«{item}» убрано"
+FIX_ADDED = "+ «{item}»"
+FIX_NOT_MOVED = "«{item}» не перенёс"
+FIX_NOTE = "«{note}» ещё раз"
+# New writes of a fix that failed: their words, so the user can send them again.
+FIX_NOT_WRITTEN = "не записал: {items}"
+# The old lines a fix could not take back (the file was held by another program): the new ones
+# are written anyway, so the old ones are there twice until removed by hand.
+FIX_NOT_TAKEN_BACK = "старое осталось в {notes} — уберите руками"
+# A fix may drop something only when the correction says to: whole words, and word starts.
+# Found live: «ну это» made the model drop the task it was shown.
+FIX_DROP_WORDS = ("нет", "без", "ненадо")
+# «не» drops only before these word starts («не надо», «не нужно»): «не в задачи, а в продукты»
+# is a move, not a drop.
+FIX_DROP_AFTER_NE_WORD = "не"
+FIX_DROP_AFTER_NE = ("надо", "нужн")
+FIX_DROP_STEMS = ("убер", "убра", "удал", "лишн", "отмен", "ненуж", "выкин", "вычеркн")
+VAULT_WHAT = {
+    "task": "задача в «{note}»",
+    "note": "заметка «{note}»",
+    "append": "дописано в «{note}»",
+    "update": "обновлено «{note}»",
+    "rewrite": "переписано «{note}»",
+    "log": "запись в дневнике «{note}»",
+    "inbox": "в «{note}» — не понял, куда это",
+    # The model could not be asked at all: the words are kept as they are.
+    "kept": "сохранил в «{note}» как есть",
+    "grocery": "в список продуктов: {detail}",
+    "grocery_done": "куплено: {detail}",
+}
+# The same, when the writer said what exactly it wrote (app/vault/summary.py builds {detail}).
+VAULT_WHAT_DETAIL = {
+    "task": "задача {detail}",
+    "note": "заметка {detail}",
+    "append": "дописано в «{note}»{detail}",
+    "update": "обновлено «{note}»{detail}",
+    "log": "в дневник: {detail}",
+    "inbox": "в «{note}» — не понял, куда это: {detail}",
+}
+# A reply with several writes lists them, one per line, under this.
+VAULT_REPLY_LIST = "✅ Obsidian:"
+VAULT_LIST_ITEM = "• {what}"
+VAULT_LIST_MORE = "• … и ещё {n}"
+VAULT_LIST_NOTE = "⚠️ {notes}"
+VAULT_SUM_TODAY = "сегодня"
+VAULT_SUM_TOMORROW = "завтра"
+VAULT_WEEKDAYS_SHORT = ("пн", "вт", "ср", "чт", "пт", "сб", "вс")
+VAULT_SUM_NOTE = "«{name}» в «{folder}»"
+VAULT_SUM_REOPENED = "{task} снова открыта"
+VAULT_SUM_CLEARED = "пусто"
+
+# ---- the vault's agenda: the morning message and the "what now" answer -------------------------
+
+VAULT_AGENDA_HEADER = "🌅 {date} — что на подходе:"
+VAULT_AGENDA_OVERDUE = "🔴 Просрочено ({n}):"
+VAULT_AGENDA_TODAY = "📌 Сегодня ({n}):"
+VAULT_AGENDA_TOMORROW = "➡️ Завтра ({n}):"
+VAULT_AGENDA_EVENTS = "📅 Встречи и даты ({n}):"
+VAULT_AGENDA_ITEM = "• {text}"
+VAULT_AGENDA_MORE = " и ещё {n}"
+# Answers to a question about a day or a range, and to "что мне сейчас делать".
+VAULT_ON_DAY = "📅 {date}:"
+VAULT_ON_RANGE = "📅 {start} — {end}:"
+VAULT_NOW = "С чего начать:"
+VAULT_OVERDUE = "🔴 Просрочено:"
+
+# ---- the bot's own name -----------------------------------------------------------------------
+
+# Questions about the bot itself, answered without a model (app/address.py).
+ABOUT_QUESTIONS = ("кто ты", "ты кто", "как тебя зовут", "твоё имя", "твое имя",
+                   "что ты умеешь", "что умеешь", "чем помочь", "что ты можешь")
+# The answer to those, and to being called by name with nothing else in the message.
+ABOUT = ("Меня зовут {name}. Записываю в Notion и в Obsidian: задачи со сроками и повторами, "
+         "заметки, книги, дневник. Отвечаю на вопросы: «что у меня в пятницу», «что сейчас "
+         "делать», «что там про борщ». Утром в {digest_at} присылаю сводку. Любую запись можно "
+         "отменить кнопкой.")
+CALLED = "Да, слушаю."
+# Words that may come before the name when someone calls out to the bot ("эй Робо", "ну Робо").
+ADDRESS_OPENERS = ("эй", "ей", "hey", "ok", "окей", "ну", "слушай", "привет")
+
+# ---- mail digest ------------------------------------------------------------------------------
+
+MAIL_MARKED = "Отмечено прочитанными: {n}"
+MAIL_UNMARKED = "Снова непрочитанные: {n}"
+MAIL_MARK_GONE = "Этот дайджест слишком старый — отметьте письма в почте"
+MAIL_MARK_FAILED = "Не получилось: {error}"
+MAIL_HEADER = "📬 Почта — {n} писем:"
+MAIL_BUCKET = "\n{bucket} ({n}):"
+MAIL_ITEM = "• {sender} — {summary}"
+MAIL_MORE = "  …и ещё {n}"
+MAIL_FAILED = "📬 Почту прочитать не удалось ({error})."
+
+# The second digest: the same mail sorted by the local model, for comparison. Temporary — it
+# goes away once the user has decided whether the local model is good enough.
+MAIL_SHADOW_HEADER = "🧪 Тот же разбор локальной моделью ({model}, {seconds:.0f} с):"
+MAIL_SHADOW_FAILED = "не получилось — {error}"
+MAIL_SHADOW_EMPTY = "ничего не вернула."
+# How a reply quotes what came before it ("25.09.2026 Иван написал:"): everything from there
+# down is the previous message again, so the classifier never sees it.
+MAIL_QUOTE_MARKERS = ("написал", "wrote", "schrieb", "kirjutas")
+# The buckets a digest is sorted into, and what belongs in each. The user's own MAIL_BUCKETS
+# replaces this wholesale; the descriptions are what the classifier follows, not the names.
+MAIL_BUCKETS_DEFAULT = (
+    "bills: счёт или требование оплаты — что-то нужно оплатить\n"
+    "shopping: магазины и заказы — статус заказа, доставка, акции, отзывы\n"
+    "financial: банк и платежи — чеки об оплате, уведомления и напоминания банка\n"
+    "notifications: автоматические уведомления сервисов, рассылки, новости\n"
+    "personal: письмо от живого человека лично тебе\n"
+    "other: всё остальное"
+)

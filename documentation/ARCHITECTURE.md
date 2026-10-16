@@ -1,0 +1,835 @@
+# Architecture
+
+This document records how the app is built and why.
+
+## 1. Decisions made after spec review
+
+| Topic | Decision | Why |
+|---|---|---|
+| Writable scope | Everything the Notion integration can see is a target. No allow/deny lists. | User request. Notion share settings are the single access control. |
+| Item lookup for update/append | LLM sees existing item titles (capped) and picks an item by short key. App only checks the key exists. | "LLM as classifier": no second fuzzy-match step, fewer questions. |
+| Target/field/item references | App assigns short keys per request (`t1`, `t1.f3`, `t1.i12`). LLM output schema uses `enum` of those keys. | Prevents invented IDs, saves tokens, grammar-enforced by Ollama. |
+| Confirmation | LOW and MEDIUM risk execute automatically when policy passes. Reply carries an **Undo** button for `UNDO_WINDOW_SECONDS`. HIGH risk not in MVP. | Minimal questions. |
+| Schema freshness | Workspace snapshot fetched per incoming message, cached `SCHEMA_CACHE_TTL` (60 s) so clarification round trips reuse it. | Always fresh, cheap at personal usage. |
+| Descriptions | `data/targets.yaml` keyed by Notion id, edited through a local admin page on `127.0.0.1:ADMIN_UI_PORT`. Notion data source `description` used as default. | Minimal host UI, human-editable file. |
+| Reply language | Russian. All user-facing strings live in one module. | MVP. |
+| Admin UI stack | Stdlib `http.server` in a thread, one embedded HTML page, two JSON endpoints. | No extra dependencies for a rarely used page. |
+| Remote AI later | Ollama and speech behind protocols; `OLLAMA_BASE_URL`, optional `WHISPER_SERVER_URL`. | User may add a dedicated AI machine. |
+| Package/tooling | `uv`, Python 3.12 (uv-managed), `ruff`, `pytest`, `pydantic-settings`. | 3.13 wheel coverage for ctranslate2 is uneven. |
+| Notion API | Direct REST via `httpx`, `Notion-Version: 2025-09-03` (data sources). | Spec; official SDK adds little. |
+| Unresolvable messages | Appended to a user-flagged inbox target (`targets.yaml` `inbox: true`, or the `INBOX_TARGET_ID` override, which wins), never dropped. | Nothing the pipeline gives up on should vanish. The target stays ordinary for the LLM — not hidden, not mentioned in the prompt — so the model can't learn to use it as an escape hatch instead of classifying. |
+
+## 2. Runtime topology
+
+Single `asyncio` process on the host machine, one event loop for the whole run
+(python-telegram-bot's own — `Application.run_polling()`; see `app/main.py`'s module docstring for
+why nothing here is ever given a second, throwaway loop of its own):
+
+```text
+python-telegram-bot (long polling), one asyncio event loop for the whole process
+   │
+   ├─ app.main.post_init_checks (runs once, inside this same loop, before polling starts):
+   │     Ollama /api/tags, Notion /v1/users/me, initial discovery, admin server start
+   ├─ telegram/handlers.py: text, voice, callback, command handlers → Orchestrator
+   ├─ speech: faster-whisper, loaded lazily on the first voice message, run via
+   │     asyncio.to_thread (GPU if available, else CPU — see §10)
+   ├─ llm: httpx → Ollama /api/chat  (OLLAMA_BASE_URL)
+   ├─ notion: httpx → api.notion.com (NOTION_TOKEN never leaves this layer)
+   ├─ sqlite: data/bot.sqlite  (audit, pending sessions, undo records)
+   ├─ Sweeper: one background asyncio task, started after a clean post_init, that calls
+   │     Orchestrator.flush_expired_sessions every SESSION_TTL_S / 3 seconds — the net that
+   │     rescues a question nobody answered even if the chat never sends a follow-up message
+   │     (FLOWS.md F18 step 4)
+   └─ admin: stdlib http.server on a daemon thread, bound to 127.0.0.1:ADMIN_UI_PORT (§12)
+```
+
+No webhooks, no Docker, no public port. `app.main.build()` constructs every collaborator above
+exactly once and wires the two Telegram lifecycle hooks: `post_init` (the async startup checks,
+then start the Sweeper) and `post_shutdown` (stop the Sweeper, stop the admin server, close the
+sqlite connection) — see §15 and `documentation/ERRORS.md`'s "Startup checks" for the exact,
+ordered list and exit codes.
+
+## 3. Module layout
+
+```text
+ai_assistant/
+├── app/
+│   ├── config.py               Settings (pydantic-settings, .env)
+│   ├── main.py                 wiring, startup checks, Sweeper, process entry point
+│   ├── logging_setup.py        event_id-tagged structured logging; httpx/httpcore/ExtBot floor
+│   ├── version.py              reads the running version (pyproject.toml, or a shipped VERSION)
+│   ├── texts.py                all Russian user-facing strings
+│   ├── telegram/
+│   │   ├── handlers.py         message/voice/callback/command handlers → Orchestrator
+│   │   ├── keyboards.py        Reply → telegram.InlineKeyboardMarkup
+│   │   └── auth.py             allowlist filter (declarative gate + the one manual callback check)
+│   ├── speech/
+│   │   ├── base.py             SpeechToText protocol, SpeechEmpty/SpeechError
+│   │   └── whisper_local.py    faster-whisper implementation (lazy load, CUDA→CPU fallback, §10)
+│   ├── llm/
+│   │   ├── base.py             LLMClient protocol, LLMTrace, error types
+│   │   ├── ollama.py           httpx client, structured output
+│   │   ├── context.py          ContextBuilder: snapshot → keyed compact context
+│   │   ├── prompts.py          system prompt (ru), few-shot examples
+│   │   └── output_schema.py    dynamic JSON schema + Pydantic models per request
+│   ├── interpretation/
+│   │   └── models.py           Interpretation, Candidate, FieldValue (discriminated union)
+│   ├── notion/
+│   │   ├── provider.py         NotionProvider protocol
+│   │   ├── direct.py           DirectNotionProvider (REST)
+│   │   ├── discovery.py        search + data source + items → WorkspaceSnapshot
+│   │   ├── snapshot.py         WorkspaceSnapshot, Target, Field, Item dataclasses
+│   │   ├── descriptions.py     targets.yaml read/write
+│   │   ├── mapper.py           Command → Notion payload
+│   │   ├── props.py            Notion property JSON → plain text (titles, rich text)
+│   │   └── errors.py           NotionError/NotionUnavailable
+│   ├── validation/
+│   │   ├── semantic.py         checks against snapshot
+│   │   └── policy.py           thresholds → EXECUTE / CLARIFY / REJECT
+│   ├── commands/
+│   │   ├── models.py           CreateItem, UpdateItem, CreatePage, AppendBlocks, Search, …
+│   │   ├── builder.py          VCandidate + snapshot → Command (build_command)
+│   │   ├── jsonvalue.py        JSON-safe typed-field-value conversion (shared with policy.py)
+│   │   └── executor.py         runs commands via provider, records undo info
+│   ├── conversation/
+│   │   ├── reply.py            Button/Reply model; formats questions, execution + search text
+│   │   ├── session.py          PendingSession/SessionStore: persisted clarification state
+│   │   ├── resolver.py         apply_answer/result_from_session: button answers, no LLM call
+│   │   ├── inbox.py            builds the Command that saves unresolved text to the flagged target
+│   │   └── orchestrator.py     one entry point: handle_text/handle_callback/undo/cancel
+│   ├── audit/
+│   │   ├── store.py            SQLite schema + repository (events, sessions, executions)
+│   │   └── migrate.py          migration runner: discover/pending/apply, checksum guard
+│   └── admin/
+│       ├── server.py           stdlib HTTP server thread (§12)
+│       └── page.html           editor page (targets, required flags, inbox picker)
+├── tools/
+│   ├── benchmark_llm.py        run fixtures against N models, report accuracy/latency
+│   ├── discover.py             dump workspace snapshot to stdout
+│   ├── migrate.py              apply/inspect migrations from the command line
+│   └── sample_workspace.py     fixed workspace used by tests and the benchmark
+├── migrations/                 NNNN_name.sql, applied only by tools/migrate.py or the installer
+├── deploy/                     install.ps1, run.ps1, start.ps1, update.ps1, *_wizard.ps1 (RELEASE.md)
+├── release.py, apply_update.py, release.cmd, update.cmd, start.cmd
+├── tests/
+├── data/                        runtime files (gitignored): bot.sqlite, targets.yaml
+├── documentation/
+├── pyproject.toml
+└── .env.example
+```
+
+`app/speech/whisper_remote.py` (a remote-Whisper HTTP client) does not exist yet — remote speech
+recognition is not built; today
+`WHISPER_DEVICE=cpu` is the only way to run transcription without a GPU, not a way to move it to
+another machine. `OLLAMA_BASE_URL` has no such limitation — it already works against Ollama
+running on a different host (README.md).
+
+## 4. Request pipeline
+
+```text
+Telegram update
+  → auth (allowlist) → reject silently if not allowed
+  → voice? download → SpeechToText → text (audited, not echoed)
+  → Orchestrator.handle_text(chat_id, user_id, text)         (or handle_callback/undo/cancel)
+      → session = pending for chat? (then this is a clarification answer, see §7)
+      → snapshot = Discovery.get(ttl)                      (Notion)
+      → ctx = ContextBuilder.build(snapshot, now, pending)  (pending = §7's `pending` block, from session)
+      → schema = OutputSchema.for_context(ctx)             (dynamic JSON schema)
+      → raw = LLMClient.interpret(text, ctx, schema)        (Ollama, temp 0)
+      → interp = Interpretation.model_validate(raw)        (Pydantic)
+      → sem = SemanticValidator.check(interp, snapshot)
+      → decision = Policy.evaluate(interp, sem)
+      → EXECUTE: cmd = CommandBuilder.build(best, snapshot)
+                 result = Executor.run(cmd)                 (Notion)
+                 reply + Undo button; audit
+                 Notion error on execute → inbox fallback instead of a bare error (text not lost)
+        CLARIFY: session.save(question); ask with buttons; audit
+                 MAX_QUESTIONS (3) reached without a resolution → inbox fallback
+        REJECT:  no candidate, or invalid/unavailable LLM output → inbox fallback; audit
+```
+
+Callback payloads: `a:<token>:<option_id>` (`apply_answer` → `result_from_session`, no LLM call),
+`u:<execution_id>` (undo), `i:<event_id>` (save that event's own text to the inbox — the button
+offered on a reply that saved nothing). A token that doesn't match the chat's live session, or an
+unknown prefix, replies `SESSION_EXPIRED`.
+
+`Orchestrator._text` runs discovery **before** it looks the session up, and that order is
+deliberate: looking first would pop an expired session (the lookup is destructive — it is what
+rescues the text into the inbox) and only then discover that Notion is unreachable, with nowhere
+to write it. Since the session row is the only copy of that text, the message would be gone. Do
+not reorder these two for the sake of skipping a snapshot fetch on the error path.
+
+Free text while a session is pending → the LLM is re-run once, with a `pending` block (question
+text, target name, original text — never a Notion id or context key) added to the context and
+`session.original_text + "\n" + new_text` as the prompt; the fresh interpretation replaces the
+session outright, whether it answers the question or turns out to be a new request (F4, F5).
+`MAX_QUESTIONS = 3` bounds button round-trips only — a free-text answer is indistinguishable from
+a fresh request and is never refused for exceeding it. It is what bounds the *number* of answers;
+what bounds their *size* is `orchestrator.MAX_PROMPT` (4000 chars, the same ceiling the validator
+and the inbox put on one piece of text), which caps the concatenation each answer grows — without
+it a user who keeps answering in free text eventually ends the conversation in
+`LLMContextOverflow`. The capped text is what the session stores and what a fallback page title or
+search query is built from (`commands/builder.py:_one_line` folds it back onto one line).
+
+**Inbox fallback**: a message the pipeline could not otherwise resolve — an invalid/unavailable
+LLM response, a REJECT, a Notion error during execute, an expired unanswered session, the
+«В разное» button, or a clarification budget (`MAX_QUESTIONS`) that ran out — is appended to the
+one Notion target the user flagged as the inbox (`targets.yaml` `inbox: true`, or the
+`INBOX_TARGET_ID` override, which wins and logs a WARNING when it matches no target) instead of
+being dropped. Never triggered by a bare discovery failure (nothing to write to) or after a
+successful write. `INBOX_MODE` controls when: `auto` (default) saves immediately and still offers
+the button; `button` saves only on a press; `off` disables it entirely.
+
+## 5. Workspace snapshot and discovery
+
+`Discovery.refresh()`:
+
+1. `POST /v1/search` paginated, no filter → all pages and data sources visible to the integration.
+2. For each data source: `GET /v1/data_sources/{id}` → properties, title, description, parent database id.
+3. For each data source: `POST /v1/data_sources/{id}/query` with `sorts=[last_edited_time desc]`, `page_size=ITEMS_PER_TARGET` (default 15) → items (id, title, status/checkbox if present).
+4. Relation properties: options = items of the related data source (already fetched in step 3 if visible; otherwise one extra query, capped).
+5. Pages (not inside a data source): included as page targets with title, id, parent chain. Children come from search results (`parent.page_id`).
+6. Merge `targets.yaml` descriptions (override) and Notion descriptions (default).
+
+Output: `WorkspaceSnapshot` (see [DATA_MODEL.md](DATA_MODEL.md)). Cached in memory with `fetched_at`; `Discovery.get(ttl)` returns cached if younger than `SCHEMA_CACHE_TTL`.
+
+Rate limit: Notion allows ~3 req/s. Discovery of N data sources costs `1 + 2N` requests, run with a semaphore of 3. For 5–10 targets, 1–3 s.
+
+Supported property types for write: `title, rich_text, select, multi_select, status, date, checkbox, number, url, relation`. Others are shown to the LLM as read-only context and are never written.
+
+## 6. LLM context and output schema
+
+### Context (sent as user message, compact JSON)
+
+```json
+{
+  "now": "2026-09-09T17:40:00+02:00", "tz": "Europe/Paris", "weekday": "среда",
+  "targets": [
+    {"key": "t1", "kind": "database", "name": "Покупки", "path": "Дом / Покупки",
+     "description": "Список покупок…", "ops": ["create", "search", "update"],
+     "fields": [
+       {"key": "t1.f1", "name": "Название", "type": "title", "required": true},
+       {"key": "t1.f2", "name": "Магазин", "type": "select", "options": {"t1.f2.o1": "Lidl", "t1.f2.o2": "Aldi"}},
+       {"key": "t1.f3", "name": "Куплено", "type": "checkbox"}
+     ],
+     "items": {"t1.i1": "Хлеб", "t1.i2": "Молоко (куплено)"}},
+    {"key": "t2", "kind": "page", "name": "Идеи", "path": "Идеи", "description": "…",
+     "ops": ["append", "create", "search"],
+     "children": {"t2.i1": "Отпуск 2027"}}
+  ]
+}
+```
+
+Extraction covers every writable field of the chosen target, always. `required` only controls whether the bot must ask when the message did not mention the field. Notion exposes no mandatory-property flag except the title, so `required` defaults to the title and other fields are marked in `targets.yaml` (admin page). Keys are regenerated per request; the mapping key → Notion id is held by the app.
+
+### Output (grammar-enforced by Ollama `format`)
+
+Per request the app builds a JSON schema where `target`, `item`, field keys and select/relation option keys are `enum`s from the context. Structure:
+
+```text
+Interpretation
+  intent: {value: create|update|append|search|unknown, confidence: 0..1}
+  candidates: 1..3 × Candidate           ordered best first
+  notes: string                          free text for the audit log only
+Candidate
+  target: enum(target keys)
+  confidence: 0..1
+  item: enum(item keys of that target) | null     update/append target item
+  item_candidates: [enum]                         when several items plausible (max 8, else [])
+  fields: {field_key: FieldValue}                 all writable fields of the target, always present
+  content: string | null                          append / page body text
+  search_query: string | null
+FieldValue (discriminated by status)
+  not_mentioned
+  explicit_null
+  value      {value, confidence, source_text}     value typed per field type
+  ambiguous  {candidates: [..], source_text}
+```
+
+Field `value` typing: `title/rich_text/url` string; `number` number; `checkbox` bool; `date` `{start: ISO date or datetime, end: ISO | null}`; `select/status` enum(option keys); `multi_select/relation` list of enum(option keys).
+
+If grammar-enforced `oneOf` proves slow on the chosen model, fallback is a looser schema (strings instead of enums) with the same Pydantic validation in the app; the app behaviour is identical because semantic validation rejects unknown keys anyway.
+
+The semantic validator (`validation/semantic.py`) re-checks every key against the context, dedupes candidates by target, types values per field, and caps lengths — the grammar is a first line, not the only line.
+
+### Prompt
+
+System prompt (Russian): role = classifier and extractor, not an agent. Rules: pick only from provided keys; return every writable field with a status; never guess a select option; dates resolved from `now`; return alternatives only when plausible; for `update`/`append`, `item` must come from `items`; thinking disabled (`think: false` for qwen3).
+
+## 7. Conversation state
+
+```text
+IDLE ──text──▶ INTERPRETING ──EXECUTE──▶ IDLE (+undo record)
+                    │
+                    ├──REJECT──▶ IDLE (+ inbox fallback: saved if a target is flagged, else [В разное] offered)
+                    │
+                    └──CLARIFY──▶ WAITING (session saved, its `token` embedded in every button payload)
+                                    │
+                        button ─────┤─▶ apply_answer → result_from_session → EXECUTE|CLARIFY|REJECT (no LLM call)
+                        free text ──┤─▶ LLM with the `pending` block in context → validate → …
+                        [В разное] ─┤─▶ inbox fallback, session dropped
+                        MAX_QUESTIONS (3) reached ─┤─▶ inbox fallback (budget exhausted)
+                        timeout ────┘─▶ IDLE (+ inbox fallback on the next message, or the sweeper)
+```
+
+**One chat's turns are serialised.** Every entry point (`handle_text`, `handle_callback`,
+`undo`, `cancel`, and each chat's own rescue inside `flush_expired_sessions`) takes that chat's
+`asyncio.Lock` for the whole turn, so no two turns of one chat overlap; different chats stay fully
+concurrent, and the lock is dropped again once no turn holds it. It is not a nicety: every guard
+in the orchestrator is a read, an `await`, then a write — `events.executed` before an inbox save,
+`executions.undone` before an undo, the session row across a save — and a double-tapped Telegram
+button arrives as two callbacks ~100 ms apart in two concurrent handlers, where both reads would
+see the state from before either write and the message would be saved (or reverted) twice. The
+sweeper takes each chat's lock around that chat's own pop and rescue, never one lock for the whole
+sweep.
+
+One pending session per chat, keyed by `chat_id`. `MAX_QUESTIONS = 3` bounds *button* round-trips
+only: once three questions have been asked and answered by button, a fourth CLARIFY falls back to
+the inbox instead of asking again. A free-text answer is exempt — it re-runs the LLM and is
+indistinguishable from a fresh request, so it is never refused for exceeding the budget. A new
+unrelated message while WAITING is handled exactly like a free-text answer to the pending
+question: the LLM sees both in one call and its fresh interpretation replaces the session outright
+— continuing the same request, or starting an unrelated one, depending only on what it returns.
+
+Clarification question types (each rendered by `conversation/reply.py:format_question`):
+
+| Type | Trigger | Buttons |
+|---|---|---|
+| `target` | target confidence or margin below threshold | one per candidate target + Другое + Отмена (+ В разное). The text names the intent it read ("понял как «найти»") — a misread intent is otherwise invisible. `Другое` asks for a correction, which the next message supplies and the LLM re-reads together with the original text, so a single-candidate question is never "the one wrong option or throw it away". |
+| `intent_confirm` | only trigger is `intent.confidence < POLICY_INTENT_MIN`, exactly one candidate | Да + Другое + Отмена (+ В разное) |
+| `item` | update: item missing or several candidates; append: several candidates (no item means append to the page itself) | one per candidate item (max 8) + Отмена (+ В разное) |
+| `field_required` | required field `not_mentioned` | options for select/status/relation; free-text prompt for others |
+| `field_ambiguous` | field status `ambiguous` | one per candidate value |
+| `date` | date confidence < `POLICY_DATE_MIN` | Да / Другое (free text) + Отмена (+ В разное) |
+| `item_not_found` | update: item not in target's items and no `item_candidates` | Добавить как новое + Отмена (+ В разное) — REJECT, not a full CLARIFY round-trip, but answerable: the button flips the intent to `create` and re-validates (F8) |
+| `nothing_to_write` | update: item resolved but no field `value`/`explicit_null`/`ambiguous` | Отмена (+ В разное); answer is free text only — REJECT, not a clarification round-trip |
+
+Every question type's trailing row also carries [В разное] whenever an inbox target is flagged
+(mode `auto` or `button`) — pressing it saves the session's `original_text` and drops the session.
+
+One question per message. Several open issues are asked in the `_ORDER` from `policy.py`: `target → intent_confirm → item → item_not_found → field_required → field_ambiguous → date → field_confirm → content_required → nothing_to_write` (the last two of these — `item_not_found`, `nothing_to_write` — are REJECT-only single questions, never part of a multi-question CLARIFY).
+
+## 8. Policy engine
+
+Deterministic (`validation/policy.py`). `Thresholds.from_settings` reads `POLICY_INTENT_MIN`, `POLICY_TARGET_MIN`, `POLICY_TARGET_MARGIN`, `POLICY_FIELD_MIN`, `POLICY_DATE_MIN` from `Settings` (§7 of DATA_MODEL.md); no threshold is hardcoded in the policy itself.
+
+```text
+REJECT if intent = unknown, or no candidate survived semantic validation (SemanticValidator issues)
+      or (update) and item not in target's items and no item_candidates      # carries the candidate + an item_not_found Question, see below
+      or (update) and item resolved but no field status = value/explicit_null/ambiguous # carries the candidate + a nothing_to_write Question
+CLARIFY if intent.confidence < POLICY_INTENT_MIN      # intent_confirm instead of target when this is the only trigger and there is exactly one candidate
+      or best.confidence < POLICY_TARGET_MIN
+      or (best.confidence - second.confidence) < POLICY_TARGET_MARGIN   (only when second exists)
+      or (update|append) with item null and item_candidates non-empty
+      or (create) with a required field not_mentioned / explicit_null
+      or any field status = ambiguous
+      or a date-typed field value with confidence < POLICY_DATE_MIN
+      or any other field value with confidence < POLICY_FIELD_MIN
+      or (append) with no content
+EXECUTE otherwise
+```
+
+Question order when several apply (one asked per message, `_ORDER` in `policy.py`): `target → intent_confirm → item → item_not_found → field_required → field_ambiguous → date → field_confirm → content_required → nothing_to_write`.
+
+`update` with no resolvable item is a REJECT, not a CLARIFY, when there are no `item_candidates` to pick from — but unlike other REJECTs it still carries `Decision.candidate` (the resolved target/fields) and one `Question("item_not_found", ...)`, purely so the conversation layer can offer "add as new item" without re-running the LLM. It is handled: `resolver.options_for`/`apply_answer` attach one **Добавить как новое** button; pressing it flips the intent to `create`, seeds the title field from the unmatched text, drops the stale item id, and re-validates — turning the failed update into a create without a second LLM call (FLOWS.md F8).
+
+An `explicit_null` on a `status`-type field is dropped before it reaches the policy: `SemanticValidator` turns it back into `not_mentioned` and appends a `SEM_STATUS_CLEAR` issue (warning-level, not user-visible — the Notion API has no way to clear a status property), so the field is simply left unwritten rather than blocking or clarifying.
+
+Risk classes: `RISK_BY_INTENT` = `create`, `append`, `search` → LOW; `update` → MEDIUM. `Decision.risk` records this on every EXECUTE/CLARIFY (and on the `item_not_found` REJECT) for the audit log; both LOW and MEDIUM auto-execute in MVP with no extra confirmation step. Undo available for `create` (archive page), `update` (restore previous property values), `append` (delete appended blocks). Undo button expires after `UNDO_WINDOW_SECONDS`.
+
+## 9. Commands and Notion mapping
+
+| Command | Fields | Notion call |
+|---|---|---|
+| `CreateItem` | data_source_id, target_name, properties | `POST /v1/pages` parent `data_source_id` |
+| `UpdateItem` | page_id, target_name, item_title, properties | `PATCH /v1/pages/{id}` |
+| `CreatePage` | parent_page_id, target_name, title, body | `POST /v1/pages` parent `page_id` + paragraph blocks |
+| `AppendBlocks` | page_id, target_name, page_title, paragraphs | `PATCH /v1/blocks/{id}/children` |
+| `Search` | data_source_id or None, target_name, title_property or None, query, filters | `POST /v1/data_sources/{id}/query` compound filter, or `POST /v1/search` |
+| `ArchivePage` (undo) | page_id | `PATCH /v1/pages/{id}` `archived: true` |
+| `DeleteBlocks` (undo) | block_ids | `DELETE /v1/blocks/{id}` |
+
+`Search.filters` is built from the validated fields with status `value` (select/status/multi_select/relation/checkbox — see DATA_MODEL.md §5); `mapper.py:search_filter` composes them into one Notion filter object: `select`/`status` → `equals`, `multi_select`/`relation` → one `contains` per value, `checkbox` → `equals`, plus an optional title `contains` from `query`. Zero conditions → unfiltered; more than one → `{"and": [...]}`.
+
+Commands hold Notion ids resolved by the app from keys. `mapper.py` is the only place that builds Notion JSON. LLM output never reaches it.
+
+`Target.operations` vocabulary: databases `{create, update, search}`, pages `{create_page, append, search}`; the command classes above are the executable form of those operations.
+
+## 10. Speech
+
+`app/speech/whisper_local.py:WhisperLocal`, faster-whisper, model `WHISPER_MODEL` (default
+`large-v3-turbo`), `compute_type=int8`, `device=auto` (CUDA if available, else CPU), `language=ru`
+hint (configurable), `vad_filter=True`. Transcript is stored in audit only; the reply describes
+the actual Notion change, never the transcript (FLOWS.md F13, ERRORS.md `STT_EMPTY`/`STT_FAILED`).
+
+* **Lazy load.** The model is *not* loaded at startup (`app.main.post_init_checks` deliberately
+  never touches `app.speech`) — only on the first voice message, inside the worker thread
+  described below, and then kept for the life of the process. A user who never sends a voice
+  message never pays the load cost at all.
+* **One `threading.Lock` serialises every call**, not just the load. `transcribe()` runs the
+  whole thing (`_transcribe_sync`) via `asyncio.to_thread`, so it executes on a worker thread, not
+  the event loop — a plain `asyncio.Lock` would not help there. The lock covers the load *and*
+  the decode because one GPU cannot decode two clips at once anyway, and narrowing it to just the
+  load would reopen two races: two concurrent calls disagreeing about which device is current
+  mid-fallback, and a fallback on one call racing an in-flight transcription on another.
+* **CUDA → CPU fallback, remembered for the process.** A failure — whether raised while loading
+  the model or only while decoding the first segments — logs one WARNING naming the original
+  error, flips the instance to CPU, and retries once; a second failure raises `SpeechError`
+  (`STT_FAILED`). Once CPU has been taken, it is permanent for that `WhisperLocal` instance: every
+  later call goes straight to CPU and never touches CUDA again, even if the earlier failure was a
+  fluke. There is no way to force a retry on CUDA short of restarting the process.
+
+GPU on Windows needs cuBLAS + cuDNN 9 for CUDA 12 (install via `nvidia-cublas-cu12`,
+`nvidia-cudnn-cu12` wheels, add their `bin` to PATH); CPU fallback is automatic if CUDA libs are
+missing, per the paragraph above.
+
+## 11. Audit and storage (SQLite)
+
+Tables: `events` (one row per handled message, per spec §27), `sessions` (pending clarification, one per chat), `executions` (undo data, expires). See [DATA_MODEL.md](DATA_MODEL.md). Tokens never stored; LLM request context and raw response stored as JSON text.
+
+Exactly one `events` row per handled message: opened at entry and closed once on every path, error
+exits included. `events.executed = 1` means *the command ran*, not that something was written — a
+`search` sets it and writes nothing (and records no `executions` row, since there is nothing to
+undo). `events.error` normally holds the code the turn earned for itself; the one code that is
+recorded as a fallback is `INBOX_FAILED` from `_expired_prefix`, because that rescue belongs to a
+*previous* message and the row would otherwise close as a clean `EXECUTE` with no trace that the
+rescued text was lost. A code the turn records for itself always wins over it.
+
+`executions.reply_message_id` starts null — the row is written while the command runs, before its
+reply exists — and the transport fills it in afterwards with `AuditStore.set_reply_message_id`, so
+it can edit the Undo button away when the window closes.
+
+## 12. Admin page
+
+`app/admin/server.py`: a stdlib `http.server.ThreadingHTTPServer` on a daemon thread, exactly
+three routes, no framework, no auth beyond the loopback guard below:
+
+| Route | Does |
+|---|---|
+| `GET /` | Serves `page.html` (read once at import, from disk) — the tree of targets from the last snapshot, a description textarea and a required checkbox per field, and the inbox picker below. |
+| `GET /api/targets` | JSON snapshot summary (`Discovery.last`) plus `inbox_locked` (`bool(settings.inbox_target_id)`) so the page knows whether to grey out its own inbox picker. |
+| `POST /api/descriptions` | Validates the whole posted document against the last snapshot (unknown target/field id → 400, nothing written), merges it into `data/targets.yaml` (load → merge → save), invalidates the discovery cache, and returns how many targets actually changed. |
+
+**Host loopback guard.** Every request — `GET` and `POST` alike — is rejected with `403
+forbidden_host` before anything else runs unless its `Host` header names `127.0.0.1`, `localhost`
+or `::1` (`_loopback_host`). This is a DNS-rebinding guard, not redundant with binding the socket
+to `127.0.0.1`: binding keeps other *machines* out, but a page open in the user's own browser,
+navigated to a hostile domain that resolves to `127.0.0.1` via DNS rebinding, would otherwise
+still reach a server merely bound to loopback — the `Host` header is what a same-origin browser
+request cannot forge to say anything else. `MAX_BODY_BYTES` (512 KiB) similarly bounds
+`POST`'s `Content-Length` before `rfile.read()` ever runs, so a hostile/huge header cannot force
+an unbounded blocking read.
+
+**Own-page guard on `POST`.** The `Host` header stops rebinding; it does not stop a page on
+another site, open in the user's browser, from making that browser POST here — the socket is
+loopback either way. So `POST /api/descriptions` also requires `Content-Type: application/json`
+(a foreign origin can only send that after a CORS preflight this server never answers) and
+refuses an `Origin` header that is not loopback (`403 forbidden_origin`, `_own_page`).
+
+**The inbox picker** is one radio button per target plus "инбокс не выбран", rendered from
+`is_inbox` on each target in the `GET /api/targets` payload and saved as the `inbox` flag on
+`POST /api/descriptions` (`notion/descriptions.py:TargetMeta.inbox`; at most one target may carry
+it — a second `inbox: true` in one POST is rejected with 400). **It is disabled in the page itself
+whenever `INBOX_TARGET_ID` is set** (`inbox_locked: true`, every radio's `disabled` attribute, and
+a visible notice naming the env var): the `.env` override always wins over the yaml flag outright
+(`notion/discovery.py`), so a click here would silently do nothing useful, and the page disables
+the control rather than let the user believe it took effect. Unset `INBOX_TARGET_ID` to manage the
+inbox target from this page instead (see `documentation/NOTION_SETUP.md`, "Inbox target").
+
+Telegram `/refresh` forces re-discovery (invalidating the same cache this page invalidates on
+save); `/targets` prints the tree as text, with the inbox target marked.
+
+## 13. Model selection
+
+`mistral-nemo:12b` is the default: it wins the benchmark outright on the metric that matters (`safe` 91%, only 2 confidently-wrong values in 44 cases, vs 75%/6 for `qwen3:8b`), at roughly twice the latency (p50 15.9 s vs 7.5 s), measured with `tools/benchmark_llm.py` (below).
+
+Nothing in the 12B class fits an 8 GB card: measured on an RTX 4070 Laptop at `LLM_NUM_CTX=8192`, `mistral-nemo:12b` occupies 8.6 GB and Ollama offloads 27% to CPU — that offload *is* the latency cost. A q3 quantisation (7.6 GB, 17% offloaded) was tested and rejected: it gave back half the accuracy gain to save 3 s. `qwen3:8b` at 8k is the only candidate that runs entirely on the GPU (6.2 GB) and stays the documented fast alternative, with `gemma3:4b` below it.
+
+`LLM_NUM_CTX=8192` is the default because 16384 costs ~1.6 GB more KV cache; on this card that pushed even `qwen3:8b` into a 20% CPU offload and ~35% more latency for no measurable accuracy gain. Prompts run 2-4k tokens, so 8k leaves ample headroom — `LLMContextOverflow` guards the rest. Because the 12B leaves no VRAM spare, `.env.example` ships `WHISPER_DEVICE=cpu`.
+
+**Escalation** (`Orchestrator._escalate`, `ESCALATE_MODEL`). The cloud interpreter is Haiku.
+The model is not chosen by a difficulty estimate up front: that would put a judgement on
+every message to help a few. The interpreter's own verdict decides instead. An `unknown` intent,
+or a `clarify` question of its own, sends the same prompt and context once to the strong model
+(Sonnet) before the user is asked. Its reading replaces the first, question included. There are
+three exceptions:
+- a prompt under `ESCALATE_MIN_WORDS` (3) is noise, so it is never escalated;
+- when the local model gave the first reading, Claude is down, so there is no retry;
+- a Sonnet answer that names a local-only target is set aside, because the cloud never saw that
+  target's contents.
+
+A failed retry leaves the first reading standing. Measured on the 20 prod messages Haiku did
+not understand (2026-09-18 to 10-01): today's prompts already settle 13 of them. Of the other 7,
+Sonnet settles one, three are noise and two are answers that need their conversation. The
+seventh failed on Sonnet's over-long reasoning notes, which are now cut instead
+(`claude.to_interpretation`). Sonnet takes 5 to 30 s. Both readings are in the event's `llm_response`.
+
+`tools/benchmark_llm.py` runs `tests/fixtures/ru_cases.yaml` against each model and reports schema-validity rate, target/field accuracy, the safety-weighted `safe`/`wrong` split, and p50/p95 latency; `think: false` is sent only to models that support it.
+
+## 14. Security boundaries
+
+- LLM receives: context JSON, user text, time. Never tokens, ids (only keys), URLs, tool lists.
+- LLM output is data, never trusted as an address: `Candidate.target`/`.item`/`.fields` keys are
+  plain strings at the Pydantic layer (the grammar Ollama is given constrains them, but nothing
+  enforces that at the Python level), so `SemanticValidator` re-checks every one against the live
+  context before anything is built into a `Command` — a foreign Notion id, a URL, or an
+  unadvertised field key in the LLM's output is rejected there (`SEM_UNKNOWN_KEY`), never reaches
+  `Executor`/`NotionProvider` (`tests/test_security.py` exercises this against the real
+  orchestrator with fakes, not a mock that only proves "was called").
+- Notion calls originate only from `direct.py`, invoked only by `executor.py` and `discovery.py`.
+- Telegram allowlist enforced before any processing; unknown users get no reply, no audit row, and
+  trigger no provider call at all (`app/telegram/auth.py`).
+- Admin page bound to loopback, no auth beyond the `Host`-header guard (§12) — host-local by
+  design.
+- Logging never carries a token, at any level: besides `httpx`/`httpcore` (which log Telegram's
+  token-bearing request URL at INFO), `telegram.ext.ExtBot` logs the same URL once at DEBUG from
+  its own constructor — a leak the httpx floor alone does not cover, since it isn't an httpx
+  request. `app/logging_setup.py` floors both to WARNING unconditionally. A third leak needs more
+  than a floor: `telegram.ext`'s polling retry loop logs a token-bearing `InvalidToken` at ERROR
+  *with* its traceback when Telegram rejects the token, so `configure()` also wraps the handler in
+  a redacting formatter that rewrites every occurrence of the secret values `main()` explicitly
+  hands it (the two tokens, never a `Settings`) to `***` — message, args and traceback alike. The
+  same `InvalidToken` escaping `run_polling()` is caught in `main()` and reported as a config exit
+  that names `TELEGRAM_BOT_TOKEN` and prints nothing of the exception. See its module docstring
+  and `documentation/ERRORS.md`'s "Logging" section.
+
+## 14a. The Obsidian side
+
+A second store, written next to Notion and independent of it. `OBSIDIAN_VAULT` points at a
+folder of markdown files; `app/vault/` holds the whole pipeline, and nothing in it knows about Notion:
+
+```text
+message ─┬─ Notion pipeline (§4, unchanged)
+         └─ app.vault.pipeline.VaultPipeline
+               index.VaultIndex     what is in the vault (names, aliases, tags, headings),
+                                    refreshed by mtime
+               filer.Filer          one Haiku call: message -> actions, on the user's own
+                                    guide note (_bot.md), the folders and the tags
+               filer.check          the deterministic gate: an unknown note or folder, a made-up
+                                    date or repeat rule never reaches the writer
+               rewrite.Rewriter     one Sonnet call for a note the user asked to be
+                                    rewritten: the pipeline reads the note (or one
+                                    section), the model returns markdown, the writer
+                                    writes it
+               writer.VaultWriter   task / note / append / update / rewrite / log /
+                                    inbox, atomic, with the text before and after kept
+                                    for Undo
+               linker.Linker        after the reply: names and aliases, then a Haiku pass for
+                                    the links matching cannot see
+               search.search        a question ("что у меня по дому?") answered from the index
+                                    and the notes, with no model call of its own
+               agenda               dates: the morning digest, "what is planned on X", and
+                                    "what should I do now" — read from the files, never invented
+```
+
+Rules that hold here:
+
+* **It never asks a question.** Anything unclear becomes a line in the inbox note — and so does
+  the whole message when the model cannot be asked at all (Claude down, out of credit, an
+  answer that is not JSON): written as it is, kind `kept`, no model needed, with the reply
+  saying why it was not filed.
+* **Only a fresh message** goes to the vault. A button press or an answer to a Notion question
+  does not (`Orchestrator._text`).
+* **One Undo for both stores.** `UndoRecord.vault` carries the writes to take back; when Notion
+  wrote nothing, the vault's undo gets its own `executions` row with `kind: "vault"`, and the
+  reply carries the same Undo button a Notion write has. `Orchestrator._finish_vault` is the
+  one place the two sides meet.
+* **Undo takes back the write, not the file.** `VaultUndo` keeps the text before and after the
+  write, and `app/vault/revert.py` removes exactly that change from whatever the file holds by
+  then — a task added by the next message, or the links the linker put in, stay. A file whose
+  lines the write touched were changed since is left alone and the reply names it
+  (`texts.VAULT_UNDO_LEFT`). A note the write created goes to `.trash` only when nothing else
+  was written into it meanwhile. Nothing is ever deleted outright.
+* **One lock, one text.** Every write and undo takes `VaultWriter._lock`; the linker, which
+  runs behind the reply, amends a note from the text it holds *now* (`VaultWriter.amend`),
+  never from the text it read before its model call. A multi-action message whose third write
+  fails keeps the first two and their undo; the reply counts what failed.
+* **A write can be fixed in part** (`app/vault/fix.py`). Each `VaultUndo` keeps the action
+  it carried out. The **Поправить** button, or a Telegram reply to the write's message, makes
+  the next message a correction; a reply to the write's message is itself the correction and
+  outranks a pending press. Only vault-only writes are fixable: a turn Notion also wrote to
+  shows Undo only, and a reply to it is an ordinary message. Usually one call to the filer
+  model (a move into a folder asks that folder's question too; a turn that rewrote a note goes
+  to the change-a-note stage) sees the written actions as keyed lines, the place list and the
+  correction, and answers drop / set / move / add. Values pass the staged gate over the
+  original message, the correction and the written words; a drop needs a word of the user's
+  that asks for it (`texts.FIX_DROP_WORDS` as whole words, `texts.FIX_DROP_STEMS` as word
+  starts, and «не» only as «не надо / не нужно»). Code takes back the changed writes and
+  writes the new ones as one step (`VaultWriter.replace_writes`); the take-back is
+  all-or-nothing — nothing is touched if a line was edited by hand — but not the whole fix: a
+  new write that fails is named in the reply. The new row's Undo removes everything back to
+  before the first message. Fix and Undo share one window and one expiry.
+* **Stays inside the vault**, and never touches `.obsidian/`.
+* A failure on either side is one line in the reply, never a failed message.
+
+**Editing any place on a page** (`app/llm/edits.py`, `app/notion/to_markdown.py`): the page
+is read once and shown to the model as numbered lines — pictures and sub-pages included, as
+`<вложение …>` and `<не трогать: …>` — and the model answers with a short list of
+operations against those numbers (`replace`, `insert`, `delete`, `image`), or with a whole
+new text in `full` when the instruction really is "rewrite all of this". One call decides
+which. Editing places rather than replacing a page keeps block ids (so comments and links
+survive), costs a couple of hundred output tokens instead of the page again, needs no
+special case for pictures, and lets the reply say exactly what changed.
+
+`edits.check` is the gate the feature rests on, and every rule in it is about what the code
+*read*, never about what the instruction said: a line number the model invented, a sub-page
+or a nested list it tried to delete, or a script that would throw away more than half the
+page cannot get through. A picture can be removed, because that is what was asked for, and
+`restore_block` brings it back whole out of the trash — at the *end* of the page, which
+Notion gives no way to avoid, so the reply says so rather than pretending otherwise.
+
+An edit that names no page («убери оттуда второй вариант») resolves to the page this chat last
+wrote to (`AuditStore.last_page`, offered to the interpreter as `llm/context.RECENT_PAGE`).
+It is read from the audit rows, so a restart does not lose it, and bounded to the chat's
+last twenty events — a page from last week is not what "that page" means. Measured live:
+with the hint the interpreter picks the page at 0.9 confidence, without it 0.55, which is
+below `POLICY_TARGET_MIN` and so asks instead of guessing.
+
+**Rewriting what is already there** (`rewrite` on both sides, `app/llm/rewrite.py`): the
+user names a place, optionally a section, and says what to change in their own words
+(«оставь один подход и одни размеры»). The current text is read at
+execution time — neither interpreter ever sees a page's contents — rewritten in one
+Sonnet call, written, and only then is the old text archived: a failure halfway leaves
+the page with too much rather than too little. Which blocks may be replaced is decided in
+code (`app/notion/to_markdown.py: is_rewritable`), never by the model: only blocks that
+are nothing but text and have no children of their own, so an image, a file, a sub-page, a
+database view or a nested list survives any instruction. The reply carries the size change
+and how many blocks were left alone, says so when the text shrank by more than four
+fifths, and offers Undo; in the vault the previous version also goes to `.trash`, where it
+outlives the undo window.
+
+**The vault writes once per message** (since 0.6.3). It reads the user's own message —
+never a plan's steps, never an answer to a Notion question — and writes when the turn ends.
+Plan steps are phrased for Notion («Добавь в TODO задачу «покушать»») and lose what the
+message said around them, so feeding them to the vault one by one lost dates, and an answer
+that the interpreter turned into a plan wrote the same note a second time. The filer already
+turns one message into up to 25 actions, with the dates it names.
+
+The vault task starts in parallel with the interpreter and waits at a gate (`vault_go`)
+before writing. The gate opens exactly once, in `_hand_over` at the end of the turn — never
+halfway: opening it after interpretation is how a message that then searched the web got two
+notes. Text the Notion side produced that the vault could not have — what a search found,
+what a plan step composed (`_written_text`) — is collected on the turn; if there is any, the
+held task is told not to write and one new call writes the same message with that text as
+`content`. The text never enters a prompt, because what the web returned is data, and the
+filer still chooses the note, so this stays a second pipeline rather than a mirror. The
+vault's undo joins the turn's record (the plan's batch row, for a plan), so one «Отменить
+всё» reverts both stores.
+
+**A second reading** (`filer.doubtful`, since 0.6.7): when the light filer's answer has a
+defect code can see - a note with nothing in it, or an inbox line - the same question goes
+once to `FILER_STRONG_MODEL` and that answer is checked and written instead. Measured on a
+dictated message that named a list as its destination with the preposition swallowed: Haiku
+0 of 6 right even with a prompt rule written for that sentence, Sonnet 3 of 3, the two
+together 4 of 5. It runs before the write gate, so it hides inside the turn's own wait, and
+never when the caller supplies the text (an empty note is then about to be filled). A new
+note also takes the tick boxes every note in its folder has (`VaultWriter._shaped`): read
+from the folder, not asked of a model, so a base shows real check boxes.
+
+**The staged reader** (`app/vault/staged.py`, the default since 0.6.10; `FILER_MODE=single`
+brings the old one back). On the 53 real messages where the two readers disagreed, the user
+judged the staged reader right 36 times, both fine 10, the single one right 4 and neither 3;
+the seven losses were each fixed and replayed. The single
+reader asks one question about everything — what is this, where does it go, what does it say
+— and the light model answers that unreliably. The staged one asks three narrow ones:
+
+1. *intent* — add / done / change / move / ask / unclear;
+2. *target* — exactly one key from a list the code builds: the task file, the grocery page,
+   the diary, every folder (with the properties its notes share), the pages the user's guide
+   links to, and any other note the message names word for word;
+3. *details* — a small schema that belongs to that target (tasks; products; notes of that
+   folder; lines to append), so a question about meetings cannot be answered with a book.
+
+It returns the same raw actions, so `filer.check`, the writer and the undo are untouched.
+Every value is then checked against the message (`_Gate`): a date counts only when the message
+names a time, a property value or a title only when its words are in the message or in the
+guide, a task-file heading only when the guide knows it. A task whose words equal an open
+line points at that line instead of adding a twin.
+
+One target per message is a rule, not a simplification. Three ways of letting a message reach
+several places were measured — a target per item, a "several" key, a leftover handed back by
+the details stage — and each was used on plain messages far more often than on mixed ones (a
+list of chores scattered over three places). A message that really is two notes for two
+places lands in the first.
+
+Measured on the dictated message that started this, against the live vault: single reader 0
+of 6, staged 8 of 8, on the same model and about a fifth fewer tokens.
+
+**The two branches plan independently** (since 0.6.9). The staged reader does its own
+planning: a details stage may name a *lookup* — a set the user did not list («все романы
+Пелевина», «все фильмы Нолана», «что взять в поход») — which the lookup model (Sonnet) answers
+in that place's own shape, one item per note, line or task; or a *web search*, which the
+pipeline runs and whose result becomes the note's body without ever entering a prompt. Code
+iterates; no model is asked per item. Guards: a lookup never touches a note that already
+exists (it knows the book, not what the user did with it) and matches names with punctuation
+and ё folded; a lookup on the task file needs a word that asks for a set, or it invents work;
+a web search needs one of the user's search words, as on the Notion side.
+
+The Notion side no longer hands the vault anything when the vault plans for itself
+(`VaultPipeline.plans_itself`); the 0.6.3 hand-over remains only for the single reader. What
+the two branches share is the web search (`app/conversation/shared_research.py`): one per
+turn, keyed on the user's message and the kind of result, so when both branches ask to search
+the same message it runs once and both write from it. A search for text and pictures also
+answers a request for either alone.
+
+**Web research** (`app/llm/research.py`, `app/web/`). A message that asks to find something is
+looked up by a loop the bot drives. Claude gets three tools: `web_search` (Anthropic's, the
+basic version without a code sandbox), `site_search` (a shop's or real-estate site's own search
+page) and `read` (a page through Jina Reader, which gets past most Cloudflare challenges, with a
+plain fetch as fallback — public addresses only, every redirect checked). Pages are cut to what
+matters before the model sees them (`app/web/trim.py`; images become their alt text, so a shop
+named only by its logo keeps its name).
+
+Nothing local is built in. The site table is the owner's `data/sites.json`, loaded by
+`app/web/sites.py:load` — a list of `{name, kind, template, rent_template, probe}`, where `kind`
+is one of `prompts.SITE_KINDS` (`real_estate`, `groceries`, `building`, `goods`, `prices`),
+`template` and `rent_template` contain `{q}`, and an empty `template` marks a site worth naming
+that has no direct search. The prompt lists the sites by kind (`prompts.site_guide`), and
+`site_search` is offered only when at least one site has a template; no file means no
+`site_search` tool at all. Where the user lives, which sources to prefer and which currency to
+quote come from the admin page's «Дополнение к промпту поиска» (`tuning.research_note`), appended
+to the research prompt as written. The budget is the code's, not the model's:
+`RESEARCH_MAX_SEARCHES` searches and `RESEARCH_MAX_READS` site searches and reads, and after
+`RESEARCH_SOFT_DEADLINE_S` the tools are switched off and the model answers with what it has;
+`RESEARCH_DEADLINE_S` is a backstop. It replaced Claude's server-side tool loop, which once
+spent 20 minutes on a listing it had already read in the first 40 seconds; on the same
+eight questions the loop costs about an eighth and answers at least as well.
+`tools/check_sites.py --sites data/sites.json` checks the site table live;
+`tools/benchmark_research.py` measures a change on the owner's own questions, read from the
+git-ignored `data/eval/web/questions.json`.
+
+**Links as data** (`app/web/links.py`, `app/llm/answer.py`). Before a text message is
+interpreted, `LinkReader` reads up to three of its links in parallel through the research
+`Reader`, with a 12-second deadline. Each page is cut by `trim.page_facts` to its share of
+6 000 characters. The cut is not `relevant`'s: the page is the subject, and the message may
+share no word with it. So table rows, prices, sizes and headings come first wherever they sit,
+then prose; menus and other listings are dropped. A link whose host is on the tuning list `never_open` (admin
+page; defaults to `NEVER_OPEN_DEFAULT`: Google Docs/Drive/Mail and Notion — banks and other
+private sites are the owner's to add) is not
+read. Nor is one past the deadline. Either way it stays a plain link with a reason.
+
+The pages travel as `Context.links` / `VaultContext.links` and are rendered by
+`prompts.links_section`, after the user's message, under a header that calls them data and not
+instructions. Every interpreter gets them: the Notion one, the old `Filer` and every
+`StagedFiler` stage. Each uses them for the action it picks: fields, a real title, a summary.
+
+A question about a page is the `answer` intent. It is offered only when an answerer exists and
+at least one page was read. The orchestrator then holds the vault and `LinkAnswerer`
+(interpreter model, no tools) replies from the pages. With Notion off, the staged filer's
+question stage turns into a `link_answer` action that the pipeline answers the same way. Either
+way nothing is written.
+
+**Moving between notes** (`move`, vault only): the filer names the source, the destination
+and what to move; the editor marks lines with `delete` ops, and only a plan made of nothing
+but deletes counts. The code copies exactly those lines to the destination (appended, or a
+new note next to the source), then cuts them from the source — destination first, so a
+failure halfway leaves a copy, never a loss. The model points; it never writes the moved text.
+
+**When Claude cannot be used** (`app/llm/health.py`): one `Health` instance is shared by
+every component that calls Anthropic. It names the reason behind a failure — no credit,
+a rejected key, a rate limit, an outage — keeps it until a call succeeds again, and
+hands out one plain sentence about it at most once an hour, appended to the reply and to
+either digest. The Obsidian line says the cause in the user's own language instead of
+`claude 400`, and an empty balance puts the interpreter's fallback on a 30-minute cooldown
+rather than 5: topping up an account takes longer than that.
+
+**Groceries** (`app/vault/groceries.py`, the page named by `texts.VAULT_GROCERIES_NOTE`): a
+registry rather than a to-do list. One permanent line per product, ticked when it is in stock
+and unticked when it has to be bought, so nothing is ever created or archived and the page's
+size tracks the grocery vocabulary instead of the number of shopping trips. The home page
+finds the unticked ones with the Tasks plugin's `filename includes`, which is why the lines
+carry no tag — the file is the identity, and the same query keys the undated-tasks view's
+`filename does not include` exclusion.
+
+The rule it rests on is a lookup and not a judgement: `filer.check` reads the page, and a
+product already on it is filed there whatever the model answered. The model is consulted only
+about a word the page has never seen, and correcting it means editing one line of markdown —
+which is also how the user teaches it. Two invariants are enforced in code: a grocery line
+never carries a date or a repeat rule (a recurring tick copies itself on completion, which is
+what filled the archive note with duplicates), and an ambiguous name adds a line rather than
+unticking a guess, because a wrong untick puts the wrong thing in the shop while a
+near-duplicate takes seconds to merge. Groceries are left out of the task listings — a
+shopping list is not a thing to do today — and reduced to one line in the morning digest.
+
+**The morning digest** (`app/daily.py`): one asyncio task sleeps until `DAILY_DIGEST_AT` in
+`TIMEZONE`, asks the vault for overdue / today / tomorrow plus dated notes, and sends it to the
+allowed chats. Nothing due means nothing sent. A restart within two hours of the time still
+sends that day's. It reads the Obsidian side only — that is where the dates live.
+
+**The bot's name** (`app/address.py`, `BOT_NAME`): recognised deterministically, never by a
+model. The name is stripped from the start or the end of a message before either pipeline reads
+it, so "Robo, buy milk" is a shopping item; anywhere else in the sentence it is ordinary words
+and stays. The name alone answers `texts.CALLED`, and a short question about the bot answers
+`texts.ABOUT` — both without a model call and without writing anything.
+
+**Tuning** (`app/tuning.py`, `data/tuning.json`, edited on the admin page): the bot's name, the
+digest times, the words that may start a web search, the vault's countdown tag and date
+properties, and two "extra instructions" fields appended to the research and linker prompts.
+Every field falls back to `.env` and then to the code, is re-read when the file changes, and
+takes effect on the next message — no restart, no release. The system prompts themselves stay
+in code: they are long, interdependent and covered by tests, and the working pattern is a small
+structured text the prompt *reads* (the workspace note, `_bot.md`, the mail buckets).
+
+**Switches** (`app/switches.py`, `data/switches.json`, edited on the admin page): `notion`,
+`obsidian`, `linker`. `.env` says what they are until the file exists; the file then wins, and
+each is read per message, so a change needs no restart. With `notion` off the orchestrator goes
+straight to `_vault_only`: no snapshot, no interpreter, no questions — the Obsidian bot on its
+own. With both off, a message is refused rather than swallowed.
+
+**Per-chat scopes** (`app/chats.py`, `app/vault/scope.py`). An owner's private chat has full
+access. A group is answered only when listed in `data/chats.json` (the admin page's «Чаты»,
+which also offers the groups the bot has seen) and only when addressed — @mention, reply to the
+bot, its name, a command; anything else in the group costs nothing. A listed group's scope is
+one tag plus a home folder, and six rights (`ask`, `add`, `tasks`, `tick`, `change`, `move`).
+Its message goes to the vault only, through `VaultPipeline.scoped(scope)`, which rebuilds three
+layers per turn: `ScopedIndex` (every reader — staged reader, `check()`, search, answerer,
+agenda, Omnisearch — sees only notes whose *frontmatter* carries the tag, and the tasks note
+with only the lines carrying `#tag`); `gate()` after `check()` (rights per action kind; tasks
+always get the tag; new notes go to the home folder, renamed when an owner's note has the
+title; diary, groceries and inbox never); and a guarded writer that refuses any other file. No
+linker, no inbox fallback, no `obsidian://` links in replies. Undo and «Поправить» in a group
+belong to the member who asked (`events.telegram_user_id`) or an owner; after Fix is pressed,
+only the presser's next message is the correction.
+
+**Reminders** (`app/reminders/`).
+«напомни …» is the staged reader's `remind` intent: `REMIND_PROMPT` returns add/list/cancel, and
+an add becomes a `reminder` action plus a `task` with the same words, date, time and 🔁. The
+pipeline (`_reminded`) completes the moment (`timing.first_due`: 09:00 without a time, a time
+alone today or tomorrow, a repeat rule's next occurrence), stores it (`ReminderStore`, table
+`reminders`, migration 0002), dates the task, and refuses a moment already past or one with no
+time at all. `UndoRecord.reminders`: Undo cancels them. `ReminderScheduler` sleeps until the
+soonest due (≤ 60 s), sends «⏰ …» to that chat — late ones say how late, a repeating one missed
+several times is sent once and moves on, a chat Telegram refuses cancels it — and every 10
+minutes runs the admin page's rules (`data/reminder_rules.json`: N days before notes with a date
+property or tasks with a tag, to a chat), each item once per due moment (`reminder_fired`),
+reading a group's vault through its scope. Groups need the `remind` right.
+
+**Chat answers and memory** (`app/conversation/memory.py`, `app/vault/pipeline.py`).
+`ChatMemory` (`app/conversation/memory.py`, migration 0003) keeps each chat's exchanges; the
+orchestrator writes the message and the reply after every text turn and reads the last 10 within
+2 hours into `turn.history` and `turn.answers` (the bot's recent answers to questions, marks
+stripped). The vault side gets them in `VaultContext.history/answers/pointed`: the intent stage
+reads follow-ups with the history, and a «?» without a write word is `ask` even when the model
+says `add`. The answerer returns `kind` — `notes` (🔍, with sources), `general` (💬, from the
+model's knowledge), `web` (a query: «🔎 Ищу в интернете…», the shared research, then
+`from_web` → 🌐) or `none` (only for questions about the user's own life). «запиши это»: the
+FOLDER/APPEND/TASKS stages may return `from` — a key of a recent answer (`a1` newest), the quoted
+message (`q`) or a recent group message (`m1…`) — and the code writes that text verbatim. Groups:
+`app/telegram/recent.py` keeps the last 20 unaddressed messages per listed group in process memory
+only, handed over only when a message points back (`points_back`) or replies to one.
+
+**Google sources** (`app/google/`, the admin page's «Источники», `data/sources.json`). A
+question on the Obsidian side may also be answered from Google Docs, Sheets, Forms and folders,
+read-only. Each source carries the chats that may use it, how a document is cut into sections
+(`split`: `pieces` or `headings`) and the owner's instruction «Как читать» — what the document
+holds, in their own words. All of that is the owner's configuration: `app/google/sources.py`
+only carries it to the model, and no document's meaning is written in code. The owner's private
+chat uses every source and may search the rest of the Drive; a group uses only the sources that
+list it. Copies are kept as sections in `data/sources/<file id>.json` and re-read only when
+Drive says the file changed. Access is the owner's own OAuth client (`data/google_client.json`,
+type "Desktop app") and sign-in (`tools/google_login.py` → `data/google_token.json`); without
+either file the Google side is off.
+
+## 15. Releases and migrations
+
+`pyproject.toml`'s `[project].version` is the version source (`app/version.py`); `release.py` bumps it, commits, tags, and builds `dist/ai_assistant-X.Y.Z.zip` (app files + `VERSION` + `manifest.json` with a lock hash). Production is a separate directory (e.g. `C:\apps\ai_assistant`) with its own `.env`/`.venv`/`data`, populated only from a release zip via `deploy/install.ps1` or `deploy/update.ps1` (`apply_update.py`), never `git clone`; `uv sync --frozen --no-dev` (re-run on updates only when the lock hash changed) provisions the venv. Schema migrations (`migrations/NNNN_name.sql`, journaled in `schema_migrations`) are applied only by the installer/updater or `tools/migrate.py` — never implicitly. At startup, `AuditStore.assert_schema_current()` verifies no migration is pending and refuses to run otherwise. See [RELEASE.md](../RELEASE.md) for the full process.
