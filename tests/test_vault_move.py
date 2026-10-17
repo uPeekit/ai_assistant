@@ -30,19 +30,19 @@ notion: https://app.notion.com/p/3853b0e81b678090af3dff053df8ef37
 
 # Garden
 
-https://github.com/uPeekit/no_dog_walk
+https://github.com/example/garden
 
 ---
 
 # OpenTimelapse
 
-https://github.com/uPeekit/open_timelapse
+https://github.com/example/open_timelapse
 
 ---
 
-# ScalperBot
+# PriceBot
 
-https://github.com/uPeekit/scalper_bot
+https://github.com/example/price_bot
 
 ---
 
@@ -67,7 +67,7 @@ def _github_span() -> tuple[int, int]:
     _, body = frontmatter.split(PROJECTS)
     lines = body.split("\n")
     first = lines.index("# Garden") + 1
-    last = lines.index("https://github.com/uPeekit/scalper_bot") + 1
+    last = lines.index("https://github.com/example/price_bot") + 1
     return first, last
 
 
@@ -90,8 +90,8 @@ async def test_sections_move_word_for_word_and_one_undo_puts_both_notes_back(vau
 
     target = (root / AREAS / "Софт.md").read_text(encoding="utf-8")
     source = (root / AREAS / "Проекты.md").read_text(encoding="utf-8")
-    for url in ("no_dog_walk", "open_timelapse", "scalper_bot"):
-        assert f"https://github.com/uPeekit/{url}" in target
+    for url in ("garden", "open_timelapse", "price_bot"):
+        assert f"https://github.com/example/{url}" in target
         assert url not in source
     assert "Раздел для GitHub-проектов." in target  # added to, not replaced
     assert source.startswith("---\nnotion: https://app.notion.com/p/3853b0e8")  # props kept
@@ -120,7 +120,7 @@ async def test_create_and_move_in_one_message_fills_the_new_note(vault):
     await pipeline.handle("создай раздел Гитхаб и перенеси туда все гитхаб проекты")
 
     made = (root / AREAS / "Гитхаб.md").read_text(encoding="utf-8")
-    assert "https://github.com/uPeekit/scalper_bot" in made
+    assert "https://github.com/example/price_bot" in made
     assert sorted(p.name for p in (root / AREAS).glob("*.md")) == ["Гитхаб.md", "Проекты.md"]
 
 

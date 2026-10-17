@@ -397,3 +397,26 @@ async def test_no_network_for_the_token_is_a_google_error_not_a_crash(tmp_path):
     with pytest.raises(GoogleError):
         await GoogleAuth(path, http=http).token()
     await http.aclose()
+
+
+def test_a_question_naming_a_row_reads_the_row_before_the_tables_summaries():
+    """«what did Nina give Master and Margarita» was answered «nothing in the notes»: each of
+    seven tabs put its summary above every block of rows, the summaries filled the reading
+    budget, and the one block holding the row was only a name. A summary now stays with its
+    own tab, and goes below that tab's best block when the question names something in it."""
+    from app.google.sections import Section
+    from app.google.sources import _ranked
+
+    tabs = []
+    for tab in ("all", "year1", "year2"):
+        tabs.append(("Оценки", "оценки книг", Section(f"{tab} (сводка)", "больше всего — Идиот 5",
+                                                      summary=True, group=tab)))
+        tabs.append(("Оценки", "оценки книг", Section(f"{tab} 1", "Идиот — нина: 4",
+                                                      group=tab)))
+    tabs.append(("Оценки", "оценки книг", Section("all 2", "Мастер и Маргарита — нина: 3.9",
+                                                  group="all")))
+    named = [f.title for f in _ranked("какую оценку нина поставила мастеру и маргарите", tabs)]
+    assert named[0] == "all 2" and named[1] == "all (сводка)"
+
+    best = [f.title for f in _ranked("какая книга лучшая по оценкам", tabs)]
+    assert best[0].endswith("(сводка)")  # nothing named in the rows: the summary leads

@@ -43,8 +43,10 @@ MAX_SOURCES = 5
 MAX_VALUES = 8
 MIN_FOLDER = 3
 MAX_CROSSED = 3  # properties whose values are also counted in pairs
-MAX_ANSWER = 1_500  # characters: a Telegram message the user reads, not a report
-MAX_TOKENS = 1_500
+# Characters: a Telegram message the user reads, not a report. Room for a passage an owner's
+# instruction asks to be quoted as written rather than retold; sending splits a long one.
+MAX_ANSWER = 3_500
+MAX_TOKENS = 3_000
 
 _STRING = {"type": "string"}
 _KEYS = {"type": "array", "items": _STRING}

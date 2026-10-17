@@ -27,11 +27,15 @@ MIN_NUMBERS = 3  # numbers a column needs to be summarised
 class Section:
     title: str
     text: str
-    # Figures computed over a whole table: ranked just above that table's own rows.
+    # Figures computed over a whole table, ranked next to that table's own rows.
     summary: bool = False
+    # The table a section belongs to (a sheet's tab): a summary goes with its own rows, not
+    # with every tab of the file.
+    group: str = ""
 
     def as_dict(self) -> dict:
-        return {"title": self.title, "text": self.text, "summary": self.summary}
+        return {"title": self.title, "text": self.text, "summary": self.summary,
+                "group": self.group}
 
 
 def _paragraph_text(paragraph: dict) -> str:
@@ -158,20 +162,20 @@ def sheet_sections(title: str, tabs: list[tuple[str, list[list]]]) -> list[Secti
         summary = _extremes(header, body)
         if summary:
             out.append(Section(texts.GOOGLE_SUMMARY.format(title=f"{title} / {tab}"), summary,
-                               summary=True))
+                               summary=True, group=tab))
         name = f"{title} / {tab}"
         block: list[str] = []
         size, part = 0, 1
         for line in lines:
             if block and size + len(line) > MAX_BLOCK:
                 out.append(Section(texts.GOOGLE_ROWS.format(title=name, n=part),
-                                   "\n".join(block)))
+                                   "\n".join(block), group=tab))
                 block, size, part = [], 0, part + 1
             block.append(line)
             size += len(line) + 1
         if block:
             out.append(Section(texts.GOOGLE_ROWS.format(title=name, n=part) if part > 1
-                               else name, "\n".join(block)))
+                               else name, "\n".join(block), group=tab))
     return out
 
 

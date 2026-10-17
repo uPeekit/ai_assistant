@@ -16,7 +16,7 @@ RAW = {
                           "source_text": "молоко"},
                 "t1.f2": {"status": "not_mentioned"},
                 "t1.f3": {"status": "ambiguous", "candidates": ["t1.f3.o1", "t1.f3.o2"],
-                          "source_text": "рими"},
+                          "source_text": "лидл"},
                 "t1.f4": {"status": "explicit_null"},
             },
             "content": None,

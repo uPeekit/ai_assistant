@@ -42,6 +42,9 @@ CHECK_EVERY_S = 600.0
 WAIT_S = 10.0
 MAX_SECTION = 5_000
 MAX_RANKED = 400  # sections handed on per question; the answerer reads within its budget
+# The shape of a kept copy. A copy of another shape is read again from Google: a change in how
+# sections are cut reaches files that have not changed since.
+COPY_FORMAT = 2
 TITLE_WEIGHT = 3
 PARALLEL = 6
 SEARCH_RESULTS = 3
@@ -215,9 +218,12 @@ class GoogleSources:
             raw = json.loads(self._file(file_id).read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return None
+        if not isinstance(raw, dict) or raw.get("format") != COPY_FORMAT:
+            return None
         copy = _Copy(title=raw.get("title", ""), modified=raw.get("modified", ""), checked=0.0,
                      split=raw.get("split", ""),
-                     sections=[Section(s["title"], s["text"], bool(s.get("summary")))
+                     sections=[Section(s["title"], s["text"], bool(s.get("summary")),
+                                       str(s.get("group", "")))
                                for s in raw.get("sections", [])],
                      children=raw.get("children", []), error=raw.get("error", ""))
         self._copies[file_id] = copy
@@ -227,7 +233,8 @@ class GoogleSources:
         self._copies[file_id] = copy
         try:
             self._dir.mkdir(parents=True, exist_ok=True)
-            data = {"title": copy.title, "modified": copy.modified, "split": copy.split,
+            data = {"format": COPY_FORMAT, "title": copy.title, "modified": copy.modified,
+                    "split": copy.split,
                     "read_at": datetime.now(UTC).isoformat(timespec="seconds"),
                     "sections": [s.as_dict() for s in copy.sections],
                     "children": copy.children, "error": copy.error}
@@ -426,26 +433,38 @@ class GoogleSources:
 def _ranked(query: str, candidates: list[tuple[str, str, Section]]) -> list[Found]:
     wanted = {w for w in words(query) if w not in texts.SEARCH_STOP_WORDS}
     scored = []
+    in_text: dict[int, int] = {}
     for name, instruction, section in candidates:
         # The owner's instruction describes the source in their words ("ratings of the club"):
         # it names what the file is about when its own titles do not.
         about = f"{name} {section.title} {instruction}"
-        score = TITLE_WEIGHT * len(overlap(wanted, words(about))) \
-            + len(overlap(wanted, words(section.text)))
+        in_text[id(section)] = len(overlap(wanted, words(section.text)))
+        score = TITLE_WEIGHT * len(overlap(wanted, words(about))) + in_text[id(section)]
         if score:
             scored.append((score, name, instruction, section))
-    # A table's summary answers "the best", "the most" — what no block of its rows can: it
-    # goes just above the best of its own document's sections, whenever that document counts.
-    best: dict[str, float] = {}
+    # A table's summary answers "the best", "the most" — what no block of its rows can — and
+    # goes next to the best block of its own table, whenever that table counts: above it when
+    # the question names nothing in the rows, just below it when it does (a book, a person),
+    # since then that block holds the answer and a file's other tabs' summaries must not
+    # push it out of what the answerer reads.
+    best: dict[tuple[str, str], tuple[float, int]] = {}
     for score, name, _, section in scored:
-        if not section.summary:
-            best[name] = max(best.get(name, 0), score)
+        key = (name, section.group)
+        if not section.summary and score > best.get(key, (0, 0))[0]:
+            best[key] = (score, in_text[id(section)])
     for name, instruction, section in candidates:
-        if section.summary and best.get(name) and not any(
+        if section.summary and (name, section.group) in best and not any(
                 s is section for _, _, _, s in scored):
             scored.append((0, name, instruction, section))
-    scored = [(best[name] + 0.5 if section.summary and name in best else score, name,
-               instruction, section) for score, name, instruction, section in scored]
+
+    def placed(score: float, name: str, section: Section) -> float:
+        top = best.get((name, section.group))
+        if not section.summary or top is None:
+            return score
+        return top[0] - 0.25 if top[1] else top[0] + 0.5
+
+    scored = [(placed(score, name, section), name, instruction, section)
+              for score, name, instruction, section in scored]
     scored.sort(key=lambda s: -s[0])
     # Every section, best first: the answerer reads the first ones within its budget and is
     # shown the rest by name (app/vault/answer.py).

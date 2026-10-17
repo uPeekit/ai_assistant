@@ -151,3 +151,23 @@ async def test_when_the_answer_fails_the_reply_is_what_the_search_found(index):
     turn = await pipe(index, Ask(FilerError("down"))).handle("что я решил про ремонт?")
     line = turn.reply_line()
     assert texts.VAULT_SEARCH_HEADER in line and "Ремонт" in line
+
+
+async def test_an_owners_instruction_may_ask_for_a_passage_as_written(index):
+    """«What did we conclude about X» came back retold in the model's words; the owner wanted
+    their own notes. How to answer from a document is the owner's instruction, so the prompt
+    lets it override brevity, and the cut leaves room for a passage of a few thousand
+    characters. Every document a part of the answer came from is credited."""
+    from app.google.sources import Found
+
+    notes = "\n".join(f"- мысль номер {i} о книге, записанная на встрече" for i in range(60))
+    google = [Found(source="Выводы", title="Книга", text=notes,
+                    instruction="приводи раздел дословно", score=3),
+              Found(source="Оценки", title="лист", text="Книга — avg: 3.3", score=2)]
+    ask = Ask({"answer": notes + "\nСредняя оценка: 3.3", "sources": ["g1", "g2"], "more": []})
+    found = await VaultAnswerer(ask, "haiku").answer(
+        "какие выводы по книге?", [], index, "2026-10-15, чт", google=google)
+
+    assert "дословно" in P.ANSWER_PROMPT and "если указание владельца" in P.ANSWER_PROMPT
+    assert len(notes) > 2_500 and found.text.startswith(notes)  # whole, not cut at 1 500
+    assert found.google == ["Выводы — Книга", "Оценки — лист"]

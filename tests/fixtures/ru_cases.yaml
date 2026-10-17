@@ -5,7 +5,7 @@
 - {id: buy_with_category, text: "в список покупок: молоток, это инструменты", intent: create, target: Покупки,
    fields: {Название: Молоток, Категория: Инструменты}}
 - {id: buy_quantity, text: "купить 6 яиц", intent: create, target: Покупки, fields: {Количество: 6}}
-- {id: buy_shop_prisma, text: "надо взять сыр в присме", intent: create, target: Покупки, fields: {Название: Сыр, Магазин: Aldi}}
+- {id: buy_shop_aldi, text: "надо взять сыр в альди", intent: create, target: Покупки, fields: {Название: Сыр, Магазин: Aldi}}
 - {id: buy_note, text: "купить кофе, лучше зерновой", intent: create, target: Покупки, fields: {Название: "*"}, statuses: {Заметка: [value, not_mentioned]}}
 - {id: todo_explicit, text: "создай задачу купить молоко", intent: create, target: Задачи, fields: {Задача: "*"}}
 - {id: todo_remember, text: "не забудь позвонить в банк", intent: create, target: Задачи, fields: {Задача: "*"}}
