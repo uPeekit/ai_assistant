@@ -45,8 +45,9 @@ class FakeOrchestrator:
         self.order = order
 
     async def handle_text(self, chat_id, user_id, text, *, kind="text", transcript=None,
-                          progress=None, reply_to=None, pointed=()):
+                          progress=None, reply_to=None, pointed=(), name=""):
         self.pointed = pointed
+        self.name = name
         self.progress = progress
         self.reply_to = reply_to
         if self.order is not None:
@@ -814,3 +815,13 @@ async def test_a_reply_to_one_of_the_bots_messages_names_that_message():
     plain = text_update(ALLOWED_USER, "купить хлеб", hs.bot, update_id=10)
     assert await dispatch(hs.app, plain, hs.context)
     assert hs.orch.reply_to is None
+
+
+async def test_the_senders_telegram_name_reaches_the_orchestrator():
+    """A question about oneself («what did I rate it») needs to know who is asking."""
+    hs = build(reply=Reply("done"))
+    update = text_update(ALLOWED_USER, "какую оценку я поставил?", hs.bot)
+
+    assert await dispatch(hs.app, update, hs.context)
+
+    assert hs.orch.name == "u"

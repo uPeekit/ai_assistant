@@ -171,3 +171,106 @@ async def test_an_owners_instruction_may_ask_for_a_passage_as_written(index):
     assert "дословно" in P.ANSWER_PROMPT and "если указание владельца" in P.ANSWER_PROMPT
     assert len(notes) > 2_500 and found.text.startswith(notes)  # whole, not cut at 1 500
     assert found.google == ["Выводы — Книга", "Оценки — лист"]
+
+
+async def test_the_answerer_is_told_who_asks_and_may_ask_back_who_they_are(index):
+    """«What did I rate it» was answered with the rating of the person asked about one message
+    earlier. The answerer is shown the sender's Telegram name, and when the records do not say
+    for sure which person that is it says so (kind who, with the names that may be theirs)
+    instead of guessing; whatever it wrote as an answer then is dropped, and so is a name the
+    records it read do not hold."""
+    from app.google.sources import Found
+
+    google = [Found(source="Оценки", title="лист", text="Книга — саша п: 3; саша в: 4",
+                    score=3)]
+    ask = Ask({"kind": "who", "options": ["саша п", "Александр", "саша в", "саша п"],
+               "answer": "Вы поставили 4.2", "sources": [], "more": []})
+    found = await VaultAnswerer(ask, "haiku").answer(
+        "какую оценку я поставил?", [], index, "2026-10-15, чт", google=google,
+        asker="Саша (@sasha)")
+
+    assert P.H_ASKER + ":" + chr(10) + "Саша (@sasha)" in ask.shown[0]
+    assert found.kind == "who" and found.options == ["саша п", "саша в"]
+    assert found.text == ""  # never the model's guess
+    assert "не подставляй" in P.ANSWER_PROMPT
+
+
+def _who_pipe(index, *answers):
+    """A pipeline whose answerer says `answers` in turn, over a note naming two people."""
+    from app.vault.askers import Askers
+
+    (index.root / f"{texts.VAULT_NOTES_DIR}/Ремонт.md").write_text(
+        "Оценки за ремонт: саша п 3, саша в 3.5\n", encoding="utf-8")
+    ask = Ask(*answers)
+    search_ = {"actions": [{"action": "search", "text": "ремонт"}]}
+    askers = Askers()
+    p = VaultPipeline(index, VaultWriter(index, now=lambda: NOW),
+                      Filer("", "m", client=FakeAnthropic(*[search_] * len(answers))), None,
+                      now=lambda: NOW, answerer=VaultAnswerer(ask, "haiku"), askers=askers)
+    return p, ask, askers
+
+
+WHO = {"kind": "who", "options": ["саша п", "саша в"], "answer": "", "sources": [], "more": []}
+
+
+async def test_the_bot_asks_back_and_the_next_short_message_answers_the_first_question(index):
+    """The question back is the code's own; the same person's next short message is their name,
+    kept for next time, and the question they asked first is the one answered."""
+    from app.chats import ChatRef
+
+    p, ask, askers = _who_pipe(index, WHO, {"kind": "notes", "options": [], "answer": "3.5",
+                                            "sources": [], "more": []})
+    chat = ChatRef(1, 7, name="Саша")
+    first = await p.handle("какую оценку я поставил ремонту?", chat=chat)
+
+    assert first.answer == texts.ANSWER_WHO_OPTIONS.format(lead="",
+                                                           options="«саша п», «саша в»")
+    assert first.said == ""  # nothing a «save this» could pick up
+
+    second = await p.handle("саша в", chat=chat)
+
+    assert askers.known(7) == ("саша в",)
+    assert P.ASKER_KNOWN.format(name="Саша", known="«саша в»") in ask.shown[1]
+    assert "какую оценку я поставил ремонту?" + chr(10) in ask.shown[1]  # the first question
+    assert second.answer.startswith(texts.VAULT_ANSWER.format(answer="3.5"))
+
+
+async def test_a_known_name_not_in_these_records_is_asked_once_more_then_not_found(index):
+    """People go by other names elsewhere (a quiz under a joke name): a name they gave before
+    that these records lack is said, and asked about once; told and still not found, the bot
+    says so instead of asking in circles."""
+    from app.chats import ChatRef
+
+    p, ask, askers = _who_pipe(index, WHO, WHO)
+    askers._remember(7, "женя")
+    chat = ChatRef(1, 7, name="Саша")
+    first = await p.handle("сколько баллов я набрал?", chat=chat)
+
+    assert first.answer == texts.ANSWER_WHO_OPTIONS.format(
+        lead=texts.WHO_NOT_HERE.format(names="«женя»"), options="«саша п», «саша в»")
+    assert "«женя»" in ask.shown[0]
+
+    second = await p.handle("капитан", chat=chat)
+
+    assert second.answer == texts.ANSWER_WHO_NOT_FOUND.format(name="капитан")
+    assert askers.known(7) == ("женя", "капитан")
+
+
+async def test_who_the_asker_is_goes_to_the_stronger_model_before_asking_them(index):
+    first = Ask(WHO)
+    second = Ask({"kind": "notes", "options": [], "answer": "3.5", "sources": [], "more": []})
+    answerer = VaultAnswerer(first, "haiku", second=VaultAnswerer(second, "sonnet"))
+    found = await answerer.answer("какую оценку я поставил?", [], index, "2026-10-15, чт",
+                                  asker="Саша")
+
+    assert found.kind == "notes" and found.text == "3.5"
+    assert len(first.shown) == len(second.shown) == 1
+    assert found.prompt_tokens == 2000  # both calls are counted
+
+
+async def test_a_failed_second_answer_still_asks_the_user(index):
+    answerer = VaultAnswerer(Ask(WHO), "haiku",
+                             second=VaultAnswerer(Ask(FilerError("down")), "sonnet"))
+    found = await answerer.answer("какую оценку я поставил?", [], index, "2026-10-15, чт")
+
+    assert found.kind == "who"

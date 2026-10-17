@@ -50,11 +50,14 @@ MAX_TOKENS = 3_000
 
 _STRING = {"type": "string"}
 _KEYS = {"type": "array", "items": _STRING}
-KINDS = ("notes", "general", "web", "none")
+# who: the question is about the asker, and the records do not say for sure which of the
+# people in them that is; the answer is the question back.
+KINDS = ("notes", "general", "web", "none", "who")
 SCHEMA = {"type": "object", "additionalProperties": False,
-          "required": ["answer", "sources", "more", "kind", "web"],
-          "properties": {"answer": _STRING, "sources": _KEYS, "more": _KEYS,
-                         "kind": {"enum": list(KINDS)}, "web": _STRING}}
+          "required": ["kind", "options", "answer", "sources", "more", "web"],
+          "properties": {"kind": {"enum": list(KINDS)}, "options": _KEYS, "answer": _STRING,
+                         "sources": _KEYS, "more": _KEYS, "web": _STRING}}
+MAX_OPTIONS = 5
 WEB_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["answer"],
               "properties": {"answer": _STRING}}
 MAX_FOUND = 12_000  # characters of web findings an answer is written from
@@ -74,6 +77,8 @@ class Answer:
     web: str = ""
     # The Google documents (app/google/) the answer came from, by name: plain text.
     google: list[str] = field(default_factory=list)
+    # kind "who": the names in the records that may be the asker's.
+    options: list[str] = field(default_factory=list)
 
 
 def _value(value: object) -> str:
@@ -169,27 +174,53 @@ def _google_block(key: str, found) -> str:
 
 class VaultAnswerer:
     def __init__(self, ask: Ask, model: str,
-                 close: Callable[[], Awaitable[None]] | None = None) -> None:
+                 close: Callable[[], Awaitable[None]] | None = None, *,
+                 second: VaultAnswerer | None = None) -> None:
         self._ask = ask
         self.model = model
         self._close = close
+        # A stronger model, asked only when this one cannot tell who the asker is in the
+        # records: Haiku asked people back whose name it had just been told, and offered names
+        # nobody had written; Sonnet matched a short form of a name and a quiz nickname.
+        self._second = second
 
     @classmethod
     def claude(cls, api_key: str, model: str, *, timeout_s: float = 60.0,
                health: Health | None = None,
-               client: anthropic.AsyncAnthropic | None = None) -> VaultAnswerer:
+               client: anthropic.AsyncAnthropic | None = None,
+               second_model: str = "") -> VaultAnswerer:
         sdk = client or anthropic.AsyncAnthropic(api_key=api_key, timeout=timeout_s,
                                                  max_retries=1)
-        return cls(claude_ask(sdk, model, health), model, sdk.close)
+        second = (cls(claude_ask(sdk, second_model, health), second_model)
+                  if second_model and second_model != model else None)
+        return cls(claude_ask(sdk, model, health), model, sdk.close, second=second)
 
     async def aclose(self) -> None:
         if self._close is not None:
             await self._close()
 
     async def answer(self, question: str, hits: list[Hit], index: VaultIndex,
-                     today: str, history: str = "", google: list | tuple = ()) -> Answer:
+                     today: str, history: str = "", google: list | tuple = (),
+                     asker: str = "") -> Answer:
         """The answer and the notes it came from. Raises FilerError when the model could not
         be asked: the caller then shows what the search found instead."""
+        out = await self._answer(question, hits, index, today, history, google, asker)
+        if out.kind != "who" or self._second is None:
+            return out
+        log.info("vault answer: who is asking is unclear to %s; asking %s", self.model,
+                 self._second.model)
+        try:
+            again = await self._second._answer(question, hits, index, today, history, google,
+                                               asker)
+        except FilerError as e:
+            log.warning("the second answer failed (%s); asking the user", e)
+            return out
+        again.prompt_tokens += out.prompt_tokens
+        again.output_tokens += out.output_tokens
+        return again
+
+    async def _answer(self, question: str, hits: list[Hit], index: VaultIndex, today: str,
+                      history: str, google: list | tuple, asker: str) -> Answer:
         first: list[Note] = []
         for hit in hits:
             note = next((n for n in index.notes if n.path == hit.path), None)
@@ -214,6 +245,7 @@ class VaultAnswerer:
             data, used_in, used_out = await self._ask(
                 P.ANSWER_PROMPT, SCHEMA,
                 P.message(P.section(P.H_TODAY, today),
+                          P.section(P.H_ASKER, asker),
                           P.section(P.H_HISTORY, history),
                           P.section(P.H_SUMMARY, folders_summary(index.notes)),
                           P.section(P.H_CATALOG, P.keyed(
@@ -241,6 +273,15 @@ class VaultAnswerer:
         kind = str(data.get("kind", "notes"))
         out.kind = kind if kind in KINDS else "notes"
         out.web = str(data.get("web", "")).strip() if out.kind == "web" else ""
+        if out.kind == "who":
+            # The question back is the code's, never the model's words: asked who someone is,
+            # a model still wrote the rating of the person it guessed. A name it offers must be
+            # one the records it read actually hold — it offered names nobody had written.
+            read_text = f"{texts_}\n{google_text}".casefold()
+            out.options = [o for o in dict.fromkeys(
+                str(o).strip() for o in data.get("options") or [] if str(o).strip())
+                if o.casefold() in read_text][:MAX_OPTIONS]
+            return out
         if not text and not out.web:
             raise FilerError("empty answer")
         if len(text) > MAX_ANSWER:

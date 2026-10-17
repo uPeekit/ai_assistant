@@ -1012,7 +1012,7 @@ class _Run:
                        "props": _PROPS})
         answer = await self._ask(
             P.ASK_PROMPT, schema,
-            P.message(self._guide(), self._today(),
+            P.message(self._guide(), self._today(), P.section(P.H_HISTORY, ctx.history),
                       P.section(P.H_FOLDERS, ", ".join(ctx.folders)),
                       P.section(P.H_TAGS, ", ".join(ctx.tags)), text=text))
         kind = str(answer.get("kind", ""))

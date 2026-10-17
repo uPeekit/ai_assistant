@@ -22,6 +22,7 @@ from zoneinfo import ZoneInfo
 from app import texts
 from app.chats import ChatRef, ChatScope
 from app.google.sources import GoogleSources
+from app.llm import staged_prompts as P
 from app.llm.edits import EditError, Editor, NothingToChange
 from app.llm.edits import TooLong as EditTooLong
 from app.llm.prompts import MOVE_INSTRUCTION
@@ -34,6 +35,7 @@ from app.vault import agenda as agenda_mod
 from app.vault import fix as fixing
 from app.vault import frontmatter, mdedit, summary
 from app.vault.answer import VaultAnswerer
+from app.vault.askers import Askers
 from app.vault.filer import GROCERY_LIST, Filer, FilerError, check, context, doubtful
 from app.vault.index import VaultIndex
 from app.vault.linker import Linker
@@ -232,7 +234,8 @@ class VaultPipeline:
                  reminders: ReminderStore | None = None, zone: str = "",
                  google: GoogleSources | None = None,
                  web_words: Callable[[], tuple[str, ...]] | None = None,
-                 date_props: Callable[[], tuple[str, ...]] | None = None) -> None:
+                 date_props: Callable[[], tuple[str, ...]] | None = None,
+                 askers: Askers | None = None) -> None:
         self._index = index
         self._writer = writer
         # The whole vault and its writer. A group chat's turn (`scoped`) swaps `_index` and
@@ -256,6 +259,8 @@ class VaultPipeline:
         self._reminders = reminders
         # Google Docs/Sheets/Forms a question may be answered from (app/google/); None: none.
         self._google = google
+        # Who people are in the owner's records, as they told the bot (app/vault/askers.py).
+        self._askers = askers or Askers()
         # The admin page's words for a web search and its date properties, read per message.
         self._web_words = web_words or (lambda: ())
         self._date_props = date_props or (lambda: agenda_mod.DATE_PROPS)
@@ -421,6 +426,11 @@ class VaultPipeline:
         decides that on its own); the orchestrator hands in one that is shared with the
         Notion side, so the same search for the same message runs once."""
         try:
+            # The answer to the bot's «who are you in the records»: their name is kept, and
+            # the question they asked first is the one to answer now.
+            first = self._askers.reply(chat.chat_id, chat.user_id, message) \
+                if chat is not None else None
+            message = first or message
             await self._refreshed()
             ctx = replace(context(self._index, message, self._now()), links=tuple(links))
             pending = await asyncio.to_thread(self._pending, chat)
@@ -521,7 +531,8 @@ class VaultPipeline:
             if self._answerer is not None and self._omni is not None:
                 hits = hits + await asyncio.to_thread(self._omni_hits, question.text, hits)
             said = await self._answered(message, hits, turn, research=research,
-                                        progress=progress, history=history, chat=chat)
+                                        progress=progress, history=history, chat=chat,
+                                        words=question.text, replied=first is not None)
             if said:
                 turn.answer = f"{turn.answer}\n{said}".strip() if turn.answer else said
         turn.writes, failed = await asyncio.to_thread(self._write_all, actions)
@@ -667,6 +678,15 @@ class VaultPipeline:
             out.append(action)
         return out
 
+    def _asker(self, chat: ChatRef | None) -> str:
+        """Who asks, as the answerer is told: their Telegram name, and the name they said they
+        go by in the records."""
+        if chat is None:
+            return ""
+        known = self._askers.known(chat.user_id)
+        return P.ASKER_KNOWN.format(name=chat.name, known=P.names(known)) if known \
+            else chat.name
+
     def _omni_hits(self, query: str, hits: list[Hit]) -> list[Hit]:
         """What Omnisearch finds that our search did not, after ours."""
         seen = {h.path for h in hits}
@@ -678,10 +698,14 @@ class VaultPipeline:
     async def _answered(self, question: str, hits: list[Hit], turn: VaultTurn, *,
                         research: Research | None = None,
                         progress: Callable[[str], Awaitable[None]] | None = None,
-                        history: str = "", chat: ChatRef | None = None) -> str:
+                        history: str = "", chat: ChatRef | None = None,
+                        words: str = "", replied: bool = False) -> str:
         """The answer to a question, in the chat: from the notes (with links to them), from
         general knowledge, or — when it needs fresh facts — from a web search. "" when there
-        is no answerer or it failed, and the list of what the search found is the reply."""
+        is no answerer or it failed, and the list of what the search found is the reply.
+        `words` are the question's search words, the earlier question folded in when this
+        message only completes it. `replied`: this question comes back after the asker told
+        the bot their name, so it is not asked a second time."""
         if self._answerer is None:
             return ""
         now = self._now()
@@ -689,11 +713,18 @@ class VaultPipeline:
         google = []
         if self._google is not None and chat is not None:
             # A private chat of an owner sees every source and the Drive; a group only its own.
-            google = await self._google.find(question, chat.chat_id,
+            query = f"{question} {words}" if words and words not in question else question
+            google = await self._google.find(query, chat.chat_id,
                                              owner=chat.owner and chat.chat_id > 0)
         try:
-            found = await self._answerer.answer(question, hits, self._index, today,
-                                                history=history, google=google)
+            known = self._askers.known(chat.user_id) if chat is not None else ()
+            # Said inside the question, not only beside it: told who the asker is in a context
+            # line, a model still asked them again.
+            asked = P.ASKER_IN_QUESTION.format(question=question, known=P.names(known)) \
+                if known else question
+            found = await self._answerer.answer(asked, hits, self._index, today,
+                                                history=history, google=google,
+                                                asker=self._asker(chat))
         except FilerError as e:
             log.warning("vault answer failed (%s); listing what was found", e)
             return ""
@@ -706,6 +737,22 @@ class VaultPipeline:
         if found.kind == "general":
             turn.said = found.text
             return texts.ANSWER_GENERAL.format(answer=found.text)
+        if found.kind == "who":
+            # A question back, not an answer: nothing to save, no sources. The person's next
+            # short message is their name (Askers.reply), and this question is answered then.
+            if chat is None:
+                return texts.ANSWER_WHO.format(lead="")
+            if replied:
+                # Told and still not found: asking again would go round in circles.
+                return texts.ANSWER_WHO_NOT_FOUND.format(name=known[-1])
+            # Names they gave before are not in these records (a quiz under a joke name): ask
+            # once more, saying so.
+            lead = texts.WHO_NOT_HERE.format(names=", ".join(f"«{n}»" for n in known)) \
+                if known else ""
+            self._askers.asked(chat.chat_id, chat.user_id, question)
+            return (texts.ANSWER_WHO_OPTIONS.format(
+                lead=lead, options=", ".join(f"«{o}»" for o in found.options))
+                if found.options else texts.ANSWER_WHO.format(lead=lead))
         if found.kind == "notes":
             turn.said = found.text
         lines = [texts.VAULT_ANSWER.format(answer=found.text)]

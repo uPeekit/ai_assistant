@@ -104,6 +104,7 @@ from app.tuning import Defaults, Tuning
 from app.validation.policy import Policy, Thresholds
 from app.validation.semantic import SemanticValidator
 from app.vault.answer import VaultAnswerer
+from app.vault.askers import Askers
 from app.vault.filer import Filer
 from app.vault.index import VaultIndex
 from app.vault.linker import Linker
@@ -296,13 +297,15 @@ def _vault_pipeline(settings: Settings, switches: Switches, tuning: Tuning,
                                  if strong and strong != settings.filer_model and not staged
                                  else None),
                          answerer=(VaultAnswerer.claude(key, settings.vault_answer_model,
-                                                        health=health)
+                                                        health=health,
+                                                        second_model=settings.escalate_model.strip())
                                    if settings.vault_answer_model.strip() else None),
                          omni=(OmniSearch(settings.omnisearch_port)
                                if settings.omnisearch_port else None),
                          reminders=reminders, zone=settings.timezone, google=google,
                          web_words=lambda: tuning.web_words,
-                         date_props=lambda: tuning.date_props)
+                         date_props=lambda: tuning.date_props,
+                         askers=Askers(settings.db_path.with_name("askers.json")))
 
 
 def _google_sources(settings: Settings, sources: Sources) -> GoogleSources | None:

@@ -395,6 +395,12 @@ POINTED_ANSWER = "последний ответ ассистента"
 POINTED_EARLIER = "ответ ассистента раньше"
 POINTED_QUOTE = "сообщение, на которое отвечают"
 ANSWER_GENERAL = "💬 {answer}"
+# The answerer asking who the user is in the records before answering about them; the next
+# short message is taken as the name.
+ANSWER_WHO = "❓ {lead}Как вы записаны? Напишите своё имя так, как оно там."
+ANSWER_WHO_OPTIONS = "❓ {lead}Кто из них вы: {options}? Напишите, как вы записаны."
+WHO_NOT_HERE = "Здесь нет {names}. "
+ANSWER_WHO_NOT_FOUND = "🔍 Не нашёл в записях «{name}»."
 ANSWER_WEB = "🌐 {answer}"
 ANSWER_SEARCHING = "🔎 Ищу в интернете…"
 ANSWER_WEB_ASK = "🌐 Чтобы поискать, уточните: {question}"

@@ -311,8 +311,9 @@ class _Turn:
     chat_id: int
     now: datetime
     # Who sent it: in a group, the one who may undo or fix what it wrote (0 for /cancel and
-    # the sweeper).
+    # the sweeper), and their name in Telegram.
     user_id: int = 0
+    name: str = ""
     # The chat's recent exchanges as the readers are shown them, the bot's last answer, and
     # what the message may point back at: (key, text) — the quoted message, recent group talk.
     history: str = ""
@@ -463,14 +464,17 @@ class Orchestrator:
     async def handle_text(
         self, chat_id: int, user_id: int, text: str, *, kind: str = "text",
         transcript: str | None = None, progress: Callable[[Reply], Awaitable[None]] | None = None,
-        reply_to: int | None = None, pointed: tuple = (),
+        reply_to: int | None = None, pointed: tuple = (), name: str = "",
     ) -> Reply:
         """`reply_to` is the id of the bot's message this one replies to in Telegram, if any:
         a reply to a write's message is a fix of that write. `pointed` is what the message may
         point back at — (key, text): the message it quotes, recent group messages."""
+        def message(t: _Turn) -> Awaitable[Reply]:
+            t.name = name
+            return self._message(t, text, reply_to, pointed)
+
         async with self._chat_lock(chat_id):
-            reply = await self._turn(chat_id, user_id, kind,
-                                     lambda t: self._message(t, text, reply_to, pointed),
+            reply = await self._turn(chat_id, user_id, kind, message,
                                      progress=progress, raw_input=text,
                                      transcription=transcript)
             self._remember(chat_id, user_id, text, reply)
@@ -644,7 +648,7 @@ class Orchestrator:
 
     def _chat_ref(self, turn: _Turn) -> ChatRef:
         return ChatRef(turn.chat_id, turn.user_id, turn.event_id,
-                       owner=turn.user_id in self._s.allowed_user_ids)
+                       owner=turn.user_id in self._s.allowed_user_ids, name=turn.name)
 
     def _vault_for(self, turn: _Turn) -> VaultPipeline:
         assert self._vault is not None

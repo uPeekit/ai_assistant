@@ -222,6 +222,15 @@ def _replied_to(update: Update) -> int | None:
     return replied.message_id if replied is not None else None
 
 
+def _sender(update: Update) -> str:
+    """The sender as Telegram names them: "First Last (@username)", or "" when unknown."""
+    user = update.effective_user
+    if user is None:
+        return ""
+    name = " ".join(p for p in (user.first_name, user.last_name) if p)
+    return f"{name} (@{user.username})".strip() if user.username else name
+
+
 async def _on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     orch: Orchestrator = context.bot_data[_ORCH]
     async with _typing(context, update.effective_chat.id):
@@ -229,7 +238,7 @@ async def _on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         reply = await orch.handle_text(
             update.effective_chat.id, update.effective_user.id, text,
             progress=_progress(update, context), reply_to=_replied_to(update),
-            pointed=_pointed(update, context, text),
+            pointed=_pointed(update, context, text), name=_sender(update),
         )
     await _send(update, context, reply, context.bot_data[_STORE])
 
@@ -266,6 +275,7 @@ async def _on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             update.effective_chat.id, update.effective_user.id, transcript,
             kind="voice", transcript=transcript, progress=_progress(update, context),
             reply_to=_replied_to(update), pointed=_pointed(update, context, transcript),
+            name=_sender(update),
         )
     await _send(update, context, reply, store)
 

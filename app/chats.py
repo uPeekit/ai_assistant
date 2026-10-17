@@ -63,6 +63,8 @@ class ChatRef:
     event_id: int | None = None
     # An allowed user (TELEGRAM_ALLOWED_USER_IDS): may cancel anyone's reminder in a group.
     owner: bool = True
+    # The sender's name in Telegram, for a question about themselves ("what did I rate it").
+    name: str = ""
 
 
 def _scope(raw: dict) -> ChatScope | None:
