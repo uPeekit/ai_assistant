@@ -44,7 +44,7 @@ MAX_SECTION = 5_000
 MAX_RANKED = 400  # sections handed on per question; the answerer reads within its budget
 # The shape of a kept copy. A copy of another shape is read again from Google: a change in how
 # sections are cut reaches files that have not changed since.
-COPY_FORMAT = 3
+COPY_FORMAT = 4
 TITLE_WEIGHT = 3
 PARALLEL = 6
 SEARCH_RESULTS = 3

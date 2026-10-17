@@ -141,10 +141,12 @@ def _extremes(header: list[str], rows: list[list[str]]) -> str:
                   and label(r)]
         name = header[i] if i < len(header) and header[i] else \
             texts.GOOGLE_COLUMN.format(n=i + 1)
-        # How many rows a column has a number in, for every column with any: "how many did
-        # X rate" needs the whole column, sparse ones too (someone who joined late).
+        # How many rows a column has a number in, and their mean, for every column with any:
+        # "how many did X rate", "X's average" need the whole column, sparse ones too
+        # (someone who joined late). Read a block at a time, a model made the mean up.
         if values:
-            counts.append(f"{name} {len(values)}")
+            counts.append(texts.GOOGLE_COUNT.format(
+                column=name, n=len(values), mean=f"{sum(n for n, _ in values) / len(values):.2f}"))
         if len(values) < MIN_NUMBERS or len(values) * 2 < len(rows):
             continue
         values.sort(key=lambda v: -v[0])
@@ -153,7 +155,7 @@ def _extremes(header: list[str], rows: list[list[str]]) -> str:
             column=name, top=shown(values[:EXTREMES]), bottom=shown(values[-EXTREMES:])))
     if not counts or (not lines and len(rows) < MIN_NUMBERS):
         return ""  # a table that small is read whole anyway
-    return "\n".join([texts.GOOGLE_COUNTS.format(rows=len(rows), counts=", ".join(counts)),
+    return "\n".join([texts.GOOGLE_COUNTS.format(rows=len(rows), counts="; ".join(counts)),
                       *lines])
 
 

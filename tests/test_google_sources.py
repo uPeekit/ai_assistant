@@ -423,9 +423,9 @@ def test_a_question_naming_a_row_reads_the_row_before_the_tables_summaries():
 
 
 def test_a_tables_summary_counts_every_column_even_a_sparse_one():
-    """«How many books did I read» is the number of rows with the asker's grade: the whole
-    column, which reaches the model a block at a time — and a member who joined late has a
-    column too sparse for the highs and lows."""
+    """«How many books did I read» is the number of rows with the asker's grade, «my average»
+    their mean: the whole column, which reaches the model a block at a time (it made a mean
+    up) — and a member who joined late has a column too sparse for the highs and lows."""
     from app.google.sections import sheet_sections
 
     header = ["", "avg", "аня", "новенький"]
@@ -433,5 +433,6 @@ def test_a_tables_summary_counts_every_column_even_a_sparse_one():
     summary, *_ = sheet_sections("Оценки", [("all", [header, *rows])])
 
     assert summary.summary
-    assert summary.text.startswith(texts.GOOGLE_COUNTS.format(
-        rows=8, counts="avg 8, аня 8, новенький 2"))
+    counts = "; ".join(texts.GOOGLE_COUNT.format(column=c, n=n, mean=m) for c, n, m in (
+        ("avg", 8, "4.00"), ("аня", 8, "5.00"), ("новенький", 2, "3.00")))
+    assert summary.text.startswith(texts.GOOGLE_COUNTS.format(rows=8, counts=counts))
