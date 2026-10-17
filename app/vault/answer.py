@@ -191,7 +191,7 @@ class VaultAnswerer:
                second_model: str = "") -> VaultAnswerer:
         sdk = client or anthropic.AsyncAnthropic(api_key=api_key, timeout=timeout_s,
                                                  max_retries=1)
-        second = (cls(claude_ask(sdk, second_model, health), second_model)
+        second = (cls(claude_ask(sdk, second_model, health, think=False), second_model)
                   if second_model and second_model != model else None)
         return cls(claude_ask(sdk, model, health), model, sdk.close, second=second)
 

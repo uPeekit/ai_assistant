@@ -159,9 +159,12 @@ _EXPAND = {"lookup": _STRING, "web": _STRING, "media": _enum(MEDIA)}
 
 
 def claude_ask(client: anthropic.AsyncAnthropic, model: str,
-               health: Health | None = None) -> Ask:
-    """The stages' question, put to Claude with structured output."""
+               health: Health | None = None, *, think: bool = True) -> Ask:
+    """The stages' question, put to Claude with structured output. `think=False` turns off a
+    model's own thinking: Sonnet 5 thinks unless told not to, and on a narrow question that
+    spent the whole answer's tokens in 40 seconds."""
     health = health or Health()
+    extra = {} if think else {"thinking": {"type": "disabled"}}
 
     async def ask(system: str, schema: dict, content: str,
                   max_tokens: int = MAX_TOKENS) -> tuple[dict, int, int]:
@@ -169,7 +172,7 @@ def claude_ask(client: anthropic.AsyncAnthropic, model: str,
             resp = await client.messages.create(
                 model=model, max_tokens=max_tokens, system=system,
                 messages=[{"role": "user", "content": content}],
-                output_config={"format": {"type": "json_schema", "schema": schema}})
+                output_config={"format": {"type": "json_schema", "schema": schema}}, **extra)
         except anthropic.APIError as e:
             raise FilerError(describe(e), health.record(e)) from None
         health.ok()

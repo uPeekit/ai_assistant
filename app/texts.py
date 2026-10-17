@@ -400,6 +400,9 @@ ANSWER_GENERAL = "💬 {answer}"
 ANSWER_WHO = "❓ {lead}Как вы записаны? Напишите своё имя так, как оно там."
 ANSWER_WHO_OPTIONS = "❓ {lead}Кто из них вы: {options}? Напишите, как вы записаны."
 WHO_NOT_HERE = "Здесь нет {names}. "
+# Words before the name in a reply to that question («я женя», «меня зовут Саша»).
+ASKER_LEADS = ("я", "это я", "меня зовут", "зовут", "там я", "я там", "я записан как",
+               "я записана как", "записан как", "записана как", "я —", "я -")
 ANSWER_WHO_NOT_FOUND = "🔍 Не нашёл в записях «{name}»."
 ANSWER_WEB = "🌐 {answer}"
 ANSWER_SEARCHING = "🔎 Ищу в интернете…"
@@ -415,10 +418,11 @@ BACK_STEMS = ("последн", "написал", "сказал", "предыд�
 GOOGLE_PIECE = "{title} (часть {n})"
 GOOGLE_ROWS = "{title} (строки, часть {n})"
 GOOGLE_COLUMN = "колонка {n}"
-GOOGLE_SUMMARY = "{title} (сводка: наибольшие и наименьшие значения)"
+GOOGLE_SUMMARY = "{title} (сводка по колонкам: сколько чисел, наибольшие и наименьшие)"
 GOOGLE_SCORES = "Больше всего баллов — {top}\nМеньше всего баллов — {bottom}"
 GOOGLE_CUT = "[… дальше не показано]"
 GOOGLE_EXTREMES = "{column}: больше всего — {top}; меньше всего — {bottom}"
+GOOGLE_COUNTS = "Строк: {rows}. Сколько строк с числом в каждой колонке: {counts}"
 GOOGLE_QUESTIONS = "Вопросы:"
 GOOGLE_CORRECT = "верный ответ"
 GOOGLE_RESPONSES = "Ответов: {n}"

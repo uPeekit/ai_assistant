@@ -20,7 +20,9 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-log = logging.getLogger(__name__)
+from app import texts
+
+log =logging.getLogger(__name__)
 
 WAIT_S = 600.0  # how long a question back waits for its answer
 MAX_REPLY_WORDS = 4  # a longer message is a new message, not a name
@@ -64,7 +66,7 @@ class Askers:
         if waiting is None:
             return None
         question, at = waiting
-        name = message.strip().strip(".!«»\"'").strip()
+        name = _name(message)
         if (self._clock() - at > WAIT_S or not name or "?" in name
                 or len(name.split()) > MAX_REPLY_WORDS):
             return None
@@ -87,3 +89,14 @@ class Askers:
             except OSError as e:
                 log.warning("could not keep a name in %s: %s", self._path, e)
         log.info("an asker's name in the records was kept (user %s)", user_id)
+
+
+def _name(message: str) -> str:
+    """The name in a reply, without the words people put before it (texts.ASKER_LEADS)."""
+    name = message.strip().strip(".!«»\"'").strip()
+    low = name.casefold()
+    for lead in sorted(texts.ASKER_LEADS, key=len, reverse=True):
+        if low.startswith(lead) and len(name) > len(lead) and not name[len(lead)].isalnum():
+            name = name[len(lead):].lstrip(" —-:,").strip(".!«»\"' ")
+            break
+    return name

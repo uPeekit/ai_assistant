@@ -135,18 +135,26 @@ def _extremes(header: list[str], rows: list[list[str]]) -> str:
         return ""
     label = (lambda r: r[0]) if not (header and header[0]) else (lambda r: "; ".join(r[:2]))
     lines = []
+    counts = []
     for i in range(1, max(len(r) for r in rows)):
         values = [(n, label(r)) for r in rows if i < len(r) and (n := _number(r[i])) is not None
                   and label(r)]
+        name = header[i] if i < len(header) and header[i] else \
+            texts.GOOGLE_COLUMN.format(n=i + 1)
+        # How many rows a column has a number in, for every column with any: "how many did
+        # X rate" needs the whole column, sparse ones too (someone who joined late).
+        if values:
+            counts.append(f"{name} {len(values)}")
         if len(values) < MIN_NUMBERS or len(values) * 2 < len(rows):
             continue
         values.sort(key=lambda v: -v[0])
         shown = lambda vs: ", ".join(f"{name} {n:g}" for n, name in vs)  # noqa: E731
-        name = header[i] if i < len(header) and header[i] else \
-            texts.GOOGLE_COLUMN.format(n=i + 1)
         lines.append(texts.GOOGLE_EXTREMES.format(
             column=name, top=shown(values[:EXTREMES]), bottom=shown(values[-EXTREMES:])))
-    return "\n".join(lines)
+    if not counts or (not lines and len(rows) < MIN_NUMBERS):
+        return ""  # a table that small is read whole anyway
+    return "\n".join([texts.GOOGLE_COUNTS.format(rows=len(rows), counts=", ".join(counts)),
+                      *lines])
 
 
 def sheet_sections(title: str, tabs: list[tuple[str, list[list]]]) -> list[Section]:

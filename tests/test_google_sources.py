@@ -420,3 +420,18 @@ def test_a_question_naming_a_row_reads_the_row_before_the_tables_summaries():
 
     best = [f.title for f in _ranked("какая книга лучшая по оценкам", tabs)]
     assert best[0].endswith("(сводка)")  # nothing named in the rows: the summary leads
+
+
+def test_a_tables_summary_counts_every_column_even_a_sparse_one():
+    """«How many books did I read» is the number of rows with the asker's grade: the whole
+    column, which reaches the model a block at a time — and a member who joined late has a
+    column too sparse for the highs and lows."""
+    from app.google.sections import sheet_sections
+
+    header = ["", "avg", "аня", "новенький"]
+    rows = [[f"книга {i}", "4", "5", "3" if i < 2 else ""] for i in range(8)]
+    summary, *_ = sheet_sections("Оценки", [("all", [header, *rows])])
+
+    assert summary.summary
+    assert summary.text.startswith(texts.GOOGLE_COUNTS.format(
+        rows=8, counts="avg 8, аня 8, новенький 2"))

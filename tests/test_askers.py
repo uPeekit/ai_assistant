@@ -41,3 +41,12 @@ def test_an_unreadable_file_means_asking_again(tmp_path):
     path = tmp_path / "askers.json"
     path.write_text("{not json", encoding="utf-8")
     assert Askers(path).known(7) == ()
+
+
+def test_the_words_before_a_name_are_not_part_of_it():
+    askers = Askers()
+    for said, name in (("я женя", "женя"), ("Меня зовут Саша.", "Саша"), ("я — Оль", "Оль"),
+                       ("Яна", "Яна"), ("саша в", "саша в")):
+        askers.asked(1, 7, "q")
+        assert askers.reply(1, 7, said) == "q"
+        assert askers.known(7)[-1] == name
