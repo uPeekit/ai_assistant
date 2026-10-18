@@ -688,3 +688,38 @@ def test_google_sources_are_served_and_a_pasted_link_is_saved(settings, discover
             {"link": "https://example.com/x"}]})[0] == 400
     finally:
         s.stop()
+
+
+def test_watched_folders_and_syncthing_are_served_and_a_folder_is_saved(settings, discovery,
+                                                                        descriptions, tmp_path):
+    from app.watch.folders import Folders
+
+    folders = Folders(tmp_path / "folders.json")
+    s = AdminServer(settings, discovery, descriptions, folders=folders,
+                    folder_status=lambda: [{"id": "x", "title": "Runs", "ok": True,
+                                            "detail": "ok"}],
+                    sync_status=lambda: [{"name": "Phone", "ok": False, "detail": "away"}])
+    s.start()
+    try:
+        served = json.loads(_get(s, "/api/targets")[1])
+        assert served["folders"] == [] and served["folder_status"][0]["title"] == "Runs"
+        assert served["syncthing"] == [{"name": "Phone", "ok": False, "detail": "away"}]
+        status, body = _post(s, "/api/descriptions", {"targets": {}, "folders": [
+            {"path": "D:/runs", "title": "Runs", "pattern": "*.md", "instruction": "anything?"}]})
+        assert status == 200 and json.loads(body) == {"saved": 1}
+        [saved] = folders.all()
+        assert (saved.path, saved.pattern, saved.instruction) == ("D:/runs", "*.md", "anything?")
+        assert _post(s, "/api/descriptions", {"targets": {}, "folders": [
+            {"title": "no path"}]})[0] == 400
+    finally:
+        s.stop()
+
+
+def test_without_syncthing_the_page_is_told_so(settings, discovery, descriptions):
+    s = AdminServer(settings, discovery, descriptions)
+    s.start()
+    try:
+        served = json.loads(_get(s, "/api/targets")[1])
+        assert served["syncthing"] is None and "folders" not in served
+    finally:
+        s.stop()

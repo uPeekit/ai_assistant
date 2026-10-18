@@ -22,6 +22,7 @@ from app.reminders.store import ReminderStore
 from app.switches import Switches
 from app.tuning import Tuning
 from app.vault.index import VaultIndex
+from app.watch.folders import Folders
 
 log = logging.getLogger(__name__)
 
@@ -280,9 +281,17 @@ class _AdminHTTPServer(ThreadingHTTPServer):
         reminders: ReminderStore | None = None,
         sources: Sources | None = None,
         google_status: Callable[[], dict] | None = None,
+        folders: Folders | None = None,
+        folder_status: Callable[[], list] | None = None,
+        sync_status: Callable[[], list] | None = None,
     ) -> None:
         super().__init__(server_address, handler_cls)
         self.sources = sources
+        # Watched folders and Syncthing's health (app/watch/): the list the page edits, and
+        # what the last runs saw.
+        self.folders = folders
+        self.folder_status = folder_status
+        self.sync_status = sync_status
         self.google_status = google_status
         self.reminder_rules = reminder_rules
         self.reminders = reminders
@@ -370,6 +379,13 @@ class _Handler(BaseHTTPRequestHandler):
                                                           self.server.app_settings.timezone)
             payload["chat_choices"] = _chat_choices(self.server.app_settings,
                                                     self.server.chats)
+            if self.server.folders is not None:
+                payload["folders"] = self.server.folders.dump()
+                payload["folder_status"] = (self.server.folder_status()
+                                            if self.server.folder_status is not None else [])
+            # None: Syncthing is not watched on this machine (no config found).
+            payload["syncthing"] = (self.server.sync_status()
+                                    if self.server.sync_status is not None else None)
             if self.server.sources is not None:
                 payload["sources"] = self.server.sources.dump()
                 payload["google"] = (self.server.google_status()
@@ -438,6 +454,9 @@ class _Handler(BaseHTTPRequestHandler):
                     raise ValueError("'tuning' must be an object")
                 if self.server.tuning is not None:
                     saved += self.server.tuning.save(tuning)
+            folders = body.get("folders") if isinstance(body, dict) else None
+            if folders is not None and self.server.folders is not None:
+                saved += self.server.folders.save(folders)  # ValueError: no path
             sources = body.get("sources") if isinstance(body, dict) else None
             if sources is not None and self.server.sources is not None:
                 saved += self.server.sources.save(sources)  # ValueError: a bad link
@@ -478,8 +497,13 @@ class AdminServer:
         *, chats: Chats | None = None, vault_index: VaultIndex | None = None,
         reminder_rules: ReminderRules | None = None, reminders: ReminderStore | None = None,
         sources: Sources | None = None, google_status: Callable[[], dict] | None = None,
+        folders: Folders | None = None, folder_status: Callable[[], list] | None = None,
+        sync_status: Callable[[], list] | None = None,
     ) -> None:
         self._settings = settings
+        self._folders = folders
+        self._folder_status = folder_status
+        self._sync_status = sync_status
         self._sources = sources
         self._google_status = google_status
         self._reminder_rules = reminder_rules
@@ -520,6 +544,9 @@ class AdminServer:
             self._reminders,
             self._sources,
             self._google_status,
+            self._folders,
+            self._folder_status,
+            self._sync_status,
         )
         self._thread = threading.Thread(
             target=self._httpd.serve_forever, name="admin-http", daemon=True

@@ -95,6 +95,8 @@
     <label><input type="checkbox" id="switch-obsidian"> Obsidian (хранилище заметок)</label>
     <label><input type="checkbox" id="switch-linker"> Ссылки между заметками (Obsidian)</label>
     <label><input type="checkbox" id="switch-mail"> Сводка по почте</label>
+    <label><input type="checkbox" id="switch-syncthing"> Следить за Syncthing</label>
+    <label><input type="checkbox" id="switch-folders"> Следить за папками</label>
   </div>
 </details>
 
@@ -244,6 +246,34 @@
   <button type="button" id="add-source">Добавить источник</button>
 </details>
 
+<details>
+  <summary>Syncthing</summary>
+  <p class="hint">
+    Бот проверяет Syncthing на этом компьютере каждые 5 минут и пишет вам, если Syncthing здесь
+    не отвечает, устройство давно не на связи или в папке ошибки, — один раз, когда сломалось,
+    и один раз, когда снова работает. Включается переключателем «Следить за Syncthing».
+  </p>
+  <label class="field">Через сколько минут без связи сообщать
+    <input type="text" id="tuning-sync_after" placeholder="60">
+  </label>
+  <div id="syncthing"></div>
+</details>
+
+<details>
+  <summary>Папки</summary>
+  <p class="hint">
+    Папки на этом компьютере, за которыми следит бот. В часы сводки по почте он читает новые
+    файлы (уже дописанные — не менявшиеся 15 минут) и пишет вам по вашему указанию: что
+    искать в файлах и о чём сообщать. Нет новых файлов — молчит; всё в порядке — одна строка.
+    Каждый файл читается один раз.
+  </p>
+  <div id="folders"></div>
+  <label class="field">Новая папка — путь на этом компьютере
+    <input type="text" id="new-folder-path" placeholder="D:\reports">
+  </label>
+  <button type="button" id="add-folder">Добавить папку</button>
+</details>
+
 <div id="save-bar">
   <button id="save-button" type="button">Сохранить</button>
   <span id="save-status"></span>
@@ -254,7 +284,8 @@
 
 var state = { targets: [], inboxLocked: false, chats: [], seen: [], chatsOn: false,
               rules: [], reminders: [], chatChoices: [], remindersOn: false,
-              sources: [], google: {}, sourcesOn: false };
+              sources: [], google: {}, sourcesOn: false,
+              folders: [], folderStatus: [], foldersOn: false, syncthing: null };
 
 function el(tag, attrs, children) {
   var node = document.createElement(tag);
@@ -458,7 +489,7 @@ function load() {
       document.getElementById("workspace-note").value = data.workspace_note || "";
       var tuning = data.tuning || {};
       ["bot_name", "agenda_at", "mail_at", "web_words", "countdown_tag", "date_props",
-       "research_note", "linker_note", "never_open"].forEach(function (name) {
+       "research_note", "linker_note", "never_open", "sync_after"].forEach(function (name) {
         var el = document.getElementById("tuning-" + name);
         if (el) { el.value = tuning[name] || ""; }
       });
@@ -470,7 +501,7 @@ function load() {
       document.getElementById("mail-buckets").value =
         (data.mail_buckets || "").split(/,\s*(?=[^\s,:]+\s*:)/).join("\n");
       var switches = data.switches || {};
-      ["notion", "obsidian", "linker", "mail"].forEach(function (name) {
+      ["notion", "obsidian", "linker", "mail", "syncthing", "folders"].forEach(function (name) {
         var el = document.getElementById("switch-" + name);
         el.checked = switches[name] !== false;
       });
@@ -490,6 +521,12 @@ function load() {
       state.sources = data.sources || [];
       state.google = data.google || {};
       renderSources();
+      state.foldersOn = !!data.folders;
+      state.folders = data.folders || [];
+      state.folderStatus = data.folder_status || [];
+      renderFolders();
+      state.syncthing = data.syncthing === undefined ? null : data.syncthing;
+      renderSync();
       showLoadError("");
       showFetchedAt(data.fetched_at || null);
       render();
@@ -755,6 +792,101 @@ document.getElementById("add-source").addEventListener("click", function () {
   renderSources();
 });
 
+// ---- watched folders and Syncthing ----------------------------------------------------------
+
+function statusLine(row) {
+  var p = document.createElement("p");
+  p.className = "hint";
+  p.textContent = (row.ok ? "✅ " : "⚠️ ") + (row.name ? row.name + ": " : "") + row.detail;
+  return p;
+}
+
+function renderSync() {
+  var root = document.getElementById("syncthing");
+  root.textContent = "";
+  if (state.syncthing === null) {
+    root.appendChild(statusLine({ok: false, detail:
+      "Syncthing на этом компьютере не найден (нет его config.xml) — не проверяется."}));
+    return;
+  }
+  if (!state.syncthing.length) {
+    root.appendChild(statusLine({ok: true, detail: "Ещё не проверялся."}));
+  }
+  state.syncthing.forEach(function (row) { root.appendChild(statusLine(row)); });
+}
+
+function renderFolders() {
+  var info = {};
+  state.folderStatus.forEach(function (s) { info[s.id] = s; });
+  var root = document.getElementById("folders");
+  root.textContent = "";
+  if (!state.folders.length) {
+    var empty = document.createElement("p");
+    empty.className = "hint";
+    empty.textContent = "Папок пока нет.";
+    root.appendChild(empty);
+  }
+  state.folders.forEach(function (folder, i) {
+    var box = document.createElement("div");
+    box.className = "target folder";
+    box.dataset.id = folder.id || "";
+    box.dataset.path = folder.path || "";
+    var head = document.createElement("h2");
+    head.textContent = folder.title || folder.path;
+    box.appendChild(head);
+    var path = document.createElement("p");
+    path.className = "hint";
+    path.textContent = folder.path;
+    box.appendChild(path);
+    if (info[folder.id]) { box.appendChild(statusLine(info[folder.id])); }
+    box.appendChild(checkbox("folder-enabled", folder.enabled !== false, "Следить"));
+    box.appendChild(labelled("Название (необязательно)", textInput("folder-title",
+                                                                     folder.title)));
+    box.appendChild(labelled("Какие файлы (шаблон, например *.md; пусто — все)",
+                             textInput("folder-pattern", folder.pattern === "*" ? "" :
+                                       folder.pattern)));
+    var note = document.createElement("textarea");
+    note.className = "folder-instruction";
+    note.value = folder.instruction || "";
+    box.appendChild(labelled("Что делать с новыми файлами", note));
+    var remove = document.createElement("button");
+    remove.type = "button";
+    remove.textContent = "Убрать папку";
+    remove.addEventListener("click", function () {
+      state.folders = collectFolders();
+      state.folders.splice(i, 1);
+      renderFolders();
+    });
+    box.appendChild(remove);
+    root.appendChild(box);
+  });
+}
+
+function collectFolders() {
+  var boxes = Array.prototype.slice.call(document.querySelectorAll("#folders .folder"));
+  return boxes.map(function (box) {
+    var folder = {
+      path: box.dataset.path,
+      title: box.querySelector(".folder-title").value,
+      pattern: box.querySelector(".folder-pattern").value,
+      instruction: box.querySelector(".folder-instruction").value,
+      enabled: box.querySelector(".folder-enabled").checked,
+    };
+    if (box.dataset.id) { folder.id = box.dataset.id; }
+    return folder;
+  });
+}
+
+document.getElementById("add-folder").addEventListener("click", function () {
+  var input = document.getElementById("new-folder-path");
+  var path = input.value.trim();
+  if (!path) { return; }
+  state.folders = collectFolders();
+  state.folders.push({path: path, title: "", pattern: "", instruction: "", enabled: true});
+  input.value = "";
+  renderFolders();
+});
+
 // ---- reminders ----------------------------------------------------------------------------
 
 function chatName(c) {
@@ -937,7 +1069,8 @@ function collectBody() {
     targets: targets,
     workspace_note: document.getElementById("workspace-note").value,
     tuning: ["bot_name", "agenda_at", "mail_at", "web_words", "countdown_tag", "date_props",
-             "research_note", "linker_note", "never_open"].reduce(function (acc, name) {
+             "research_note", "linker_note", "never_open", "sync_after"].reduce(
+      function (acc, name) {
       var el = document.getElementById("tuning-" + name);
       if (el) { acc[name] = el.value; }
       return acc;
@@ -950,12 +1083,15 @@ function collectBody() {
       obsidian: document.getElementById("switch-obsidian").checked,
       linker: document.getElementById("switch-linker").checked,
       mail: document.getElementById("switch-mail").checked,
+      syncthing: document.getElementById("switch-syncthing").checked,
+      folders: document.getElementById("switch-folders").checked,
     },
   };
   // Only when the server sent chats: an empty list would otherwise remove every group.
   if (state.chatsOn) { body.chats = collectChats(); }
   // Same rule: only what the server sent can be saved back, or an empty list wipes them.
   if (state.sourcesOn) { body.sources = collectSources(); }
+  if (state.foldersOn) { body.folders = collectFolders(); }
   if (state.remindersOn) {
     body.reminder_rules = collectRules();
     body.cancel_reminders = collectCancelled();

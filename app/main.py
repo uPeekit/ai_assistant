@@ -643,21 +643,24 @@ def build(
     speech = speech_factory(settings)
     buckets_file = Buckets(settings.db_path.with_name("mail_buckets.txt"),
                            settings.mail_buckets or texts.MAIL_BUCKETS_DEFAULT)
+    sync_watch, sync_health = _syncthing_watch(settings, switches, tuning, lambda: telegram_app)
+    folder_digest, folder_watch, close_folders = _folder_digest(
+        settings, switches, tuning, folders, lambda: telegram_app)
     admin = AdminServer(settings, discovery, descriptions, note, switches, buckets_file,
                         tuning, chats=chats,
                         vault_index=vault.index if vault is not None else None,
                         reminder_rules=reminder_rules, reminders=reminder_store,
                         sources=sources,
-                        google_status=google.status if google is not None else None)
+                        google_status=google.status if google is not None else None,
+                        folders=folders,
+                        folder_status=folder_watch.status if folder_watch is not None else None,
+                        sync_status=sync_health.status if sync_health is not None else None)
     reminders = _reminder_scheduler(settings, reminder_store, reminder_rules, vault, chats,
                                     tuning, lambda: telegram_app)
     sweeper = Sweeper(orchestrator.flush_expired_sessions, settings.session_ttl_s / 3)
     daily = _daily_digest(settings, vault, switches, tuning, health, lambda: telegram_app)
     mail, mail_digest = _mail_digest(settings, switches, buckets_file, tuning, health,
                                      lambda: telegram_app)
-    sync_watch, sync_health = _syncthing_watch(settings, switches, tuning, lambda: telegram_app)
-    folder_digest, folder_watch, close_folders = _folder_digest(
-        settings, switches, tuning, folders, lambda: telegram_app)
 
     token = settings.telegram_bot_token.get_secret_value() or _PLACEHOLDER_TOKEN
     telegram_app = Application.builder().token(token).build()
