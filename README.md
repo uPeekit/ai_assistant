@@ -302,6 +302,21 @@ column is what). The bot passes that text to the model as it is; nothing about a
 built in. Your private chat uses every source and may also search the rest of your Drive; a
 group uses only the sources ticked for it.
 
+## Watching Syncthing and folders
+
+**Syncthing.** If the vault reaches this PC through Syncthing, the bot checks Syncthing's own API
+on this machine every 5 minutes (address and key from its `config.xml`; `SYNCTHING_CONFIG` if it
+is not in the Windows default place) and tells you once when Syncthing here stops answering, a
+device has been away longer than the admin page's threshold (60 minutes by default) or a folder
+has errors — and once when it is back. Paused devices and folders are left alone.
+
+**Watched folders.** Under **Папки** on the admin page, list folders on this machine that
+something else writes files into — a scheduled job's reports, say — each with an optional file
+pattern and your instruction: what to look for and what to tell you. At the mail digest's times
+(even with the mail digest off) the bot reads the new files that have stopped changing (15
+minutes), each once, and writes to you: nothing when there is nothing new, one line when all is
+well, otherwise what needs you, with the file it came from. Needs `ANTHROPIC_API_KEY`.
+
 ## Teaching the bot your workspace
 
 The admin page (**`http://127.0.0.1:8787`**, on the machine the bot runs on) is where you tell

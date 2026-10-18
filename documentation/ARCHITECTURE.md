@@ -830,6 +830,21 @@ Drive says the file changed. Access is the owner's own OAuth client (`data/googl
 type "Desktop app") and sign-in (`tools/google_login.py` → `data/google_token.json`); without
 either file the Google side is off.
 
+**Watchers** (`app/watch/`). `syncthing.py` reads Syncthing's REST API on this PC (GET only;
+address and API key from its `config.xml`, this PC's own device left out through
+`/rest/system/status`) every 5 minutes (`SYNCTHING_EVERY_S`, a `Sweeper` loop) and
+`SyncthingHealth` turns observations into one message when a problem starts and one when it
+ends: the PC's Syncthing not answering, a device disconnected for `Tuning.sync_after` minutes as
+the bot itself observed it (Syncthing's last-seen would make a PC waking from sleep report a
+phone that was there), a folder with errors; paused ones never. What was told is kept in
+`data/syncthing_state.json`. `folders.py`: the admin page's «Папки» (`data/folders.json`: path,
+pattern, the owner's instruction) read by a `DailyMessage` at `Tuning.mail_at`. A folder just
+added takes a baseline; afterwards a new file that has not changed for 15 minutes is read and
+sent with the instruction to the model (structured `{attention, text}`), and is reported once
+— only after the model answered, so a failed call leaves it for next time
+(`data/folders_state.json`). No folder's meaning is in code. Both have a switch on the admin
+page and go to the owners' private chats only.
+
 ## 15. Releases and migrations
 
 `pyproject.toml`'s `[project].version` is the version source (`app/version.py`); `release.py` bumps it, commits, tags, and builds `dist/ai_assistant-X.Y.Z.zip` (app files + `VERSION` + `manifest.json` with a lock hash). Production is a separate directory (e.g. `C:\apps\ai_assistant`) with its own `.env`/`.venv`/`data`, populated only from a release zip via `deploy/install.ps1` or `deploy/update.ps1` (`apply_update.py`), never `git clone`; `uv sync --frozen --no-dev` (re-run on updates only when the lock hash changed) provisions the venv. Schema migrations (`migrations/NNNN_name.sql`, journaled in `schema_migrations`) are applied only by the installer/updater or `tools/migrate.py` — never implicitly. At startup, `AuditStore.assert_schema_current()` verifies no migration is pending and refuses to run otherwise. See [RELEASE.md](../RELEASE.md) for the full process.
