@@ -617,3 +617,22 @@ MAIL_BUCKETS_DEFAULT = (
     "personal: письмо от живого человека лично тебе\n"
     "other: всё остальное"
 )
+
+# ---- Syncthing health (app/watch/syncthing.py) ------------------------------------------------
+
+SYNC_PC_DOWN = "⚠️ Syncthing на этом компьютере не отвечает — хранилище не синхронизируется."
+SYNC_PC_BACK = "✅ Syncthing на этом компьютере снова работает."
+SYNC_DEVICE_GONE = ("⚠️ Syncthing: «{name}» не на связи больше {minutes} мин "
+                    "(последний раз — {seen}). Изменения оттуда сюда не доходят.")
+SYNC_DEVICE_BACK = "✅ Syncthing: «{name}» снова на связи."
+SYNC_FOLDER_ERRORS = "⚠️ Syncthing: в папке «{name}» ошибки синхронизации ({n})."
+SYNC_FOLDER_OK = "✅ Syncthing: папка «{name}» снова без ошибок."
+# The admin page's status rows.
+SYNC_THIS_PC = "Этот компьютер"
+SYNC_RUNNING = "работает"
+SYNC_NOT_RUNNING = "не отвечает"
+SYNC_CONNECTED = "на связи"
+SYNC_PAUSED = "на паузе"
+SYNC_LAST_SEEN = "нет связи, последний раз — {seen}"
+SYNC_ERRORS = "ошибок: {n}"
+SYNC_IN_ORDER = "в порядке"

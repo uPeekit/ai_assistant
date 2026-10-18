@@ -68,6 +68,9 @@ class Settings(BaseSettings):
     # Nothing about this pipeline depends on Notion, so NOTION_ENABLED=false leaves a working
     # Obsidian-only bot.
     obsidian_vault: Path | None = None
+    # Syncthing's own config.xml, for its API address and key (app/watch/syncthing.py). Empty:
+    # where Syncthing keeps it on Windows, %LOCALAPPDATA%\Syncthing\config.xml.
+    syncthing_config: Path | None = None
     # When the bot sends the morning agenda from the vault (HH:MM, in TIMEZONE). Empty: never.
     daily_digest_at: str = "09:00"
     obsidian_enabled: bool = True
