@@ -36,6 +36,7 @@ class Defaults:
     countdown_tag: str
     date_props: tuple[str, ...]
     never_open: tuple[str, ...] = NEVER_OPEN_DEFAULT
+    sync_after: int = 60  # minutes a Syncthing device may be away before the owner is told
 
 
 class Tuning:
@@ -100,6 +101,7 @@ class Tuning:
             "research_note": self.research_note,
             "linker_note": self.linker_note,
             "never_open": ", ".join(self.never_open),
+            "sync_after": str(self.sync_after),
         }
 
     # ---- fields ----------------------------------------------------------------------
@@ -146,6 +148,13 @@ class Tuning:
         """Sites whose links are never read: documents and banks by default. A pasted link
         counts as its site, so either form works on the admin page."""
         return tuple(_site(entry) for entry in self._list("never_open", self._defaults.never_open))
+
+    @property
+    def sync_after(self) -> int:
+        """Minutes a Syncthing device may be disconnected before the owner hears of it."""
+        text = self._text("sync_after", "")
+        return int(text) if text.isdigit() and 0 < int(text) <= 7 * 24 * 60 \
+            else self._defaults.sync_after
 
     @property
     def research_note(self) -> str:

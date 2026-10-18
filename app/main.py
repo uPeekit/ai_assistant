@@ -37,10 +37,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import sys
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass
+from datetime import timedelta
 from pathlib import Path
 from typing import NoReturn
 
@@ -111,13 +113,17 @@ from app.vault.linker import Linker
 from app.vault.omnisearch import OmniSearch
 from app.vault.pipeline import VaultPipeline
 from app.vault.scope import ScopedIndex
-from app.vault.staged import StagedFiler
+from app.vault.staged import StagedFiler, claude_ask
 from app.vault.writer import VaultWriter
+from app.watch.folders import Folders, FolderWatch
+from app.watch.syncthing import SyncthingHealth, load_api
 from app.web.links import LinkReader
 from app.web.reader import Reader
 from app.web.sites import load as load_sites
 
 log = logging.getLogger(__name__)
+
+SYNCTHING_EVERY_S = 300.0  # how often Syncthing's health is checked
 
 EXIT_CONFIG = 2
 EXIT_NOTION_AUTH = 3
@@ -392,6 +398,71 @@ def _daily_digest(settings: Settings, vault: VaultPipeline | None, switches: Swi
                                          "agenda"))
 
 
+async def _to_owners(application: Callable[[], Application], settings: Settings,
+                     text: str) -> None:
+    """A message the bot sends on its own, to each owner's private chat."""
+    for chat_id in sorted(settings.allowed_user_ids):
+        try:
+            await send_text(application().bot, chat_id, text)
+        except Exception:
+            log.exception("could not send a watcher's message to a chat")
+
+
+def _syncthing_watch(settings: Settings, switches: Switches, tuning: Tuning,
+                     application: Callable[[], Application],
+                     ) -> tuple[Sweeper | None, SyncthingHealth | None]:
+    """Syncthing checked every few minutes (app/watch/syncthing.py). Off without its config on
+    this machine: a PC that does not run Syncthing hears nothing about it."""
+    path = settings.syncthing_config or (
+        Path(os.environ.get("LOCALAPPDATA", "")) / "Syncthing" / "config.xml")
+    if load_api(path) is None:
+        log.info("syncthing: no readable config at %s; not watched", path)
+        return None, None
+    health = SyncthingHealth(settings.db_path.with_name("syncthing_state.json"),
+                             after=lambda: timedelta(minutes=tuning.sync_after),
+                             zone=settings.timezone)
+
+    async def check() -> None:
+        if not switches.get("syncthing"):
+            return
+        api = load_api(path)  # read every time: a device renamed or added is seen at once
+        if api is None:
+            return
+        for text in health.update(await api.observe(), api.devices, api.folders):
+            await _to_owners(application, settings, text)
+
+    return Sweeper(check, SYNCTHING_EVERY_S), health
+
+
+def _folder_digest(settings: Settings, switches: Switches, tuning: Tuning, folders: Folders,
+                   application: Callable[[], Application],
+                   ) -> tuple[DailyMessage | None, FolderWatch | None,
+                              Callable[[], Awaitable[None]] | None]:
+    """Watched folders read at the mail digest's times (app/watch/folders.py), whether or not
+    the mail digest itself is on. Needs Claude: the files are read with the owner's words."""
+    key = settings.anthropic_api_key.get_secret_value()
+    if not key or not settings.allowed_user_ids:
+        return None, None, None
+    sdk = anthropic.AsyncAnthropic(api_key=key, timeout=90.0, max_retries=1)
+    watch = FolderWatch(folders, settings.db_path.with_name("folders_state.json"),
+                        claude_ask(sdk, settings.vault_answer_model or settings.claude_model,
+                                   think=False))
+
+    async def send() -> None:
+        if not switches.get("folders"):
+            return
+        text = await watch.run()
+        if text:
+            await _to_owners(application, settings, text)
+        else:
+            log.info("watched folders: nothing new, nothing sent")
+
+    return (DailyMessage(send, lambda: parse_times(tuning.mail_at), settings.timezone,
+                         remember=LastRun(settings.db_path.with_name("daily_state.json"),
+                                          "folders")),
+            watch, sdk.close)
+
+
 def _mail_digest(settings: Settings, switches: Switches, buckets_file: Buckets, tuning: Tuning,
                  health: Health, application: Callable[[], Application],
                  ) -> tuple[MailService | None, DailyMessage | None]:
@@ -537,6 +608,7 @@ def build(
     # Google Docs/Sheets/Forms a question may be answered from (app/google/), when the owner
     # has set up a Google client (data/google_client.json) and signed in.
     sources = Sources(settings.db_path.with_name("sources.json"))
+    folders = Folders(settings.db_path.with_name("folders.json"))
     google = _google_sources(settings, sources)
     vault = _vault_pipeline(settings, switches, tuning, health, rewriter, editor,
                             reminders=reminder_store, google=google)
@@ -583,6 +655,9 @@ def build(
     daily = _daily_digest(settings, vault, switches, tuning, health, lambda: telegram_app)
     mail, mail_digest = _mail_digest(settings, switches, buckets_file, tuning, health,
                                      lambda: telegram_app)
+    sync_watch, sync_health = _syncthing_watch(settings, switches, tuning, lambda: telegram_app)
+    folder_digest, folder_watch, close_folders = _folder_digest(
+        settings, switches, tuning, folders, lambda: telegram_app)
 
     token = settings.telegram_bot_token.get_secret_value() or _PLACEHOLDER_TOKEN
     telegram_app = Application.builder().token(token).build()
@@ -600,6 +675,10 @@ def build(
                 daily.start()
             if mail_digest is not None:
                 mail_digest.start()
+            if sync_watch is not None:
+                sync_watch.start()
+            if folder_digest is not None:
+                folder_digest.start()
             reminders.start()
             if google is not None:
                 # Behind the start: the first question finds the copies already made.
@@ -616,6 +695,12 @@ def build(
         admin.stop()
         if mail_digest is not None:
             await mail_digest.stop()
+        if sync_watch is not None:
+            await sync_watch.stop()
+        if folder_digest is not None:
+            await folder_digest.stop()
+        if close_folders is not None:
+            await close_folders()
         if mail is not None:
             await mail.aclose()
         if vault is not None:

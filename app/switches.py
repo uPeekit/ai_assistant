@@ -15,7 +15,7 @@ log = logging.getLogger(__name__)
 # obsidian: the vault pipeline
 # linker:   the pass that adds [[links]] to a note after the reply
 # mail:     the read-only inbox digest
-NAMES = ("notion", "obsidian", "linker", "mail")
+NAMES = ("notion", "obsidian", "linker", "mail", "syncthing", "folders")
 
 
 class Switches:
