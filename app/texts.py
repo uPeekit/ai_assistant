@@ -627,6 +627,8 @@ SYNC_DEVICE_GONE = ("⚠️ Syncthing: «{name}» не на связи боль�
 SYNC_DEVICE_BACK = "✅ Syncthing: «{name}» снова на связи."
 SYNC_FOLDER_ERRORS = "⚠️ Syncthing: в папке «{name}» ошибки синхронизации ({n})."
 SYNC_FOLDER_OK = "✅ Syncthing: папка «{name}» снова без ошибок."
+SYNC_FOLDER_STOPPED = "⚠️ Syncthing остановил папку «{name}»: {error}."
+SYNC_STOPPED = "остановлена: {error}"
 # The admin page's status rows.
 SYNC_THIS_PC = "Этот компьютер"
 SYNC_RUNNING = "работает"

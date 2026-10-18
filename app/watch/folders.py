@@ -34,6 +34,7 @@ from app.vault.filer import FilerError
 
 log = logging.getLogger(__name__)
 
+LATER = object()  # a file that could not be opened now: read it next time
 QUIET = timedelta(minutes=15)  # changed more recently than this: still being written
 MAX_CHARS = 40_000  # of all a folder's new files together, per run
 MAX_TOKENS = 1_500
@@ -136,7 +137,12 @@ class FolderWatch:
     async def run(self) -> str:
         """The message for one digest time: a part per folder with news, "" when none has."""
         parts = []
-        for folder in self._folders.all():
+        folders = self._folders.all()
+        # A folder taken off the list forgets its files: added again, it takes a new baseline
+        # instead of reporting all that was written while it was away.
+        for gone in set(self._state) - {f.id for f in folders}:
+            del self._state[gone]
+        for folder in folders:
             if not folder.enabled:
                 continue
             try:
@@ -169,18 +175,24 @@ class FolderWatch:
             return ""
         blocks, sent, budget = [], [], self._max_chars
         for name in new:
-            text = self._text(Path(folder.path) / name)
-            if text is None:  # not a text file: never worth a model call
+            read = self._text(Path(folder.path) / name, self._max_chars)
+            if read is LATER:
+                continue
+            if read is None:  # not a text file: never worth a model call
                 reported[name] = list(listing[name])
                 continue
-            if budget <= 0:
+            text, longer = read
+            if blocks and (longer or len(text) > budget):
+                # A cut would lose the end, where the asks tend to be: it waits for the next
+                # run. Only a file over the cap on its own is cut.
                 break
             cut = text[:budget]
             budget -= len(cut)
             sent.append(name)
             blocks.append(P.FOLDER_FILE.format(
                 name=name, when=datetime.fromtimestamp(listing[name][1]).strftime("%d.%m %H:%M"),
-                text=cut + (f"\n{texts.FOLDER_CUT}" if len(cut) < len(text) else "")))
+                text=cut + (f"\n{texts.FOLDER_CUT}" if longer or len(cut) < len(text)
+                            else "")))
         if not blocks:
             self._seen(folder, listing)
             return ""
@@ -214,17 +226,22 @@ class FolderWatch:
         return out
 
     @staticmethod
-    def _text(path: Path) -> str | None:
+    def _text(path: Path, limit: int):
+        """(text, longer than read) for a text file; None for one that is not text; LATER for
+        one that cannot be opened now (locked by its writer). Reads at most what the cap can
+        use, never a whole video someone dropped in the folder."""
         try:
-            data = path.read_bytes()
+            with path.open("rb") as f:
+                data = f.read(limit * 4 + 4)  # a character is at most four bytes
+                longer = bool(f.read(1))
         except OSError:
+            return LATER
+        if b"\x00" in data[:8192]:
             return None
-        if b"\x00" in data:
+        text = data.decode("utf-8", errors="replace")
+        if text.count("\ufffd") > 2 + len(text) // 100:  # not UTF-8 text
             return None
-        try:
-            return data.decode("utf-8")
-        except UnicodeDecodeError:
-            return None
+        return text.rstrip("\ufffd"), longer
 
     def _seen(self, folder: Folder, listing: dict[str, tuple[int, float]]) -> None:
         last = max((m for _, m in listing.values()), default=None)

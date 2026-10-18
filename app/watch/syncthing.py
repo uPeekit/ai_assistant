@@ -36,6 +36,10 @@ log = logging.getLogger(__name__)
 
 TIMEOUT_S = 5.0
 PC = "pc"
+# Longer than this between two checks (the PC slept, the bot was stopped) and nothing was
+# observed meanwhile: a device's clock not yet told about starts again.
+GAP_S = 15 * 60
+LOOPBACK = ("127.0.0.1", "localhost", "[::1]")
 
 
 @dataclass(frozen=True)
@@ -45,13 +49,17 @@ class Observation:
     last_seen: dict[str, datetime | None] = field(default_factory=dict)
     folder_errors: dict[str, int] = field(default_factory=dict)
     paused: frozenset[str] | set[str] = frozenset()
+    # Folders Syncthing stopped (path or marker gone, disk not mounted), with its reason.
+    folder_stopped: dict[str, str] = field(default_factory=dict)
 
 
 class SyncthingApi:
     def __init__(self, base_url: str, api_key: str, devices: dict[str, str],
                  folders: dict[str, str], paused: set[str], *,
-                 http: httpx.AsyncClient | None = None) -> None:
+                 http: httpx.AsyncClient | None = None, verify: bool = True) -> None:
         self.base_url = base_url.rstrip("/")
+        # Syncthing's GUI certificate is self-signed: on this PC the API key is the check.
+        self.verify = verify
         self.api_key = api_key
         self.devices = devices
         self.folders = folders
@@ -60,20 +68,22 @@ class SyncthingApi:
 
     async def observe(self) -> Observation:
         """What Syncthing says now; `running=False` when it does not answer at all."""
-        http = self._http or httpx.AsyncClient(timeout=TIMEOUT_S)
+        http = self._http or httpx.AsyncClient(timeout=TIMEOUT_S, verify=self.verify)
         try:
             get = lambda path, **params: self._get(http, path, params)  # noqa: E731
             await get("/rest/system/ping")
             me = (await get("/rest/system/status")).get("myID", "")
             connections = (await get("/rest/system/connections")).get("connections", {})
             stats = await get("/rest/stats/device")
-            errors = {}
+            errors, stopped = {}, {}
             for folder in self.folders:
                 if folder in self.paused:
                     continue
                 status = await get("/rest/db/status", folder=folder)
                 errors[folder] = int(status.get("errors") or 0) + int(
                     status.get("pullErrors") or 0)
+                if status.get("state") == "error" or status.get("error"):
+                    stopped[folder] = str(status.get("error") or status.get("state"))
         except (httpx.HTTPError, ValueError) as e:
             log.info("syncthing: the API did not answer (%s)", type(e).__name__)
             return Observation(False)
@@ -85,7 +95,7 @@ class SyncthingApi:
             True,
             connected={d: bool((connections.get(d) or {}).get("connected")) for d in devices},
             last_seen={d: _when((stats.get(d) or {}).get("lastSeen")) for d in devices},
-            folder_errors=errors, paused=set(self.paused))
+            folder_errors=errors, paused=set(self.paused), folder_stopped=stopped)
 
     async def _get(self, http: httpx.AsyncClient, path: str, params: dict) -> dict:
         resp = await http.get(f"{self.base_url}{path}", params=params or None,
@@ -134,30 +144,46 @@ def load_api(config_path: Path, own_id: str = "") -> SyncthingApi | None:
                 paused.add(folder_id)
     if address.startswith((":", "0.0.0.0")):
         address = "127.0.0.1" + address[address.index(":"):]
-    return SyncthingApi(f"{scheme}://{address}", key, devices, folders, paused)
+    host = address.rsplit(":", 1)[0]
+    return SyncthingApi(f"{scheme}://{address}", key, devices, folders, paused,
+                        verify=not (scheme == "https" and host in LOOPBACK))
 
 
 class SyncthingHealth:
     """Observations in, messages out: each problem told once, and its end told once."""
 
     def __init__(self, state_path: Path, *, after: Callable[[], timedelta],
-                 clock: Callable[[], float] = time.time, zone: str = "UTC") -> None:
+                 clock: Callable[[], float] = time.time, zone: str = "UTC",
+                 gap_s: float = GAP_S) -> None:
         self._path = state_path
         self._after = after
         self._clock = clock
         self._zone = ZoneInfo(zone)
+        self._gap = gap_s
         self._last: Observation | None = None
         self._names: tuple[dict[str, str], dict[str, str]] = ({}, {})
+        self._state: dict[str, dict] = {}
+        self._checked: float | None = None
         try:
             raw = json.loads(state_path.read_text(encoding="utf-8"))
-            self._state: dict[str, dict] = raw if isinstance(raw, dict) else {}
+            if isinstance(raw, dict):
+                self._state = raw.get("problems") if isinstance(raw.get("problems"),
+                                                                dict) else {}
+                checked = raw.get("checked")
+                self._checked = float(checked) if isinstance(checked, int | float) else None
         except (OSError, ValueError):
-            self._state = {}
+            pass
 
     def update(self, obs: Observation, devices: dict[str, str],
                folders: dict[str, str]) -> list[str]:
         now = self._clock()
         self._last, self._names = obs, (devices, folders)
+        if self._checked is not None and now - self._checked > self._gap:
+            # Nothing was seen in between: what was not told yet is counted from now.
+            for entry in self._state.values():
+                if not entry.get("told"):
+                    entry["since"] = now
+        self._checked = now
         bad: dict[str, str] = {}  # problem -> the message telling it
         good: dict[str, str] = {}  # problem -> the message telling its end
         if not obs.running:
@@ -184,7 +210,10 @@ class SyncthingHealth:
                 if folder in obs.paused:
                     self._state.pop(key, None)
                     continue
-                if n:
+                if folder in obs.folder_stopped:
+                    bad[key] = texts.SYNC_FOLDER_STOPPED.format(
+                        name=name, error=obs.folder_stopped[folder])
+                elif n:
                     bad[key] = texts.SYNC_FOLDER_ERRORS.format(name=name, n=n)
                 else:
                     good[key] = texts.SYNC_FOLDER_OK.format(name=name)
@@ -220,14 +249,17 @@ class SyncthingHealth:
                          texts.SYNC_CONNECTED if connected else
                          texts.SYNC_LAST_SEEN.format(seen=self._seen(obs.last_seen.get(device)))})
         for folder, n in obs.folder_errors.items():
-            rows.append({"name": folders.get(folder, folder), "ok": not n,
-                         "detail": texts.SYNC_ERRORS.format(n=n) if n else texts.SYNC_IN_ORDER})
+            stopped = obs.folder_stopped.get(folder)
+            rows.append({"name": folders.get(folder, folder), "ok": not n and not stopped,
+                         "detail": texts.SYNC_STOPPED.format(error=stopped) if stopped else
+                         texts.SYNC_ERRORS.format(n=n) if n else texts.SYNC_IN_ORDER})
         return rows
 
     def _save(self) -> None:
         try:
             tmp = self._path.with_name(self._path.name + ".tmp")
-            tmp.write_text(json.dumps(self._state), encoding="utf-8")
+            tmp.write_text(json.dumps({"problems": self._state, "checked": self._checked}),
+                           encoding="utf-8")
             tmp.replace(self._path)
         except OSError as e:
             log.warning("could not keep the Syncthing state in %s: %s", self._path, e)

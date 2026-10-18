@@ -106,8 +106,11 @@ def test_a_device_alerts_only_after_the_threshold_of_the_bots_own_observation(tm
     health = _health(tmp_path, clock)
 
     assert health.update(up(connected=False), *NAMES) == []
-    clock.t += 59 * 60
-    assert health.update(up(connected=False), *NAMES) == []
+    for _ in range(11):  # checked every 5 minutes: 55 minutes away
+        clock.t += 5 * 60
+        assert health.update(up(connected=False), *NAMES) == []
+    clock.t += 4 * 60
+    assert health.update(up(connected=False), *NAMES) == []  # 59 minutes
     clock.t += 2 * 60
     [gone] = health.update(up(connected=False), *NAMES)
     assert gone == texts.SYNC_DEVICE_GONE.format(name="Phone", minutes=60, seen="18.10 07:00")
@@ -167,3 +170,50 @@ def test_status_rows_name_each_device_and_folder(tmp_path):
     rows = {r["name"]: r for r in health.status()}
     assert rows["Phone"]["ok"] is False and rows["Notes"]["ok"] is False
     assert rows[texts.SYNC_THIS_PC]["ok"] is True
+
+
+async def test_a_folder_syncthing_stopped_is_a_problem():
+    """A folder whose path or marker is gone: Syncthing answers 200 with state "error" and no
+    error count, and nothing syncs."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/rest/db/status":
+            return httpx.Response(200, json={"state": "error", "error": "folder marker missing",
+                                             "errors": 0, "pullErrors": 0})
+        return httpx.Response(200, json={})
+
+    obs = await _api(handler).observe()
+    assert obs.folder_stopped == {"notes-1": "folder marker missing"}
+
+
+def test_a_stopped_folder_alerts_with_syncthings_reason(tmp_path):
+    health = _health(tmp_path, Clock())
+    stopped = Observation(True, {"PHONE-ID": True}, {}, {"notes-1": 0},
+                          folder_stopped={"notes-1": "folder marker missing"})
+    assert health.update(stopped, *NAMES) == [
+        texts.SYNC_FOLDER_STOPPED.format(name="Notes", error="folder marker missing")]
+    assert health.update(up(), *NAMES) == [texts.SYNC_FOLDER_OK.format(name="Notes")]
+
+
+def test_a_gap_in_the_checks_starts_the_device_clock_again(tmp_path):
+    """The bot saw the phone away just before the PC slept; six hours later it has observed
+    nothing in between and must not report an hour's absence at the first check."""
+    clock = Clock()
+    health = _health(tmp_path, clock)
+    assert health.update(up(connected=False), *NAMES) == []
+    clock.t += 6 * 3600
+    assert health.update(up(connected=False), *NAMES) == []
+    told = []
+    for _ in range(13):  # then checked every 5 minutes, still away
+        clock.t += 5 * 60
+        told += health.update(up(connected=False), *NAMES)
+    assert len(told) == 1 and told[0].startswith(texts.SYNC_DEVICE_GONE.split("«")[0])
+    assert clock.t - 6 * 3600 >= 60 * 60
+
+
+def test_a_tls_gui_on_this_pc_is_reached_without_certificate_checks(tmp_path):
+    """Syncthing's GUI certificate is self-signed; on loopback the API key is the check."""
+    path = tmp_path / "config.xml"
+    path.write_text(CONFIG.replace('tls="false"', 'tls="true"'), encoding="utf-8")
+    api = load_api(path)
+    assert api.base_url == "https://127.0.0.1:8384" and api.verify is False
+    assert load_api(tmp_path / "missing.xml") is None

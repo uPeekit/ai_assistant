@@ -74,7 +74,7 @@ async def test_the_first_run_takes_a_baseline_and_sends_nothing(tmp_path):
 async def test_a_new_finished_file_is_read_with_the_owners_instruction(tmp_path):
     reports, watch, ask, _ = setup(tmp_path, {"attention": True, "text": "run-2: pay the bill"})
     await watch.run()
-    write(reports, "run-2.md", "## Needs the owner\n- pay the bill")
+    write(reports, "run-2.md", "## To do\n- pay the bill")
 
     message = await watch.run()
 
@@ -220,3 +220,64 @@ async def test_files_past_the_size_cap_wait_for_the_next_run(tmp_path):
 
     assert "a.md" in ask.shown[0] and "b.md" not in ask.shown[0]
     assert "b.md" in ask.shown[1]
+
+
+async def test_a_file_that_does_not_fit_whole_waits_and_a_lone_huge_one_is_cut(tmp_path):
+    """Cutting the last of several reports lost its end, where the asks are; it waits instead.
+    Only a file over the cap on its own is cut."""
+    reports, watch, ask, _ = setup(tmp_path, OK, OK)
+    watch._max_chars = 50
+    await watch.run()
+    write(reports, "a.md", "a" * 40, age_s=7200)
+    write(reports, "b.md", "START" + "b" * 50 + "ASK-AT-END", age_s=3600)
+
+    await watch.run()
+    await watch.run()
+
+    assert "a.md" in ask.shown[0] and "b.md" not in ask.shown[0]
+    assert "START" in ask.shown[1] and texts.FOLDER_CUT in ask.shown[1]
+
+
+async def test_a_huge_file_is_read_only_up_to_the_cap(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    reports, watch, ask, _ = setup(tmp_path, OK)
+    watch._max_chars = 50
+    await watch.run()
+    write(reports, "big.log", "x" * 2_000_000)
+    monkeypatch.setattr(Path, "read_bytes", lambda self: (_ for _ in ()).throw(
+        AssertionError("the whole file was read")))
+
+    await watch.run()
+
+    assert "x" * 50 in ask.shown[0] and "x" * 51 not in ask.shown[0]
+
+
+async def test_a_file_that_cannot_be_opened_now_waits_for_the_next_run(tmp_path, monkeypatch):
+    """A report locked by its writer or an antivirus on Windows is not "not text"."""
+    from pathlib import Path
+
+    reports, watch, ask, _ = setup(tmp_path, OK)
+    await watch.run()
+    write(reports, "run-2.md", "report")
+    real_open = Path.open
+
+    def locked(self, *a, **k):
+        raise PermissionError("locked")
+
+    monkeypatch.setattr(Path, "open", locked)
+    assert await watch.run() == "" and ask.shown == []
+    monkeypatch.setattr(Path, "open", real_open)
+    assert await watch.run() == texts.FOLDER_OK.format(title="Runs", n=1)
+
+
+async def test_a_removed_and_re_added_folder_takes_a_new_baseline(tmp_path):
+    reports, watch, ask, _ = setup(tmp_path)
+    await watch.run()
+    entry = watch._folders.dump()
+    watch._folders.save([])
+    await watch.run()
+    write(reports, "while-away.md", "old news")
+    watch._folders.save(entry)
+
+    assert await watch.run() == "" and ask.shown == []
