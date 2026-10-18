@@ -413,7 +413,9 @@ def _syncthing_watch(settings: Settings, switches: Switches, tuning: Tuning,
                      ) -> tuple[Sweeper | None, SyncthingHealth | None]:
     """Syncthing checked every few minutes (app/watch/syncthing.py). Off without its config on
     this machine: a PC that does not run Syncthing hears nothing about it."""
-    path = settings.syncthing_config or (
+    # An empty SYNCTHING_CONFIG= reads as Path("."), which is no config file at all.
+    given = settings.syncthing_config
+    path = given if given and str(given) not in ("", ".") else (
         Path(os.environ.get("LOCALAPPDATA", "")) / "Syncthing" / "config.xml")
     if load_api(path) is None:
         log.info("syncthing: no readable config at %s; not watched", path)

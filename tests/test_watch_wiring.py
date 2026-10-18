@@ -97,3 +97,16 @@ def test_watched_folders_run_at_the_mail_times_even_without_mail(env, tmp_path):
                                                Folders(tmp_path / "folders.json"), lambda: None)
     assert digest is not None and watch is not None
     assert [t.strftime("%H:%M") for t in digest._times] == ["12:00"]
+
+
+def test_an_empty_syncthing_setting_means_the_windows_default(env, tmp_path):
+    """`SYNCTHING_CONFIG=` copied from .env.example must not turn the check off."""
+    (tmp_path / "Syncthing").mkdir()
+    (tmp_path / "Syncthing" / "config.xml").write_text(
+        "<configuration><gui><address>127.0.0.1:1</address><apikey>k</apikey></gui>"
+        "</configuration>", encoding="utf-8")
+    env.setenv("LOCALAPPDATA", str(tmp_path))
+    env.setenv("SYNCTHING_CONFIG", "")
+    watch, _ = main._syncthing_watch(Settings(), _switches(tmp_path), _tuning(tmp_path),
+                                     lambda: None)
+    assert watch is not None
