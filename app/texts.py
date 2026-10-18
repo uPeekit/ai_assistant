@@ -636,3 +636,14 @@ SYNC_PAUSED = "на паузе"
 SYNC_LAST_SEEN = "нет связи, последний раз — {seen}"
 SYNC_ERRORS = "ошибок: {n}"
 SYNC_IN_ORDER = "в порядке"
+
+# ---- Watched folders (app/watch/folders.py) --------------------------------------------------
+
+FOLDER_OK = "✅ {title}: всё в порядке (новых файлов: {n})."
+FOLDER_ATTENTION = "📂 {title}:\n{text}"
+FOLDER_CUT = "[…дальше файл обрезан]"
+# The admin page's status line per folder.
+FOLDER_MISSING = "папки нет или она недоступна"
+FOLDER_MODEL_FAILED = "не удалось прочитать моделью — попробую в следующий раз"
+FOLDER_SEEN = "файлов: {n}, последний изменён {last}"
+FOLDER_NOT_YET = "ещё не проверялась"
