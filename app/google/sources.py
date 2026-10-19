@@ -168,6 +168,10 @@ class Found:
     instruction: str = ""
     # How well it matched the question; 0: offered by name only (app/vault/answer.py).
     score: float = 0.0
+    # The table the section belongs to (a sheet's tab) and its place among the sections: a
+    # plan's read step hands on a whole tab, in its own order.
+    group: str = ""
+    order: int = 0
 
     @property
     def name(self) -> str:
@@ -470,7 +474,9 @@ def _ranked(query: str, candidates: list[tuple[str, str, Section]]) -> list[Foun
     # shown the rest by name (app/vault/answer.py).
     ranked = {id(s) for _, _, _, s in scored}
     rest = [(0, n, i, s) for n, i, s in candidates if id(s) not in ranked]
+    place = {id(s): i for i, (_, _, s) in enumerate(candidates)}
     return [Found(source=name, title=section.title, text=_clip(section.text),
+                  group=section.group, order=place[id(section)],
                   instruction=instruction, score=score)
             for score, name, instruction, section in [*scored, *rest]][:MAX_RANKED]
 

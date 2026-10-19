@@ -37,7 +37,7 @@ import anthropic
 from app import texts
 from app.llm import staged_prompts as P
 from app.llm.health import Health, describe
-from app.llm.prompts import WEB_WORDS, links_section
+from app.llm.prompts import MAKE_WORDS, WEB_WORDS, links_section
 from app.pointing import points_back
 from app.reminders import repeat as repeat_rules
 from app.vault import fix as fixing
@@ -640,9 +640,17 @@ class _Run:
         if key.startswith("f") and key[1:].isdigit() and int(key[1:]) <= len(self.ctx.folders):
             return await self._add_notes(text, self.ctx.folders[int(key[1:]) - 1])
         note = self._notes().get(key)
+        if note is not None and self._asks_new_page():
+            # "Make a page with the list": a page was asked for, not lines in an existing one
+            # — the place picked was a hub the list could also live in.
+            return await self._add_notes(text, texts.VAULT_NOTES_DIR)
         if note is not None:
             return await self._append(text, note)
         return [self._inbox(text)]
+
+    def _asks_new_page(self) -> bool:
+        low = self.message.casefold()
+        return any(w in low for w in MAKE_WORDS) and any(w in low for w in texts.VAULT_PAGE_WORDS)
 
     # ---- expanding what the message only names -------------------------------------------
 
@@ -941,7 +949,8 @@ class _Run:
         answer = await self._ask(
             P.REMIND_PROMPT, schema,
             P.message(self._today(), P.section(P.H_NOW, ctx.now_time),
-                      P.section(P.H_REMINDERS, P.keyed(choices)), text=text))
+                      P.section(P.H_REMINDERS, P.keyed(choices)),
+                      P.section(P.H_INPUTS, ctx.inputs), text=text))
         op = str(answer.get("op", ""))
         self.trail.append(op or "?")
         if op == "list":
@@ -988,7 +997,8 @@ class _Run:
         answer = await self._ask(
             P.CHANGE_TASK_PROMPT,
             _obj({"due": _STRING, "time": _STRING, "done": {"type": "boolean"}}),
-            P.message(self._today(), P.section(P.H_TASK, line), text=text))
+            P.message(self._today(), P.section(P.H_TASK, line),
+                      P.section(P.H_INPUTS, self.ctx.inputs), text=text))
         gate = self._gate(text, "")
         due, time = gate.date(answer.get("due")), gate.clock(answer.get("time"))
         done = answer.get("done") is True

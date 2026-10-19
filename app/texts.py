@@ -334,6 +334,9 @@ VAULT_SORT_FOLD = {"ё": "е"}
 # came back as a five-step checklist.
 # Asking for something to be worked out rather than written down («сравни варианты и
 # придумай план поездки»): the vault may search for it, as it does for «найди».
+# Words that name a page as the thing to make («создай страницу», «новую заметку»): with a make
+# word, a new note even where the place picked is an existing one.
+VAULT_PAGE_WORDS = ("страниц", "страничк", "заметк")
 VAULT_COMPOSE_CUES = ("придума", "спланир", "сравни", "составь план", "составь маршрут",
                       "подбери", "посоветуй")
 VAULT_SET_CUES = ("все", "всё", "всех", "весь", "вся", "список", "перечисл",

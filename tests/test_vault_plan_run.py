@@ -40,15 +40,15 @@ class FakePlanner:
         self.calls: list[str] = []
         self.derived: list[tuple[str, str]] = []
 
-    async def several(self, message, context):
+    async def several(self, message, context, tally=None):
         self.calls.append("several")
         return self._several
 
-    async def plan(self, message, context):
+    async def plan(self, message, context, tally=None):
         self.calls.append("plan")
         return self._plan
 
-    async def derive(self, text, inputs):
+    async def derive(self, text, inputs, tally=None):
         self.derived.append((text, inputs))
         out = self._derive(text, inputs)
         if isinstance(out, Exception):

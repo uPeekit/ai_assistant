@@ -24,7 +24,7 @@ from app.vault.staged import Ask, claude_ask
 
 log = logging.getLogger(__name__)
 
-KINDS = ("write", "ask", "research", "derive")
+KINDS = ("write", "ask", "research", "derive", "read")
 MAX_STEPS = 8
 MAX_RESEARCH = 3
 PLAN_MAX_TOKENS = 3_000
@@ -48,7 +48,7 @@ DERIVE_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["
 @dataclass(frozen=True)
 class Step:
     id: int
-    kind: Literal["write", "ask", "research", "derive"]
+    kind: Literal["write", "ask", "research", "derive", "read"]
     text: str
     needs: tuple[int, ...] = ()
     reply: bool = False
@@ -66,6 +66,9 @@ class Plan:
         out: list[list[Step]] = []
         while left:
             ready = [s for s in left if set(s.needs) <= done]
+            if not ready:  # a cycle (only a plan not built by plan_from has one): run the rest
+                out.append(left)
+                break
             out.append(ready)
             done |= {s.id for s in ready}
             left = [s for s in left if s.id not in done]
@@ -101,6 +104,13 @@ def plan_from(answer: dict) -> Plan | None:
     return Plan(tuple(steps))
 
 
+def _count(tally: list[int] | None, used_in: int, used_out: int) -> None:
+    """What a planner call used, added to the turn's tokens for the audit."""
+    if tally is not None:
+        tally[0] += used_in
+        tally[1] += used_out
+
+
 def one_step(plan: Plan) -> bool:
     """A plan that is one search feeding one write: what the one-step path already does — the
     findings written as they stand — so it goes that way."""
@@ -130,24 +140,27 @@ class VaultPlanner:
         return cls(claude_ask(sdk, light_model, health, think=False),
                    claude_ask(sdk, strong_model, health, think=False), light_model, strong_model)
 
-    async def several(self, message: str, context: str) -> bool:
+    async def several(self, message: str, context: str, tally: list[int] | None = None) -> bool:
         """Whether the message needs several steps. A failed question means one: the message
         then goes the way it always went."""
         try:
-            answer, _, _ = await self._light(
+            answer, used_in, used_out = await self._light(
                 P.SPLIT_PROMPT, SPLIT_SCHEMA,
                 P.message(P.section(P.H_PLAN_CONTEXT, context), text=message), 200)
+            _count(tally, used_in, used_out)
         except FilerError as e:
             log.info("plan filter failed (%s); one step", e)
             return False
         return answer.get("several") is True
 
-    async def plan(self, message: str, context: str) -> Plan | None:
+    async def plan(self, message: str, context: str,
+                   tally: list[int] | None = None) -> Plan | None:
         try:
-            answer, _, _ = await self._strong(
+            answer, used_in, used_out = await self._strong(
                 P.PLAN_STEPS_PROMPT, PLAN_SCHEMA,
                 P.message(P.section(P.H_PLAN_CONTEXT, context), text=message),
                 PLAN_MAX_TOKENS)
+            _count(tally, used_in, used_out)
         except FilerError as e:
             log.warning("planning failed (%s); one step", e)
             return None
@@ -159,11 +172,12 @@ class VaultPlanner:
             return None
         return plan
 
-    async def derive(self, text: str, inputs: str) -> str:
+    async def derive(self, text: str, inputs: str, tally: list[int] | None = None) -> str:
         """A step over the results it is handed. Raises FilerError when the model fails."""
-        answer, _, _ = await self._strong(
+        answer, used_in, used_out = await self._strong(
             P.DERIVE_PROMPT, DERIVE_SCHEMA,
             P.message(P.section(P.H_INPUTS, inputs), text=text), DERIVE_MAX_TOKENS)
+        _count(tally, used_in, used_out)
         out = str(answer.get("text", "")).strip()
         if not out:
             raise FilerError("empty derived step")
