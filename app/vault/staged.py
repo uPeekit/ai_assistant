@@ -63,6 +63,7 @@ LOOKUP_MAX_TOKENS = 8000
 # Words between a make verb and the page word it makes ("make a new note").
 MAX_PAGE_GAP = 2
 MAX_NOTES_SHOWN = 12
+MAX_GROCERIES_SHOWN = 150  # short names: what was bought before marks a grocery
 MAX_GUIDE_VALUE = 80
 MAX_LOOKUP = 30
 MAX_TITLE = 120
@@ -591,8 +592,8 @@ class _Run:
 
     def _places(self) -> dict[str, str]:
         ctx = self.ctx
-        known = (P.PLACE_GROCERIES_KNOWN.format(names=", ".join(ctx.groceries[:20]))
-                 if ctx.groceries else "")
+        shown = ctx.groceries[:MAX_GROCERIES_SHOWN]
+        known = P.PLACE_GROCERIES_KNOWN.format(names=", ".join(shown)) if shown else ""
         places = {
             TASKS: P.PLACE_TASKS.format(name=ctx.tasks_note),
             GROCERIES: P.PLACE_GROCERIES.format(name=texts.VAULT_GROCERIES_NOTE, known=known),
@@ -618,9 +619,12 @@ class _Run:
         list of chores scattered over three places, a task returned whole as its own
         leftover. A message that really is two notes for two places lands in the first."""
         places = self._places()
+        # The reason comes first: as a bare key, «buy dishwasher tablets, rags» went to the
+        # tasks from Haiku and Sonnet alike; saying which rule fits first, both took groceries.
         answer = await self._ask(
-            P.TARGET_PROMPT, _obj({"target": _enum(places)}),
+            P.TARGET_PROMPT, _obj({"why": _STRING, "target": _enum(places)}),
             P.message(self._guide(), P.section(P.H_PLACES, P.keyed(places)), text=text))
+        log.info("target %s: %s", answer.get("target", ""), answer.get("why", ""))
         return str(answer.get("target", ""))
 
     async def _add(self, text: str, key: str) -> list[dict]:

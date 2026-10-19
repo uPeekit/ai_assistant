@@ -112,6 +112,29 @@ async def test_the_target_stage_offers_exactly_one_key_and_shows_what_each_folde
     assert actions == [{"action": "log", "text": "сегодня ходили в кино"}]  # no third call
 
 
+async def test_the_target_stage_sees_the_whole_grocery_registry():
+    """What was bought before is the surest sign of a grocery: twenty names cut a household's
+    registry short (it already has more), and an item past them read as a one-off purchase."""
+    names = [f"вещь{i}" for i in range(60)]
+    script = Script(INTENT_PROMPT={"intent": "add"}, TARGET_PROMPT={"target": "d"})
+
+    await StagedFiler(script, "haiku").file("сегодня ходили в кино", ctx(groceries=names))
+
+    assert "вещь59" in script.asked[1][2]
+
+
+async def test_the_target_stage_gives_its_reason_before_the_key():
+    """«купить таблетки для посудомойки, тряпки» went to the tasks as a bare key, from Haiku
+    and Sonnet alike; asked to say which rule fits first, both took the groceries page."""
+    script = Script(INTENT_PROMPT={"intent": "add"}, TARGET_PROMPT={"target": "d"})
+
+    await StagedFiler(script, "haiku").file("сегодня ходили в кино", ctx())
+
+    _, schema, _ = script.asked[1]
+    assert list(schema["properties"]) == ["why", "target"]
+    assert schema["required"] == ["why", "target"]
+
+
 async def test_a_list_of_chores_for_today_is_one_task_each_with_the_date():
     script = Script(
         INTENT_PROMPT={"intent": "add"}, TARGET_PROMPT={"target": "t"},
