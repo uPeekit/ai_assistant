@@ -765,3 +765,21 @@ async def test_not_asked_to_find_nothing_is_filled_from_memory():
         "создай в клубе встречу дом листьев", ctx())
 
     assert actions[0]["props"] == [] and strong.stages == []
+
+
+async def test_a_new_note_gets_tags_only_where_its_folders_notes_have_them():
+    """The meetings came out tagged with the hub's tag, which no meeting in the folder carries:
+    a note follows its folder's notes, tags included."""
+    answer = {"items": [{"title": "Дом листьев", "props": [], "body": [], "tags": ["club"]}],
+              "lookup": "", "web": "", "media": "text"}
+    untagged = Script(INTENT_PROMPT={"intent": "add"}, TARGET_PROMPT={"target": "f3"},
+                      FOLDER_PROMPT=dict(answer))
+    actions, _, _ = await StagedFiler(untagged, "haiku").file(
+        "создай в клубе встречу дом листьев", ctx())
+    assert actions[0]["tags"] == []
+
+    tagged = Script(INTENT_PROMPT={"intent": "add"}, TARGET_PROMPT={"target": "f3"},
+                    FOLDER_PROMPT=dict(answer))
+    actions, _, _ = await StagedFiler(tagged, "haiku").file(
+        "создай в клубе встречу дом листьев", ctx(folder_tagged=frozenset({"Клуб"})))
+    assert actions[0]["tags"] == ["club"]

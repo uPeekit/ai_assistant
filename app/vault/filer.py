@@ -128,6 +128,8 @@ class VaultContext:
     # can afford to say what that place looks like: the properties the notes of a folder
     # have in common, and the properties and headings of each note in `known_notes`.
     folder_props: dict[str, list[str]] = field(default_factory=dict)
+    # Folders most of whose notes carry tags: a new note elsewhere gets none of its own.
+    folder_tagged: frozenset[str] = frozenset()
     note_props: dict[str, list[str]] = field(default_factory=dict)
     note_headings: dict[str, list[str]] = field(default_factory=dict)
     # The pages behind the message's links (app.web.links.LinkPage), shown beside the message,
@@ -172,6 +174,7 @@ def context(index: VaultIndex, message: str, now: datetime) -> VaultContext:
         tags=index.tags(),
         known_notes=[n.name for n in known],
         folder_props=folder_props(index),
+        folder_tagged=folder_tagged(index),
         note_props={n.name: sorted(n.props) for n in shaped if n.props},
         note_headings={n.name: list(n.headings) for n in shaped if n.headings},
         open_tasks=index.open_tasks(message),
@@ -206,6 +209,17 @@ def _same_note(index: VaultIndex, title: str, folder: str):
     return next((n for n in index.notes
                  if (not folder or n.folder == folder)
                  and _bare(n.name) == wanted), None)
+
+
+def folder_tagged(index: VaultIndex) -> frozenset[str]:
+    """The folders where most notes carry tags in their properties."""
+    seen: dict[str, list[int]] = {}
+    for note in index.notes:
+        if note.folder:
+            counts = seen.setdefault(note.folder, [0, 0])
+            counts[0] += 1
+            counts[1] += bool(note.props.get("tags") or note.props.get("tag"))
+    return frozenset(f for f, (n, tagged) in seen.items() if tagged * 2 > n)
 
 
 def folder_props(index: VaultIndex) -> dict[str, list[str]]:

@@ -803,8 +803,10 @@ class _Run:
                 "action": "note", "folder": folder, "title": title,
                 "props": _props(item, gate.prop),
                 "body": [str(line) for line in item.get("body") or []],
+                # Only where the folder's notes have tags: the meetings came out with the
+                # hub's tag, which no meeting carries. A chat's own tag is added by its scope.
                 "tags": [t for t in (str(x).strip().lstrip("#") for x in item.get("tags") or [])
-                         if t.casefold() in known_tags],
+                         if t.casefold() in known_tags and folder in ctx.folder_tagged],
             })
         lookup = str(answer.get("lookup", "")).strip()
         if recalled and not lookup:
