@@ -123,6 +123,9 @@ def _as_written(action: VaultAction, write: VaultWrite) -> VaultAction:
     return VaultAction(action="inbox", text=words.strip()[:MAX_LINE])
 
 
+# Properties that are about the file, not the folder's table: never part of a note's shape.
+SHAPELESS = frozenset({"notion", "aliases", "tags", "cssclasses", "created"})
+
 class VaultWriter:
     def __init__(self, index: VaultIndex, *, countdown_tag: str = texts.VAULT_COUNTDOWN_TAG,
                  now: callable = datetime.now,
@@ -329,7 +332,8 @@ class VaultWriter:
         if tags:
             props["tags"] = tags
         props = self._shaped(folder, props)
-        undo = self._write(rel, render(props, "\n".join(action.body)), None)
+        blank = frozenset(k for k, v in props.items() if v is None)
+        undo = self._write(rel, render(props, "\n".join(action.body), blank), None)
         return VaultWrite(kind="note", path=rel, note=name, undo=undo,
                           detail=summary.note(name, folder, props))
 
@@ -352,6 +356,23 @@ class VaultWriter:
             given = out.get(key)
             out[key] = (given if isinstance(given, bool)
                         else str(given).strip().casefold() in ("true", "yes"))
+        return self._in_shape(siblings, out)
+
+    @staticmethod
+    def _in_shape(siblings: list, props: dict) -> dict:
+        """`props` laid out as the folder's notes are: the keys most of them carry, in the
+        order the newest of them has, None (an empty `key:`) where nothing is known. Asked to
+        file a meeting "by the template", the bot wrote two of its five properties in another
+        order; the folder's own notes are the template."""
+        counts: dict[str, int] = {}
+        for note in siblings:
+            for key in note.props:
+                counts[key] = counts.get(key, 0) + 1
+        shape = [k for k, n in counts.items() if n * 2 > len(siblings) and k not in SHAPELESS]
+        newest = list(max(siblings, key=lambda n: n.mtime).props)
+        order = [k for k in newest if k in shape] + [k for k in shape if k not in newest]
+        out = {key: props.get(key) for key in order}
+        out.update({k: v for k, v in props.items() if k not in out})
         return out
 
     @staticmethod

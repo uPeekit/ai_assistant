@@ -9,14 +9,18 @@ import yaml
 FENCE = "---"
 
 
-def render(props: dict[str, Any], body: str = "") -> str:
-    """A note: its properties (None and empty values left out, order kept) and its body."""
-    kept = {k: v for k, v in props.items() if v not in (None, "", [], {})}
+def render(props: dict[str, Any], body: str = "", blank: frozenset[str] = frozenset()) -> str:
+    """A note: its properties (None and empty values left out, order kept) and its body.
+    `blank` names properties written with no value (`url:`), as Obsidian leaves an empty one."""
+    kept = {k: v for k, v in props.items() if v not in (None, "", [], {}) or k in blank}
     head = ""
     if kept:
-        dumped = yaml.safe_dump(kept, allow_unicode=True, sort_keys=False,
-                                default_flow_style=False, width=1000)
-        head = f"{FENCE}\n{dumped}{FENCE}\n"
+        dumped = yaml.safe_dump({k: None if k in blank and v in ("", [], {}) else v
+                                 for k, v in kept.items()}, allow_unicode=True,
+                                sort_keys=False, default_flow_style=False, width=1000)
+        lines = [line[:-len(" null")] if line.endswith(": null") and line[:-6] in blank
+                 else line for line in dumped.splitlines()]
+        head = f"{FENCE}\n" + "\n".join(lines) + f"\n{FENCE}\n"
     body = body.strip("\n")
     if not body:
         return head

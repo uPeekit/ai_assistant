@@ -720,3 +720,48 @@ def test_a_one_letter_word_does_not_vouch_for_every_word_it_begins():
     assert not gate.said("икра")
     assert gate.said("яйца")
     assert _Gate("купить сыр", "").said("сыра")
+
+
+async def test_asked_to_find_what_the_folders_notes_carry_the_lookup_fills_it():
+    """«создай встречи … найди авторов» named the books but wrote no author: a value the
+    message does not hold is refused, and nothing asked for the lookup. Asked to find, the
+    lookup model fills the folder's properties for the items named — an author, never a date
+    or a link from memory."""
+    light = Script(
+        INTENT_PROMPT={"intent": "add"}, TARGET_PROMPT={"target": "f3"},
+        FOLDER_PROMPT={"items": [
+            {"title": "Дом листьев", "props": [{"name": "date", "value": "2026-12-07"}],
+             "body": [], "tags": []},
+            {"title": "Сатанинское танго", "props": [], "body": [], "tags": []}],
+            "lookup": "", "web": "", "media": "text", "fill": True})
+    strong = Script(FILL_PROPS_PROMPT={"items": [
+        {"title": "дом листьев", "props": [{"name": "author", "value": "Марк Данилевский"},
+                                          {"name": "date", "value": "2001-03-07"}]},
+        {"title": "Сатанинское танго", "props": [
+            {"name": "author", "value": "Ласло Краснахоркаи"},
+            {"name": "date", "value": "1985-01-01"},
+            {"name": "url", "value": "https://example.com/tango"}]}]})
+
+    actions, _, _ = await StagedFiler(light, "haiku", lookup=strong).file(
+        "создай в клубе встречи: 7 декабря дом листьев, сатанинское танго. найди авторов",
+        ctx())
+
+    assert actions[0]["props"] == [{"name": "date", "value": "2026-12-07"},
+                                   {"name": "author", "value": "Марк Данилевский"}]
+    assert actions[1]["props"] == [{"name": "author", "value": "Ласло Краснахоркаи"}]
+    assert strong.stages == ["FILL_PROPS_PROMPT"]
+    shown = strong.asked[0][2]
+    assert "Дом листьев" in shown and "Сатанинское танго" in shown and "author" in shown
+
+
+async def test_not_asked_to_find_nothing_is_filled_from_memory():
+    light = Script(
+        INTENT_PROMPT={"intent": "add"}, TARGET_PROMPT={"target": "f3"},
+        FOLDER_PROMPT={"items": [{"title": "Дом листьев", "props": [], "body": [],
+                                  "tags": []}], "lookup": "", "web": "", "media": "text"})
+    strong = Script()
+
+    actions, _, _ = await StagedFiler(light, "haiku", lookup=strong).file(
+        "создай в клубе встречу дом листьев", ctx())
+
+    assert actions[0]["props"] == [] and strong.stages == []

@@ -221,7 +221,8 @@ def test_a_new_note_gets_the_tick_boxes_every_note_in_its_folder_has(tmp_path):
     write = writer.run(VaultAction(action="note", folder="Клуб", title="Доктор Живаго",
                                    props={"book": "Доктор Живаго", "event_posted": "false"}))
     props, _ = frontmatter.split(index.read(write.path))
-    assert props == {"book": "Доктор Живаго", "event_posted": False, "vyvody_posted": False}
+    assert props == {"book": "Доктор Живаго", "author": None, "date": None,
+                     "event_posted": False, "vyvody_posted": False}
 
     # A folder whose notes share no tick box adds nothing.
     other = writer.run(VaultAction(action="note", folder="Заметки", title="идея"))
@@ -509,3 +510,27 @@ def test_replace_says_which_new_actions_could_not_be_written(writer, index, monk
 
     assert failed == [1] and left == [] and stuck == []
     assert [w.kind for w in writes] == ["log", "inbox"]
+
+
+def test_a_new_note_takes_its_folders_shape(tmp_path):
+    """«по шаблону»: the new meetings carried two properties of the five every meeting has,
+    in another order. A new note in a folder gets the keys its notes share, in their order,
+    empty where nothing is known — as the folder's own notes leave them."""
+    from app.vault.index import VaultIndex
+    from app.vault.writer import VaultWriter
+
+    club = tmp_path / "Клуб"
+    club.mkdir()
+    for name in ("2026-09-21 a", "2026-09-28 b"):
+        (club / f"{name}.md").write_text(
+            "---\nbook: x\nauthor: y\ndate: '2026-09-21'\nurl:\nnotes:\n---\n\ntext\n",
+            encoding="utf-8")
+    index = VaultIndex(tmp_path)
+    index.refresh()
+
+    write = VaultWriter(index).run(VaultAction(
+        action="note", folder="Клуб", title="Дом листьев",
+        props={"date": "2026-12-07", "book": "Дом листьев"}))
+
+    assert index.read(write.path).startswith(
+        "---\nbook: Дом листьев\nauthor:\ndate: '2026-12-07'\nurl:\nnotes:\n---\n")

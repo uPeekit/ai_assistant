@@ -633,6 +633,35 @@ class _Run:
 
     # ---- expanding what the message only names -------------------------------------------
 
+    def _asks_to_find(self) -> bool:
+        """The message asks for something to be found (one of the admin page's web words)."""
+        low = self.message.casefold()
+        return any(word in low for word in (self.ctx.web_words or WEB_WORDS))
+
+    async def _fill(self, notes: list[dict], folder: str, props_of: str) -> None:
+        """"...and find the authors": the items were named, their folder's properties not. The
+        lookup model is asked for them, and what it knows (an author — never a date or a link
+        from memory) is added to each note where nothing was set already."""
+        schema = _obj({"items": {"type": "array", "items": _obj({
+            "title": _STRING, "props": _PROPS})}})
+        listed = "\n".join(note["title"] for note in notes)
+        found = {str((item or {}).get("title", "")).strip().casefold(): item
+                 for item in await self._expand(P.FILL_PROPS_PROMPT, schema, listed,
+                                                self._guide(), P.section(P.H_FOLDER, folder),
+                                                P.section(P.H_PROPS, props_of),
+                                                P.section(P.H_ITEMS, listed))}
+        def known(value: object) -> str | None:
+            # A fact about the item; a date here is from memory, whatever the message says.
+            text = str(value or "").strip()
+            return None if _ISO.match(text) or "://" in text else (text or "")
+
+        for note in notes:
+            item = found.get(note["title"].casefold())
+            if not item:
+                continue
+            have = {p["name"] for p in note["props"]}
+            note["props"] += [p for p in _props(item, known) if p["name"] not in have]
+
     def _web(self, answer: dict) -> tuple[str, str] | None:
         """The search a details stage asked for, if the user asked for one: it takes a word of
         theirs, as on the Notion side, because a search is minutes of waiting."""
@@ -744,7 +773,7 @@ class _Run:
         props_of = ", ".join(ctx.folder_props.get(folder, []))
         schema = _obj({"items": {"type": "array", "items": _obj({
             "title": _STRING, "props": _PROPS, "body": _STRINGS, "tags": _STRINGS})},
-            **_EXPAND, **self._from_schema()})
+            "fill": {"type": "boolean"}, **_EXPAND, **self._from_schema()})
         answer = await self._ask(
             P.FOLDER_PROMPT, schema,
             P.message(self._guide(), self._today(), P.section(P.H_FOLDER, folder),
@@ -799,6 +828,11 @@ class _Run:
                             "props": _props(item, gate.looked_up),
                             "body": [], "tags": [], "looked_up": True})
         web = self._web(answer)
+        if (out and props_of and not web and answer.get("fill") is True
+                and self._asks_to_find()):
+            # A search, when there is one, is what fills the note; otherwise the lookup
+            # model is asked for the folder's properties of the items named.
+            await self._fill(out, folder, props_of)
         if not out and not lookup:
             out = await self._titled(text, folder, gate)
         if web and out:
