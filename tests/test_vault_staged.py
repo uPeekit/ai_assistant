@@ -796,10 +796,15 @@ async def test_handed_inputs_are_shown_and_count_as_a_source():
     """A step of a plan is handed the results of the steps it needs: the stages see them, and
     a value taken from them is not one the model made up."""
     script = _book_with_author()
+    handed = "#1: Омон Ра — Виктор Пелевин, 1992"
     actions, _, _ = await StagedFiler(script, "haiku").file(
-        "добавь в книги омон ра", ctx(inputs="#1: Омон Ра — Виктор Пелевин, 1992"))
+        "добавь в книги омон ра", ctx(inputs=handed, facts=handed))
 
     assert actions[0]["props"] == [{"name": "author", "value": "Виктор Пелевин"}]
+    # Shown but not a source (a model's general answer, say): the author is refused.
+    shown_only, _, _ = await StagedFiler(_book_with_author(), "haiku").file(
+        "добавь в книги омон ра", ctx(inputs=handed))
+    assert shown_only[0]["props"] == []
     folder = next(c for name, _, c in script.asked if name == "FOLDER_PROMPT")
     assert P.H_INPUTS in folder and "1992" in folder
 

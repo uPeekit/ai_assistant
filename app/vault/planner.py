@@ -93,6 +93,8 @@ def plan_from(answer: dict) -> Plan | None:
         # A need is a step written before this one: that alone rules out cycles.
         if any(n not in {s.id for s in steps} for n in needs):
             return None
+        if kind == "derive" and not needs:  # memory, not a result: no source for a write
+            return None
         steps.append(Step(sid, kind, text, needs, bool(item.get("reply"))))
     if sum(s.kind == "research" for s in steps) > MAX_RESEARCH:
         return None

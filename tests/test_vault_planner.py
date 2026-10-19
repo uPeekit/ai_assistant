@@ -99,3 +99,9 @@ async def test_one_search_feeding_one_write_is_one_step():
     planner = VaultPlanner(Ask(), strong)
     assert await planner.plan("найди и запиши", "") is None
     assert await planner.plan("найди два варианта и сравни", "") is not None
+
+
+def test_a_derive_with_nothing_to_derive_from_is_refused():
+    """A derive step with no needs is the model answering from memory, and its output would
+    count as a source for the writes after it."""
+    assert plan_from({"steps": [step(1, "derive"), step(2, "write", [1])]}) is None

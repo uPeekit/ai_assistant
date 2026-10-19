@@ -251,3 +251,134 @@ async def test_a_plan_that_writes_nothing_gets_the_full_answer(index):
     await pipe(index, note_script(), planner).handle("найди и сравни", research=research)
     [(text, _)] = planner.derived
     assert P.PLAN_REPLY_SHORT not in text
+
+
+# ---- review fixes ------------------------------------------------------------------------------
+
+async def test_a_who_question_in_a_plan_is_asked_with_the_whole_message(index):
+    """An ask step whose answerer asked «who are you» hid the question inside the plan and
+    took the user's next message for a name. The question is the plan's reply now, and the
+    name the user gives replays the whole message."""
+    from app.chats import ChatRef
+    from tests.test_vault_answer import WHO, _who_pipe
+
+    p, ask, askers = _who_pipe(index, WHO)
+    plan = Plan((Step(1, "ask", "какую оценку я поставил ремонту?"),
+                 Step(2, "derive", "сравни", (1,), reply=True)))
+    planner = FakePlanner(plan)
+    p._planner = planner
+    turn = await p.handle("моя оценка ремонту и сравни", chat=ChatRef(1, 7, name="Саша"))
+
+    assert texts.ANSWER_WHO_OPTIONS.format(lead="", options="«саша п», «саша в»") \
+        in turn.reply_line()
+    assert planner.derived == []  # the question was never handed on as data
+    assert askers.reply(1, 7, "саша в") == "моя оценка ремонту и сравни"
+
+
+async def test_a_value_only_the_planner_wrote_is_refused_its_titles_are_not(index):
+    """The gate judges a step's values against the owner's message and what the step was
+    handed — a step text the planner wrote is no source for an author."""
+    script = Script(INTENT_PROMPT={"intent": "add"}, TARGET_PROMPT={"target": "f1"},
+                    FOLDER_PROMPT={"items": [{"title": "Детективы", "props": [
+                        {"name": "author", "value": "Виктор Пелевин"}], "body": [],
+                        "tags": []}], "lookup": "", "web": "", "media": "text"})
+    plan = Plan((Step(1, "research", "найди"),
+                 Step(2, "write", "создай заметку Детективы, автор Виктор Пелевин", (1,)),
+                 Step(3, "derive", "посоветуй", (1,), reply=True)))
+    research = await research_of({"найди": "находки без авторов"})
+    turn = await pipe(index, script, FakePlanner(plan)).handle(
+        "найди детективы, сделай страницу и посоветуй", research=research)
+
+    [write] = turn.writes
+    assert write.note == "Детективы" and "Пелевин" not in index.read(write.path)
+
+
+async def test_a_failed_part_says_why_and_that_the_message_was_kept(index):
+    unclear = Script(INTENT_PROMPT={"intent": "unclear"})
+    plan = Plan((Step(1, "research", "найди"), Step(2, "write", "запиши что-то из #1", (1,))))
+    research = await research_of({"найди": "находки"})
+    turn = await pipe(index, unclear, FakePlanner(plan)).handle("сообщение", research=research)
+
+    line = turn.reply_line()
+    assert texts.PLAN_PART_FAILED_WHY.format(what="запиши что-то из #1",
+                                             why=texts.PLAN_STEP_UNCLEAR) in line
+    assert texts.PLAN_KEPT in line
+
+
+async def test_content_never_becomes_a_note_of_its_own_in_a_step(index):
+    """A write that cannot carry a body (a diary line) was given an extra note made of the
+    step's text and the whole search."""
+    diary = Script(INTENT_PROMPT={"intent": "add"}, TARGET_PROMPT={"target": "d"})
+    plan = Plan((Step(1, "research", "найди"),
+                 Step(2, "write", "запиши в дневник, что нашёл", (1,)),
+                 Step(3, "derive", "итог", (1,), reply=True)))
+    research = await research_of({"найди": "находки"})
+    turn = await pipe(index, diary, FakePlanner(plan)).handle("найди и запиши",
+                                                              research=research)
+    assert [w.kind for w in turn.writes] == ["log"]
+
+
+async def test_a_group_that_may_not_ask_never_plans(index):
+    scope = ChatScope(chat_id=-100, title="club", rights=frozenset({"add"}), tag="club",
+                      folder="Заметки")
+    planner = FakePlanner(DETECTIVES)
+    await pipe(index, note_script(), planner).scoped(scope).handle("найди и запиши детективы")
+    assert planner.calls == []
+
+
+async def test_a_steps_turn_gets_the_conversation_the_message_had(index):
+    """«save your last answer to a page and …» planned lost the recent answers and the
+    quoted message the one-step path reads."""
+    p = pipe(index, note_script(), FakePlanner(Plan((
+        Step(1, "write", "запиши последний ответ в заметку Ответ"),
+        Step(2, "research", "найди", reply=True)))))
+    seen = []
+    real = p.handle
+
+    async def spy(message, **kw):
+        if kw.get("plain"):
+            seen.append(kw)
+        return await real(message, **kw)
+
+    p.handle = spy
+    research = await research_of({"найди": "x"})
+    await real("сохрани ответ и найди", research=research, answers=("прошлый ответ",),
+               pointed=(("q", "цитата"),))
+    assert seen[0]["answers"] == ("прошлый ответ",) and seen[0]["pointed"] == (("q", "цитата"),)
+
+
+async def test_an_unexpected_failure_of_one_step_keeps_the_others_writes(index):
+    async def research(message, query, media):
+        raise RuntimeError("boom")
+
+    plan = Plan((Step(1, "write", "создай заметку Детективы в папке Заметки"),
+                 Step(2, "research", "найди", reply=True)))
+    turn = await pipe(index, note_script(), FakePlanner(plan)).handle("запиши и найди",
+                                                                     research=research)
+    assert [w.kind for w in turn.writes] == ["note"] and turn.undos
+    assert texts.PLAN_PART_FAILED.format(what="найди").split(":")[0] in turn.reply_line()
+
+
+async def test_steps_do_not_refresh_the_index_themselves(index):
+    """Steps of one round refreshed the shared index each on their own, swapping the
+    guarded writer between a step's actions."""
+    p = pipe(index, note_script(), FakePlanner(Plan((
+        Step(1, "research", "a"), Step(2, "write", "создай заметку Детективы из #1", (1,)),
+        Step(3, "derive", "итог", (1,), reply=True)))))
+    inside = {"steps": 0, "refreshed_inside": 0}
+    real_refresh, real_handle = p._refreshed, p.handle
+
+    async def counted():
+        inside["refreshed_inside"] += bool(inside["steps"])
+        await real_refresh()
+
+    async def spy(message, **kw):
+        inside["steps"] += bool(kw.get("plain"))
+        try:
+            return await real_handle(message, **kw)
+        finally:
+            inside["steps"] -= bool(kw.get("plain"))
+
+    p._refreshed, p.handle = counted, spy
+    await real_handle("x", research=await research_of({"a": "находки"}))
+    assert inside["refreshed_inside"] == 0

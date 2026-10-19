@@ -63,8 +63,8 @@ MAX_PLAN_GUIDE = 3_000
 MAX_TITLE = 60
 
 
-def with_content(actions: list[VaultAction], content: str,
-                 message: str) -> list[VaultAction]:
+def with_content(actions: list[VaultAction], content: str, message: str, *,
+                 carriers: tuple[str, ...] = CARRIERS, extra: bool = True) -> list[VaultAction]:
     """Text a plan step has already produced, put into whichever action files it.
 
     The filer chose the place; the words are not its to rewrite, and it never saw them —
@@ -74,11 +74,11 @@ def with_content(actions: list[VaultAction], content: str,
     lines = content.splitlines()
     out, used = [], False
     for action in actions:
-        if not used and action.action in CARRIERS:
+        if not used and action.action in carriers:
             action = action.model_copy(update={"body": lines})
             used = True
         out.append(action)
-    if not used:
+    if not used and extra:
         title = (message.strip() or texts.VAULT_INBOX_NOTE)[:MAX_TITLE]
         out.append(VaultAction(action="note", folder=texts.VAULT_NOTES_DIR,
                                title=title, body=lines))
@@ -129,6 +129,10 @@ class VaultTurn:
     output_tokens: int = 0
     # A message run as a plan: its answer is the reply, without a line per write.
     planned: bool = False
+    # A plan's step whose answerer has to ask who the user is: the question, for the plan.
+    who: str = ""
+    # What the answerer drew on (notes, general, web …): only notes count as a source later.
+    answered: str = ""
 
     @property
     def undos(self) -> list[VaultUndo]:
@@ -426,7 +430,8 @@ class VaultPipeline:
                      chat: ChatRef | None = None, history: str = "", answers: tuple = (),
                      pointed: tuple = (),
                      progress: Callable[[str], Awaitable[None]] | None = None,
-                     plain: bool = False, inputs: str = "") -> VaultTurn:
+                     plain: bool = False, inputs: str = "", source: str = "",
+                     facts: str = "") -> VaultTurn:
         """Read the message, write the vault, and start the linking behind the reply.
 
         `content` is text the caller already has (a plan step's research): the filer still
@@ -441,19 +446,24 @@ class VaultPipeline:
         try:
             # The answer to the bot's «who are you in the records»: their name is kept, and
             # the question they asked first is the one to answer now.
+            # A plan's step never: the plan asks, with the whole message (_plan_turn).
             first = self._askers.reply(chat.chat_id, chat.user_id, message) \
-                if chat is not None else None
+                if chat is not None and not plain else None
             message = first or message
-            await self._refreshed()
+            if not plain:  # a plan refreshes once per round, not each step on its own
+                await self._refreshed()
             if (self._planner is not None and not plain and go is None and not content
-                    and message.strip()):
+                    and message.strip()
+                    and (self._scope is None or self._scope.may("ask"))):
                 planned = await self._plan_turn(message, research=research, links=links,
-                                                chat=chat, history=history, progress=progress)
+                                                chat=chat, history=history, progress=progress,
+                                                answers=answers, pointed=pointed, answer=answer)
                 if planned is not None:
                     return planned
             ctx = replace(context(self._index, message, self._now()), links=tuple(links))
             pending = await asyncio.to_thread(self._pending, chat)
-            ctx = replace(ctx, inputs=inputs, reminders=tuple(self._listed(r) for r in pending),
+            ctx = replace(ctx, inputs=inputs, source=source, facts=facts,
+                          reminders=tuple(self._listed(r) for r in pending),
                           now_time=self._local().strftime("%H:%M"), history=history,
                           answers=tuple(answers), pointed=tuple(pointed),
                           web_words=tuple(self._web_words()))
@@ -468,9 +478,6 @@ class VaultPipeline:
             return VaultTurn(error=type(e).__name__)
         model = self._filer.model
         actions = check(raw, self._index, message)
-        if plain and all(a.action == "inbox" for a in actions):
-            # A step the stages could not place: the planner's words never go to the inbox.
-            return VaultTurn(error=texts.PLAN_STEP_UNCLEAR, model=self._filer.model)
         # Before the gate, not after it: the gate opens when the whole turn is over, and a
         # second model call there would be added to the wait instead of hidden inside it.
         # Text the caller already has fills an empty note, so there is nothing to doubt.
@@ -486,6 +493,11 @@ class VaultPipeline:
                 actions, model = check(again, self._index, message), self._strong.model
                 prompt_tokens += more_in
                 output_tokens += more_out
+        if plain:
+            # A step the stages could not place: the planner's words never go to the inbox.
+            if actions and all(a.action == "inbox" for a in actions):
+                return VaultTurn(error=texts.PLAN_STEP_UNCLEAR, model=model)
+            actions = [a for a in actions if a.action != "inbox"]
         actions, refused = self._gated(actions)
         if self._scope is not None and not actions:
             # A group chat never falls back to the owner's inbox: it is told what it may not
@@ -503,9 +515,15 @@ class VaultPipeline:
             return VaultTurn(answer=texts.VAULT_ALL_THERE, model=model,
                              prompt_tokens=prompt_tokens, output_tokens=output_tokens)
         if not actions:  # the model answered nothing usable: keep the words rather than drop them
+            if plain:
+                return VaultTurn(error=texts.PLAN_STEP_UNCLEAR, model=model)
             actions = [VaultAction(action="inbox", text=message)]
         if content:
-            actions = with_content(actions, content, message)
+            # A plan's step puts found text only where a body belongs, and never makes a note
+            # of its own from the step's words.
+            actions = (with_content(actions, content, message, carriers=("note", "append"),
+                                    extra=False) if plain
+                       else with_content(actions, content, message))
         # A group sees no obsidian:// links: they open only on the owner's devices.
         turn = VaultTurn(model=model, prompt_tokens=prompt_tokens, output_tokens=output_tokens,
                          vault="" if self._scope is not None else vault_name(self._index.root))
@@ -557,7 +575,7 @@ class VaultPipeline:
             said = await self._answered(message, hits, turn, research=research,
                                         progress=progress, history=history, chat=chat,
                                         words=question.text, replied=first is not None,
-                                        inputs=inputs)
+                                        inputs=inputs, plain=plain)
             if said:
                 turn.answer = f"{turn.answer}\n{said}".strip() if turn.answer else said
         turn.writes, failed = await asyncio.to_thread(self._write_all, actions)
@@ -663,7 +681,10 @@ class VaultPipeline:
 
     async def _plan_turn(self, message: str, *, research: Research | None, links: tuple,
                          chat: ChatRef | None, history: str,
-                         progress: Callable[[str], Awaitable[None]] | None) -> VaultTurn | None:
+                         progress: Callable[[str], Awaitable[None]] | None,
+                         answers: tuple = (), pointed: tuple = (),
+                         answer: Callable[[str, list], Awaitable[str]] | None = None,
+                         ) -> VaultTurn | None:
         """The message as a plan of linked steps, or None when it is one step (or no usable
         plan came back): then it goes the way every message goes. Steps run in rounds — each
         round only needs earlier ones, its steps together — and everything they write and say
@@ -678,42 +699,72 @@ class VaultPipeline:
         log.info("plan: %d steps (%s)", len(plan.steps), ", ".join(s.kind for s in plan.steps))
         merged = VaultTurn(planned=True, model=self._filer.model)
         results: dict[int, str] = {}
-        failed: list[Step] = []
-        for layer in plan.layers():
+        facts: set[int] = set()  # the results a later write may take values from
+        failed: list[tuple[Step, str]] = []
+        who = ""
+        kinds = {s.id: s.kind for s in plan.steps}
+        for n, layer in enumerate(plan.layers()):
+            if n:  # what the round before wrote is in the index for this one
+                await self._refreshed()
             outs = await asyncio.gather(*(
-                self._plan_step(step, results, {s.id for s in failed}, message,
-                                {s.id: s.kind for s in plan.steps}, research=research,
-                                links=links, chat=chat, history=history, progress=progress)
-                for step in layer))
-            for step, (text, sub_turn) in zip(layer, outs, strict=True):
+                self._plan_step(step, results, facts, {s.id for s, _ in failed}, message,
+                                kinds, research=research, links=links, chat=chat,
+                                history=history, progress=progress, answers=answers,
+                                pointed=pointed, answer=answer)
+                for step in layer), return_exceptions=True)
+            for step, out in zip(layer, outs, strict=True):
+                if isinstance(out, BaseException):
+                    # Unexpected: the step is a failed part; what other steps wrote stays,
+                    # with its Undo.
+                    log.error("plan step %d (%s) raised", step.id, step.kind, exc_info=out)
+                    failed.append((step, ""))
+                    continue
+                text, sub_turn, why, fact = out
                 if sub_turn is not None:
                     merged.writes += sub_turn.writes
                     merged.reminders += sub_turn.reminders
                     merged.prompt_tokens += sub_turn.prompt_tokens
                     merged.output_tokens += sub_turn.output_tokens
+                    who = who or sub_turn.who
                 if text is None:
-                    failed.append(step)
+                    failed.append((step, why))
                 else:
                     results[step.id] = text
+                    if fact:
+                        facts.add(step.id)
+        if who and chat is not None:
+            # The answerer needs to know who asks: asked with the whole message, so the name
+            # the user gives next replays all of it.
+            self._askers.asked(chat.chat_id, chat.user_id, message)
         said = [results[s.id] for s in plan.steps if s.reply and s.id in results]
-        merged.answer = "\n\n".join(
-            [*said, *(texts.PLAN_PART_FAILED.format(what=s.text) for s in failed)])
-        if any(s.kind == "write" for s in failed):
+        lines = [*([who] if who else []), *said,
+                 *(texts.PLAN_PART_FAILED_WHY.format(what=s.text, why=why) if why
+                   else texts.PLAN_PART_FAILED.format(what=s.text) for s, why in failed
+                   if not (who and s.kind == "ask"))]
+        if any(s.kind == "write" for s, _ in failed):
             # A part that should have written did not: the owner's own words are kept, once.
             kept = await self._kept(message, FilerError("a plan step failed"), None)
             merged.writes += kept.writes
+            if kept.writes:
+                lines.append(texts.PLAN_KEPT)
+        merged.answer = "\n\n".join(lines)
+        merged.said = "\n\n".join(said)
         return merged
 
-    async def _plan_step(self, step: Step, results: dict[int, str], failed: set[int],
-                         message: str, kinds: dict[int, str], *, research: Research | None,
-                         links: tuple,
-                         chat: ChatRef | None, history: str,
-                         progress: Callable[[str], Awaitable[None]] | None,
-                         ) -> tuple[str | None, VaultTurn | None]:
-        """(what the step produced — None when it failed —, the turn it wrote in, if any)."""
+    async def _plan_step(self, step: Step, results: dict[int, str], facts: set[int],
+                         failed: set[int], message: str, kinds: dict[int, str], *,
+                         research: Research | None, links: tuple, chat: ChatRef | None,
+                         history: str, progress: Callable[[str], Awaitable[None]] | None,
+                         answers: tuple, pointed: tuple,
+                         answer: Callable[[str, list], Awaitable[str]] | None,
+                         ) -> tuple[str | None, VaultTurn | None, str, bool]:
+        """(what the step produced — None when it failed —, the turn it wrote in, why it
+        failed, whether its result may be a source of values for later writes)."""
         if any(n in failed for n in step.needs):
-            return None, None
+            return None, None, "", False
         inputs = "\n\n".join(f"#{n}: {_cut(results[n])}" for n in step.needs)
+        handed_facts = "\n\n".join(f"#{n}: {_cut(results[n])}" for n in step.needs
+                                    if n in facts)
         try:
             if step.kind in ("write", "ask"):
                 # Found and derived text a write is handed is written as it stands, as on the
@@ -721,29 +772,43 @@ class VaultPipeline:
                 content = "\n\n".join(results[n] for n in step.needs
                                        if kinds.get(n) in ("research", "derive")) \
                     if step.kind == "write" else ""
-                sub_turn = await self.handle(step.text, plain=True, inputs=inputs,
-                                             content=content, research=research, links=links,
-                                             chat=chat, history=history, progress=progress)
+                sub_turn = await self.handle(
+                    step.text, plain=True, inputs=inputs, source=message, facts=handed_facts,
+                    content=content, research=research, links=links, chat=chat,
+                    history=history, progress=progress, answers=answers, pointed=pointed,
+                    answer=answer)
+                why = texts.LLM_DOWN_SHORT.get(sub_turn.reason) or sub_turn.error
                 if step.kind == "write":
-                    text = "\n".join(texts.PLAN_STEP_WROTE.format(what=w.what)
-                                     for w in sub_turn.writes) or None
-                else:
-                    text = sub_turn.said or sub_turn.answer or None
-                return text, sub_turn
+                    # Done when it wrote, set a reminder, or answered (a reminder listed,
+                    # everything already there) without an error.
+                    done = sub_turn.writes or sub_turn.reminders or (
+                        sub_turn.answer and not sub_turn.error)
+                    text = ("\n".join(texts.PLAN_STEP_WROTE.format(what=w.what)
+                                      for w in sub_turn.writes) or sub_turn.answer) \
+                        if done else None
+                    return text or None, sub_turn, why or sub_turn.answer, True
+                if sub_turn.who:
+                    return None, sub_turn, "", False
+                text = sub_turn.said or sub_turn.answer or None
+                # Only what the notes and documents say is a source; the model's own
+                # knowledge or a web answer is data to read, not a value to write.
+                return text, sub_turn, why, sub_turn.answered == "notes"
             if step.kind == "research":
                 if research is None:
-                    return None, None
+                    return None, None, "", False
                 # The step's own words as the request: the shared research keys on it, and
                 # every step asked with the whole message would have been one search.
-                return (await research(step.text, step.text, "text")) or None, None
+                found = await research(step.text, step.text, "text")
+                return found or None, None, "", True
             assert self._planner is not None
             # The reply of a plan that writes is short: the details are on the page.
             text = (f"{step.text}\n{P.PLAN_REPLY_SHORT}"
                     if step.reply and "write" in kinds.values() else step.text)
-            return await self._planner.derive(text, inputs), None
+            return await self._planner.derive(text, inputs), None, "", True
         except (FilerError, ResearchError, ResearchQuestion) as e:
             log.warning("plan step %d (%s) failed: %s", step.id, step.kind, e)
-            return None, None
+            reason = getattr(e, "reason", "")
+            return None, None, texts.LLM_DOWN_SHORT.get(reason, "") if reason else "", False
 
     async def _kept(self, message: str, error: FilerError,
                     go: Callable[[], Awaitable[bool]] | None) -> VaultTurn:
@@ -819,7 +884,8 @@ class VaultPipeline:
                         research: Research | None = None,
                         progress: Callable[[str], Awaitable[None]] | None = None,
                         history: str = "", chat: ChatRef | None = None,
-                        words: str = "", replied: bool = False, inputs: str = "") -> str:
+                        words: str = "", replied: bool = False, inputs: str = "",
+                        plain: bool = False) -> str:
         """The answer to a question, in the chat: from the notes (with links to them), from
         general knowledge, or — when it needs fresh facts — from a web search. "" when there
         is no answerer or it failed, and the list of what the search found is the reply.
@@ -862,6 +928,13 @@ class VaultPipeline:
             # short message is their name (Askers.reply), and this question is answered then.
             if chat is None:
                 return texts.ANSWER_WHO.format(lead="")
+            if plain:
+                # A plan's step: the plan asks, with the whole message, so the name the user
+                # gives replays all of it (_plan_turn).
+                turn.who = (texts.ANSWER_WHO_OPTIONS.format(
+                    lead="", options=", ".join(f"«{o}»" for o in found.options))
+                    if found.options else texts.ANSWER_WHO.format(lead=""))
+                return ""
             if replied:
                 # Told and still not found: asking again would go round in circles.
                 return texts.ANSWER_WHO_NOT_FOUND.format(name=known[-1])
@@ -873,6 +946,7 @@ class VaultPipeline:
             return (texts.ANSWER_WHO_OPTIONS.format(
                 lead=lead, options=", ".join(f"«{o}»" for o in found.options))
                 if found.options else texts.ANSWER_WHO.format(lead=lead))
+        turn.answered = found.kind
         if found.kind == "notes":
             turn.said = found.text
         lines = [texts.VAULT_ANSWER.format(answer=found.text)]

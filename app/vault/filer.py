@@ -133,6 +133,10 @@ class VaultContext:
     # A plan's step (app/vault/planner.py): the results of the steps it needs. Shown to every
     # stage beside the guide, and a source of values like a linked page.
     inputs: str = ""
+    # A plan's step: the owner's own message (what the step's values are judged against —
+    # never the step text the planner wrote) and the handed results that count as a source.
+    source: str = ""
+    facts: str = ""
     note_props: dict[str, list[str]] = field(default_factory=dict)
     note_headings: dict[str, list[str]] = field(default_factory=dict)
     # The pages behind the message's links (app.web.links.LinkPage), shown beside the message,

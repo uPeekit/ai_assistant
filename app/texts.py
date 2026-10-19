@@ -398,6 +398,7 @@ ANSWER_GENERAL = "💬 {answer}"
 # A multi-step message (app/vault/planner.py): a part that could not be done, and what a write
 # step reports to the steps after it.
 PLAN_PART_FAILED = "⚠️ Не получилось: {what}"
+PLAN_PART_FAILED_WHY = "⚠️ Не получилось: {what} — {why}"
 PLAN_STEP_WROTE = "записано: {what}"
 PLAN_STEP_UNCLEAR = "шаг не понят"
 # The answerer asking who the user is in the records before answering about them; the next
@@ -654,3 +655,6 @@ FOLDER_MISSING = "папки нет или она недоступна"
 FOLDER_MODEL_FAILED = "не удалось прочитать моделью — попробую в следующий раз"
 FOLDER_SEEN = "файлов: {n}, последний изменён {last}"
 FOLDER_NOT_YET = "ещё не проверялась"
+
+# A plan with a write part that failed: the message is kept whole in the inbox note.
+PLAN_KEPT = f"Сообщение целиком сохранено в «{VAULT_INBOX_NOTE}»."

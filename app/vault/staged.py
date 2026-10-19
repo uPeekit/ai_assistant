@@ -205,9 +205,12 @@ class _Gate:
     # What the message's read links say: a source for a title, a field or a product, as the
     # user sent it. Never for a date: a page is full of numbers the user did not mean.
     pages: str = ""
+    # A plan's step text: a source for a title or a place it names, never for a value.
+    names: str = ""
 
     def __post_init__(self) -> None:
         self._tokens = tokens(f"{self.message}\n{self.pages}")
+        self._named = tokens(f"{self.message}\n{self.pages}\n{self.names}")
         # A link's digits are an address, not a time.
         spoken = URL.sub(" ", self.message)
         # Whole words that *begin* with a cue: as a substring, the cue for "morning" is
@@ -261,12 +264,12 @@ class _Gate:
         wanted = [w for w in tokens(title) if len(w) > 2]
         if not wanted:
             return self.mentions(title)
-        hits = sum(1 for w in wanted if any(_close(w, m) for m in self._tokens))
+        hits = sum(1 for w in wanted if any(_close(w, m) for m in self._named))
         return hits * 2 >= len(wanted)
 
     def mentions(self, value: str) -> bool:
         """At least one word of `value` is in the message."""
-        return any(_close(w, m) for w in tokens(value) for m in self._tokens)
+        return any(_close(w, m) for w in tokens(value) for m in self._named)
 
     def prop(self, value: object) -> str | None:
         """The value to write, "" to leave the property empty, None when it has no source."""
@@ -410,7 +413,14 @@ class _Run:
 
     def _pages(self) -> str:
         pages = [f"{page.title}\n{page.text}" for page in self.ctx.links if not page.error]
-        return "\n".join([*pages, self.ctx.inputs] if self.ctx.inputs else pages)
+        return "\n".join([*pages, self.ctx.facts] if self.ctx.facts else pages)
+
+    def _gate(self, text: str, guide: str = "", pages: str = "") -> _Gate:
+        """The gate for this message. In a plan's step the owner's own message is what values
+        are judged against; the step's text may only name titles and places."""
+        if self.ctx.source:
+            return _Gate(self.ctx.source, guide, pages, names=text)
+        return _Gate(text, guide, pages)
 
     def _today(self) -> str:
         return P.section(P.H_TODAY, f"{self.ctx.today} ({self.ctx.weekday})")
@@ -721,7 +731,7 @@ class _Run:
                       P.section(P.H_AREAS, ", ".join(ctx.tags)),
                       P.section(P.H_HISTORY, ctx.history), self._pointer_section(),
                       text=text))
-        gate = _Gate(text, ctx.guide, self._pages())
+        gate = self._gate(text, ctx.guide, self._pages())
         items = [i for i in answer.get("items") or []
                  if isinstance(i, dict) and str(i.get("text", "")).strip()]
         taken = self._taken(answer)
@@ -745,7 +755,7 @@ class _Run:
     async def _groceries(self, text: str, *, done: bool) -> list[dict]:
         answer = await self._ask(P.GROCERY_PROMPT, _obj({"names": _STRINGS}),
                                  P.message(text=text))
-        gate = _Gate(text, "", self._pages())
+        gate = self._gate(text, "", self._pages())
         names = [n.strip() for n in answer.get("names") or []
                  if isinstance(n, str) and n.strip() and gate.said(n)]
         # No names left: filer.check takes the product from the message itself.
@@ -787,7 +797,7 @@ class _Run:
         taken = self._taken(answer)
         if taken:
             return [self._saved_note(answer, taken, folder)]
-        gate = _Gate(text, ctx.guide, self._pages())
+        gate = self._gate(text, ctx.guide, self._pages())
         known_tags = {t.casefold() for t in ctx.tags}
         out: list[dict] = []
         recalled: list[str] = []
@@ -944,7 +954,7 @@ class _Run:
         if len(words) > 1 and words[0].casefold() in texts.REMIND_LEADING:
             words = words[1:]  # "about charging" is a reminder to charge
         words = " ".join(words) or text
-        gate = _Gate(text, "")
+        gate = self._gate(text, "")
         due = gate.date(answer.get("due"))
         time = gate.clock(answer.get("time"), relative=True)
         rule = str(answer.get("repeat", "")).strip()
@@ -979,7 +989,7 @@ class _Run:
             P.CHANGE_TASK_PROMPT,
             _obj({"due": _STRING, "time": _STRING, "done": {"type": "boolean"}}),
             P.message(self._today(), P.section(P.H_TASK, line), text=text))
-        gate = _Gate(text, "")
+        gate = self._gate(text, "")
         due, time = gate.date(answer.get("due")), gate.clock(answer.get("time"))
         done = answer.get("done") is True
         if not (due or time or done):
@@ -1004,7 +1014,7 @@ class _Run:
                       P.section(P.H_NOTE_PROPS, ", ".join(ctx.note_props.get(note, []))),
                       P.section(P.H_HEADINGS, "\n".join(headings)), text=text))
         if answer.get("kind") == "props":
-            gate = _Gate(text, ctx.guide, self._pages())
+            gate = self._gate(text, ctx.guide, self._pages())
             props = []
             for prop in answer.get("props") or []:
                 name = str((prop or {}).get("name", "")).strip()
@@ -1037,7 +1047,7 @@ class _Run:
         source = notes.get(str(answer.get("source", "")))
         to = str(answer.get("to", "")).strip()
         # The destination is named by the user, in the message; a name from nowhere is not one.
-        if source is None or not to or not _Gate(text, "").mentions(to):
+        if source is None or not to or not self._gate(text, "").mentions(to):
             return [self._inbox(text)]
         return [{"action": "move", "note": source, "to": to,
                  "text": str(answer.get("what", "")).strip() or text}]
@@ -1060,7 +1070,7 @@ class _Run:
         kind = str(answer.get("kind", ""))
         self.trail.append(kind or "?")
         if kind == "day":
-            gate = _Gate(text, "")
+            gate = self._gate(text, "")
             return [{"action": "agenda", "scope": "day",
                      "due_from": gate.date(answer.get("due_from")),
                      "due_to": gate.date(answer.get("due_to"))}]
