@@ -783,3 +783,28 @@ async def test_a_new_note_gets_tags_only_where_its_folders_notes_have_them():
     actions, _, _ = await StagedFiler(tagged, "haiku").file(
         "создай в клубе встречу дом листьев", ctx(folder_tagged=frozenset({"Клуб"})))
     assert actions[0]["tags"] == ["club"]
+
+
+def _book_with_author():
+    return Script(INTENT_PROMPT={"intent": "add"}, TARGET_PROMPT={"target": "f2"},
+                  FOLDER_PROMPT={"items": [{"title": "Омон Ра", "props": [
+                      {"name": "author", "value": "Виктор Пелевин"}], "body": [], "tags": []}],
+                      "lookup": "", "web": "", "media": "text"})
+
+
+async def test_handed_inputs_are_shown_and_count_as_a_source():
+    """A step of a plan is handed the results of the steps it needs: the stages see them, and
+    a value taken from them is not one the model made up."""
+    script = _book_with_author()
+    actions, _, _ = await StagedFiler(script, "haiku").file(
+        "добавь в книги омон ра", ctx(inputs="#1: Омон Ра — Виктор Пелевин, 1992"))
+
+    assert actions[0]["props"] == [{"name": "author", "value": "Виктор Пелевин"}]
+    folder = next(c for name, _, c in script.asked if name == "FOLDER_PROMPT")
+    assert P.H_INPUTS in folder and "1992" in folder
+
+
+async def test_without_inputs_nothing_changes():
+    actions, _, _ = await StagedFiler(_book_with_author(), "haiku").file(
+        "добавь в книги омон ра", ctx())
+    assert actions[0]["props"] == []

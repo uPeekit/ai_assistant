@@ -403,11 +403,14 @@ class _Run:
     # ---- context blocks ------------------------------------------------------------------
 
     def _guide(self) -> str:
-        return P.section(P.H_GUIDE, self.ctx.guide)
+        guide = P.section(P.H_GUIDE, self.ctx.guide)
+        if not self.ctx.inputs:
+            return guide
+        return f"{guide}\n\n{P.section(P.H_INPUTS, self.ctx.inputs)}".strip()
 
     def _pages(self) -> str:
-        return "\n".join(f"{page.title}\n{page.text}" for page in self.ctx.links
-                         if not page.error)
+        pages = [f"{page.title}\n{page.text}" for page in self.ctx.links if not page.error]
+        return "\n".join([*pages, self.ctx.inputs] if self.ctx.inputs else pages)
 
     def _today(self) -> str:
         return P.section(P.H_TODAY, f"{self.ctx.today} ({self.ctx.weekday})")

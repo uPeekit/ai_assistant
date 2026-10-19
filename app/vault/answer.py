@@ -212,17 +212,18 @@ class VaultAnswerer:
 
     async def answer(self, question: str, hits: list[Hit], index: VaultIndex,
                      today: str, history: str = "", google: list | tuple = (),
-                     asker: str = "") -> Answer:
+                     asker: str = "", inputs: str = "") -> Answer:
         """The answer and the notes it came from. Raises FilerError when the model could not
         be asked: the caller then shows what the search found instead."""
-        out = await self._answer(question, hits, index, today, history, google, asker)
+        out = await self._answer(question, hits, index, today, history, google, asker,
+                                 inputs)
         if out.kind != "who" or self._second is None:
             return out
         log.info("vault answer: who is asking is unclear to %s; asking %s", self.model,
                  self._second.model)
         try:
             again = await self._second._answer(question, hits, index, today, history, google,
-                                               asker)
+                                               asker, inputs)
         except FilerError as e:
             log.warning("the second answer failed (%s); asking the user", e)
             return out
@@ -231,7 +232,8 @@ class VaultAnswerer:
         return again
 
     async def _answer(self, question: str, hits: list[Hit], index: VaultIndex, today: str,
-                      history: str, google: list | tuple, asker: str) -> Answer:
+                      history: str, google: list | tuple, asker: str,
+                      inputs: str = "") -> Answer:
         first: list[Note] = []
         for hit in hits:
             note = next((n for n in index.notes if n.path == hit.path), None)
@@ -258,6 +260,7 @@ class VaultAnswerer:
                 P.ANSWER_PROMPT, SCHEMA,
                 P.message(P.section(P.H_TODAY, today),
                           P.section(P.H_ASKER, asker),
+                          P.section(P.H_INPUTS, inputs),
                           P.section(P.H_HISTORY, history),
                           P.section(P.H_SUMMARY, folders_summary(index.notes)),
                           P.section(P.H_CATALOG, P.keyed(

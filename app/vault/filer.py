@@ -130,6 +130,9 @@ class VaultContext:
     folder_props: dict[str, list[str]] = field(default_factory=dict)
     # Folders most of whose notes carry tags: a new note elsewhere gets none of its own.
     folder_tagged: frozenset[str] = frozenset()
+    # A plan's step (app/vault/planner.py): the results of the steps it needs. Shown to every
+    # stage beside the guide, and a source of values like a linked page.
+    inputs: str = ""
     note_props: dict[str, list[str]] = field(default_factory=dict)
     note_headings: dict[str, list[str]] = field(default_factory=dict)
     # The pages behind the message's links (app.web.links.LinkPage), shown beside the message,

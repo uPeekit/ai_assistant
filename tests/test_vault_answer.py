@@ -320,3 +320,10 @@ async def test_note_links_are_for_the_owners_own_chat_only(index):
 
     assert "[Ремонт](obsidian://" in own.reply_line()
     assert group.reply_line() == texts.VAULT_ANSWER.format(answer="Плитка серая.")
+
+
+async def test_the_answerer_sees_the_inputs(index):
+    ask = Ask({"answer": "ок", "sources": [], "more": []})
+    await VaultAnswerer(ask, "haiku").answer("что посоветуешь?", [], index, "2026-10-15, чт",
+                                             inputs="#2: Имя розы")
+    assert P.H_INPUTS in ask.shown[0] and "#2: Имя розы" in ask.shown[0]
