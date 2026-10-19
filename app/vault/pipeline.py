@@ -468,6 +468,7 @@ class VaultPipeline:
                 # neither, and the reader's answer is dropped when a plan comes.
                 plan_ctx = self._plan_context(history)
                 filtering = asyncio.create_task(self._planner.several(message, plan_ctx, tally))
+                filtering.add_done_callback(_retrieved)
             ctx = replace(context(self._index, message, self._now()), links=tuple(links))
             pending = await asyncio.to_thread(self._pending, chat)
             ctx = replace(ctx, inputs=inputs, source=source, facts=facts,
@@ -476,14 +477,20 @@ class VaultPipeline:
                           answers=tuple(answers), pointed=tuple(pointed),
                           web_words=tuple(self._web_words()))
             filing = asyncio.create_task(self._filer.file(message, ctx))
+            filing.add_done_callback(_retrieved)
             if filtering is not None:
                 assert self._planner is not None and plan_ctx is not None
-                plan = await self._planner.plan(message, plan_ctx, tally) \
-                    if await filtering else None
+                try:
+                    plan = await self._planner.plan(message, plan_ctx, tally) \
+                        if await filtering else None
+                except BaseException:
+                    filing.cancel()  # nothing of this message goes on unattended
+                    raise
                 if plan is not None:
                     filing.cancel()
-                    with suppress(BaseException):
-                        await filing
+                    # Waited for, not awaited: the reader's own cancellation stays its own,
+                    # and this message's (at shutdown) still reaches here.
+                    await asyncio.wait({filing})
                     return await self._run_plan(
                         message, plan, tally, research=research, links=links, chat=chat,
                         history=history, progress=progress, answers=answers, pointed=pointed,
@@ -720,7 +727,7 @@ class VaultPipeline:
 
             async def research(request: str, query: str, media: str = "text") -> str:
                 if left[0] <= 0:
-                    raise ResearchError("the message's searches are spent")
+                    raise ResearchError(texts.PLAN_SEARCHES_SPENT)
                 left[0] -= 1
                 return await outer(request, query, media)
 
@@ -849,6 +856,8 @@ class VaultPipeline:
         except (FilerError, ResearchError, ResearchQuestion) as e:
             log.warning("plan step %d (%s) failed: %s", step.id, step.kind, e)
             reason = getattr(e, "reason", "")
+            if str(e) == texts.PLAN_SEARCHES_SPENT:
+                return None, None, texts.PLAN_SEARCHES_SPENT, False
             return None, None, texts.LLM_DOWN_SHORT.get(reason, "") if reason else "", False
 
     async def _read(self, text: str, chat: ChatRef | None) -> str:
@@ -867,12 +876,17 @@ class VaultPipeline:
                 else:
                     picked = [f for f in found if f.source == top.source and f.score > 0]
                 parts += [f"### {f.name}\n{f.text}" for f in picked]
+        parts += await asyncio.to_thread(self._read_notes, text)
+        return _cut("\n\n".join(parts), MAX_READ)
+
+    def _read_notes(self, text: str) -> list[str]:
+        out = []
         for hit in search(self._index, text, limit=MAX_HITS):
             note = self._index.get(hit.path)
             if note is not None:
                 with suppress(OSError):
-                    parts.append(f"### {note.name}\n{self._index.read(note.path)}")
-        return _cut("\n\n".join(parts), MAX_READ)
+                    out.append(f"### {note.name}\n{self._index.read(note.path)}")
+        return out
 
     async def _kept(self, message: str, error: FilerError,
                     go: Callable[[], Awaitable[bool]] | None) -> VaultTurn:
@@ -1322,3 +1336,9 @@ def _handed(results: dict[int, str], needs: tuple[int, ...], kinds: dict[int, st
     parts = [f"#{n}: {_cut(results[n], MAX_READ if kinds.get(n) == 'read' else each)}"
              for n in needs]
     return _cut("\n\n".join(parts), total)
+
+
+def _retrieved(task: asyncio.Task) -> None:
+    """A task this message may drop: its failure is retrieved, never logged as forgotten."""
+    if not task.cancelled():
+        task.exception()

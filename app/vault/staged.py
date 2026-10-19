@@ -60,6 +60,8 @@ MAX_TOKENS = 2000
 # A list of thirty novels in order, from a model that thinks before it answers: 2000 cut
 # the chronological Pelevin list off mid-answer.
 LOOKUP_MAX_TOKENS = 8000
+# Words between a make verb and the page word it makes ("make a new note").
+MAX_PAGE_GAP = 2
 MAX_NOTES_SHOWN = 12
 MAX_GUIDE_VALUE = 80
 MAX_LOOKUP = 30
@@ -640,7 +642,7 @@ class _Run:
         if key.startswith("f") and key[1:].isdigit() and int(key[1:]) <= len(self.ctx.folders):
             return await self._add_notes(text, self.ctx.folders[int(key[1:]) - 1])
         note = self._notes().get(key)
-        if note is not None and self._asks_new_page():
+        if note is not None and self._asks_new_page(note):
             # "Make a page with the list": a page was asked for, not lines in an existing one
             # — the place picked was a hub the list could also live in.
             return await self._add_notes(text, texts.VAULT_NOTES_DIR)
@@ -648,9 +650,23 @@ class _Run:
             return await self._append(text, note)
         return [self._inbox(text)]
 
-    def _asks_new_page(self) -> bool:
+    def _asks_new_page(self, note: str) -> bool:
+        """A make verb right before the page word ("make a page", "make a new note"), not
+        the page word as a place ("into the note ..."), and not when the picked note itself is
+        named: "add to the note Ideas: make a site" is an append."""
         low = self.message.casefold()
-        return any(w in low for w in MAKE_WORDS) and any(w in low for w in texts.VAULT_PAGE_WORDS)
+        if note.casefold() in low:
+            return False
+        words = re.findall(r"\w+", low)
+        for i, word in enumerate(words):
+            if not word.startswith(texts.VAULT_PAGE_WORDS):
+                continue
+            before = words[max(0, i - MAX_PAGE_GAP - 1):i]
+            if before and before[-1] in texts.VAULT_PLACE_PREPOSITIONS:
+                continue
+            if any(w.startswith(MAKE_WORDS) for w in before):
+                return True
+        return False
 
     # ---- expanding what the message only names -------------------------------------------
 

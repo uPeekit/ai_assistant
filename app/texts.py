@@ -337,6 +337,8 @@ VAULT_SORT_FOLD = {"ё": "е"}
 # Words that name a page as the thing to make («создай страницу», «новую заметку»): with a make
 # word, a new note even where the place picked is an existing one.
 VAULT_PAGE_WORDS = ("страниц", "страничк", "заметк")
+# A page word after one of these names a place, not a thing to make («в заметку»).
+VAULT_PLACE_PREPOSITIONS = ("в", "во", "к", "на")
 VAULT_COMPOSE_CUES = ("придума", "спланир", "сравни", "составь план", "составь маршрут",
                       "подбери", "посоветуй")
 VAULT_SET_CUES = ("все", "всё", "всех", "весь", "вся", "список", "перечисл",
@@ -404,6 +406,7 @@ PLAN_PART_FAILED = "⚠️ Не получилось: {what}"
 PLAN_PART_FAILED_WHY = "⚠️ Не получилось: {what} — {why}"
 PLAN_STEP_WROTE = "записано: {what}"
 PLAN_STEP_UNCLEAR = "шаг не понят"
+PLAN_SEARCHES_SPENT = "поиски для этого сообщения уже потрачены"
 # The answerer asking who the user is in the records before answering about them; the next
 # short message is taken as the name.
 ANSWER_WHO = "❓ {lead}Как вы записаны? Напишите своё имя так, как оно там."

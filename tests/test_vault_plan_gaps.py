@@ -162,3 +162,78 @@ async def test_asked_to_create_a_page_a_hub_note_is_not_appended_to():
         "создай страницу детективы со списком", ctx(guide="- [[Проекты]] — списки"))
     assert actions[0]["action"] == "note"
     assert texts.VAULT_NOTES_DIR == actions[0]["folder"]
+
+
+APPEND = {"heading": "", "body": ["строка"], "lookup": "", "web": "", "media": "text"}
+
+
+@pytest.mark.parametrize("message", [
+    "добавь в заметку Проекты: сделать сайт",
+    "в заметку Проекты: новый кран",
+    "добавь в заметку Проекты новую книгу Имя розы",
+    "допиши в заметку Проекты, что сделали визы",
+    "создай задачу в заметке Проекты: позвонить",
+])
+async def test_an_append_that_mentions_making_something_stays_an_append(message):
+    """The new-page rule took any make word anywhere and any page word anywhere: «добавь в
+    заметку Идеи: сделать сайт» became a new note. A page is asked for only by a make verb
+    right before the page word, not by «в заметку», and not when the note is named."""
+    script = Script(INTENT_PROMPT={"intent": "add"}, TARGET_PROMPT={"target": "n1"},
+                    APPEND_PROMPT=dict(APPEND))
+    actions, _, _ = await StagedFiler(script, "haiku").file(
+        message, ctx(guide="- [[Проекты]] — списки"))
+    assert actions[0]["action"] == "append"
+
+
+@pytest.mark.parametrize("message", ["создай страницу детективы со списком",
+                                     "сделай новую заметку детективы со списком"])
+async def test_a_page_asked_for_by_name_is_a_new_note(message):
+    script = Script(INTENT_PROMPT={"intent": "add"}, TARGET_PROMPT={"target": "n1"},
+                    FOLDER_PROMPT={"items": [{"title": "детективы", "props": [], "body": [],
+                                              "tags": []}], "lookup": "", "web": "",
+                                   "media": "text"})
+    actions, _, _ = await StagedFiler(script, "haiku").file(
+        message, ctx(guide="- [[Проекты]] — списки"))
+    assert actions[0]["action"] == "note"
+
+
+async def test_cancelling_a_message_while_the_reader_unwinds_writes_nothing(index):
+    """Cancelled while the dropped reader was still unwinding, the message carried on into
+    its plan and wrote: the cancellation was swallowed with the reader's own."""
+    unwinding, inside = asyncio.Event(), asyncio.Event()
+
+    class SlowToStop(Script):
+        async def __call__(self, system, schema, content, max_tokens=0):
+            inside.set()
+            try:
+                await asyncio.sleep(10)
+            except asyncio.CancelledError:
+                unwinding.set()
+                await asyncio.sleep(0.2)  # an HTTP request takes a moment to give up
+                raise
+            return await super().__call__(system, schema, content, max_tokens)
+
+    plan = Plan((Step(1, "research", "найди"),
+                 Step(2, "write", "создай заметку Детективы из #1", (1,), reply=True)))
+    class Planner(FakePlanner):
+        async def plan(self, message, context, tally=None):
+            await inside.wait()  # the reader is mid-call when the plan comes
+            return await super().plan(message, context, tally)
+
+    p = pipe(index, SlowToStop(**note_script().answers), Planner(plan))
+    task = asyncio.create_task(p.handle("найди и запиши",
+                                        research=await research_of({"найди": "x"})))
+    await asyncio.wait_for(unwinding.wait(), 2)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert not (index.root / "Заметки/Детективы.md").exists()
+
+
+async def test_a_spent_search_budget_is_said_in_the_owners_language(index):
+    plan = Plan((*(Step(i, "research", f"q{i}") for i in range(1, MAX_RESEARCH + 2)),
+                 Step(9, "derive", "итог", tuple(range(1, MAX_RESEARCH + 1)), reply=True)))
+    research = await research_of({f"q{i}": "x" for i in range(1, MAX_RESEARCH + 2)})
+    turn = await pipe(index, note_script(), FakePlanner(plan)).handle("x", research=research)
+    assert "spent" not in turn.reply_line()
+    assert texts.PLAN_SEARCHES_SPENT in turn.reply_line()
