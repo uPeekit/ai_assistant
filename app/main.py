@@ -672,6 +672,8 @@ def build(
     # `app` is assigned below, after these closures are defined but before either is ever called
     # (PTB only calls post_init/post_shutdown once run_polling() — or a test — invokes them), so
     # the late-binding closure over the name `app` sees the fully constructed object every time.
+    warming: list[asyncio.Task] = []
+
     async def _post_init(application: Application) -> None:
         await post_init_checks(app, application)
         if app.fatal is None:
@@ -686,10 +688,16 @@ def build(
                 folder_digest.start()
             reminders.start()
             if google is not None:
-                # Behind the start: the first question finds the copies already made.
-                application.create_task(google.warm())
+                # Behind the start: the first question finds the copies already made. A plain
+                # task, kept and cancelled at shutdown: post_init runs before the application
+                # counts as running, and its own create_task warns about exactly that.
+                warming.append(asyncio.create_task(google.warm()))
 
     async def _post_shutdown(_: Application) -> None:
+        for task in warming:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
         # Sweeper first: it is the one thing that still touches the store on its own timer, so it
         # must be off before the store underneath it closes. Admin next, store last — nothing
         # after this reaches for either.

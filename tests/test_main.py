@@ -635,3 +635,19 @@ def test_every_module_imports_on_its_own():
                           capture_output=True, text=True, cwd=root, timeout=180)
     assert done.returncode == 0, done.stderr[-2000:]
     assert done.stdout.strip() == "", done.stdout
+
+
+async def test_google_copies_are_warmed_without_ptbs_not_running_warning(env, tmp_path):
+    """post_init runs before the application counts as running: a task made with
+    Application.create_task there drew PTBUserWarning on every start."""
+    import warnings
+
+    (tmp_path / "data").mkdir(exist_ok=True)
+    (tmp_path / "data" / "google_token.json").write_text("{}", encoding="utf-8")
+    app = _build(env)
+    app.store.migrate()
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        await app.telegram_app.post_init(app.telegram_app)
+    await app.telegram_app.post_shutdown(app.telegram_app)
+    assert not [w for w in caught if "create_task" in str(w.message)]
