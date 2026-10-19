@@ -645,9 +645,7 @@ class _Run:
         if note is not None and self._asks_new_page(note):
             # "Make a page with the list": a page was asked for, not lines in an existing one
             # — the place picked was a hub the list could also live in.
-            # Next to that note (the owner's choice): a reading list beside the reading hub.
-            folder = self.ctx.note_folders.get(note) or texts.VAULT_NOTES_DIR
-            return await self._add_notes(text, folder)
+            return await self._add_notes(text, texts.VAULT_NOTES_DIR)
         if note is not None:
             return await self._append(text, note)
         return [self._inbox(text)]

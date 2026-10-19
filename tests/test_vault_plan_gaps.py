@@ -280,17 +280,3 @@ async def test_a_search_repeated_in_one_message_takes_one_slot(index):
 
 def test_the_remind_and_change_task_prompts_say_what_handed_data_is():
     assert P.INPUTS_RULE in P.REMIND_PROMPT and P.INPUTS_RULE in P.CHANGE_TASK_PROMPT
-
-
-async def test_a_new_page_goes_next_to_the_note_that_was_picked():
-    """Owner's choice: a page asked for where a hub note was picked lands in that note's
-    folder (a reading list next to the reading hub), not in the default notes folder."""
-    script = Script(INTENT_PROMPT={"intent": "add"}, TARGET_PROMPT={"target": "n1"},
-                    FOLDER_PROMPT={"items": [{"title": "детективы", "props": [], "body": [],
-                                              "tags": []}], "lookup": "", "web": "",
-                                   "media": "text"})
-    actions, _, _ = await StagedFiler(script, "haiku").file(
-        "создай страницу детективы со списком",
-        ctx(guide="- [[Проекты]] — списки", folders=["Заметки", "Области"],
-            note_folders={"Проекты": "Области"}))
-    assert actions[0]["action"] == "note" and actions[0]["folder"] == "Области"
