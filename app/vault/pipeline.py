@@ -40,6 +40,7 @@ from app.vault.filer import GROCERY_LIST, Filer, FilerError, check, context, dou
 from app.vault.index import VaultIndex
 from app.vault.linker import Linker
 from app.vault.omnisearch import OmniSearch
+from app.vault.planner import Step, VaultPlanner
 from app.vault.scope import ScopedIndex, allows_path, gate
 from app.vault.search import MAX_HITS, Hit, search, vault_name
 from app.vault.writer import VaultAction, VaultUndo, VaultWrite, VaultWriter
@@ -55,6 +56,10 @@ ANSWER_HITS = 60
 # Where a plan step's text goes when the filer picked no note for it. A folder, not the
 # inbox note: the inbox keeps one-line reminders, and this is a page of research.
 CARRIERS = ("note", "append", "update", "rewrite")
+# A plan step's inputs, each: what the steps it needs produced, cut so one big search cannot
+# crowd the rest out of the prompts.
+MAX_INPUT = 6_000
+MAX_PLAN_GUIDE = 3_000
 MAX_TITLE = 60
 
 
@@ -122,12 +127,16 @@ class VaultTurn:
     model: str = ""
     prompt_tokens: int = 0
     output_tokens: int = 0
+    # A message run as a plan: its answer is the reply, without a line per write.
+    planned: bool = False
 
     @property
     def undos(self) -> list[VaultUndo]:
         return [w.undo for w in self.writes if w.undo is not None]
 
     def reply_line(self) -> str:
+        if self.planned and self.answer:
+            return self.answer
         why = (texts.LLM_DOWN_SHORT.get(self.reason) or self.error) if self.error else ""
         if why and not self.writes:
             failed = texts.VAULT_FAILED.format(error=why)
@@ -235,7 +244,8 @@ class VaultPipeline:
                  google: GoogleSources | None = None,
                  web_words: Callable[[], tuple[str, ...]] | None = None,
                  date_props: Callable[[], tuple[str, ...]] | None = None,
-                 askers: Askers | None = None) -> None:
+                 askers: Askers | None = None,
+                 planner: VaultPlanner | None = None) -> None:
         self._index = index
         self._writer = writer
         # The whole vault and its writer. A group chat's turn (`scoped`) swaps `_index` and
@@ -261,6 +271,8 @@ class VaultPipeline:
         self._google = google
         # Who people are in the owner's records, as they told the bot (app/vault/askers.py).
         self._askers = askers or Askers()
+        # Messages of several steps (app/vault/planner.py); None: every message is one step.
+        self._planner = planner
         # The admin page's words for a web search and its date properties, read per message.
         self._web_words = web_words or (lambda: ())
         self._date_props = date_props or (lambda: agenda_mod.DATE_PROPS)
@@ -413,7 +425,8 @@ class VaultPipeline:
                      answer: Callable[[str, list], Awaitable[str]] | None = None,
                      chat: ChatRef | None = None, history: str = "", answers: tuple = (),
                      pointed: tuple = (),
-                     progress: Callable[[str], Awaitable[None]] | None = None) -> VaultTurn:
+                     progress: Callable[[str], Awaitable[None]] | None = None,
+                     plain: bool = False, inputs: str = "") -> VaultTurn:
         """Read the message, write the vault, and start the linking behind the reply.
 
         `content` is text the caller already has (a plan step's research): the filer still
@@ -432,21 +445,32 @@ class VaultPipeline:
                 if chat is not None else None
             message = first or message
             await self._refreshed()
+            if (self._planner is not None and not plain and go is None and not content
+                    and message.strip()):
+                planned = await self._plan_turn(message, research=research, links=links,
+                                                chat=chat, history=history, progress=progress)
+                if planned is not None:
+                    return planned
             ctx = replace(context(self._index, message, self._now()), links=tuple(links))
             pending = await asyncio.to_thread(self._pending, chat)
-            ctx = replace(ctx, reminders=tuple(self._listed(r) for r in pending),
+            ctx = replace(ctx, inputs=inputs, reminders=tuple(self._listed(r) for r in pending),
                           now_time=self._local().strftime("%H:%M"), history=history,
                           answers=tuple(answers), pointed=tuple(pointed),
                           web_words=tuple(self._web_words()))
             raw, prompt_tokens, output_tokens = await self._filer.file(message, ctx)
         except FilerError as e:
             log.warning("filer failed: %s", e)
+            if plain:  # a plan's step: its failure is reported by the plan, nothing kept here
+                return VaultTurn(error=str(e), reason=e.reason, model=self._filer.model)
             return await self._kept(message, e, go)
         except OSError as e:
             log.warning("vault unreadable: %s", e)
             return VaultTurn(error=type(e).__name__)
         model = self._filer.model
         actions = check(raw, self._index, message)
+        if plain and all(a.action == "inbox" for a in actions):
+            # A step the stages could not place: the planner's words never go to the inbox.
+            return VaultTurn(error=texts.PLAN_STEP_UNCLEAR, model=self._filer.model)
         # Before the gate, not after it: the gate opens when the whole turn is over, and a
         # second model call there would be added to the wait instead of hidden inside it.
         # Text the caller already has fills an empty note, so there is nothing to doubt.
@@ -532,7 +556,8 @@ class VaultPipeline:
                 hits = hits + await asyncio.to_thread(self._omni_hits, question.text, hits)
             said = await self._answered(message, hits, turn, research=research,
                                         progress=progress, history=history, chat=chat,
-                                        words=question.text, replied=first is not None)
+                                        words=question.text, replied=first is not None,
+                                        inputs=inputs)
             if said:
                 turn.answer = f"{turn.answer}\n{said}".strip() if turn.answer else said
         turn.writes, failed = await asyncio.to_thread(self._write_all, actions)
@@ -625,6 +650,89 @@ class VaultPipeline:
         self._link_later(turn.writes)
         return turn
 
+    # ---- plans: one message, several steps ----------------------------------------------------
+
+    def _plan_context(self, history: str) -> str:
+        """What the filter and the planner see besides the message: the guide, the folders,
+        the recent conversation."""
+        guide = self._index.guide()
+        return "\n\n".join(p for p in (
+            P.section(P.H_GUIDE, guide[:MAX_PLAN_GUIDE]),
+            P.section(P.H_FOLDERS, ", ".join(self._index.folders())),
+            P.section(P.H_HISTORY, history)) if p)
+
+    async def _plan_turn(self, message: str, *, research: Research | None, links: tuple,
+                         chat: ChatRef | None, history: str,
+                         progress: Callable[[str], Awaitable[None]] | None) -> VaultTurn | None:
+        """The message as a plan of linked steps, or None when it is one step (or no usable
+        plan came back): then it goes the way every message goes. Steps run in rounds — each
+        round only needs earlier ones, its steps together — and everything they write and say
+        is one turn, so the reply and the Undo cover the whole message."""
+        assert self._planner is not None
+        context = self._plan_context(history)
+        if not await self._planner.several(message, context):
+            return None
+        plan = await self._planner.plan(message, context)
+        if plan is None:
+            return None
+        log.info("plan: %d steps (%s)", len(plan.steps), ", ".join(s.kind for s in plan.steps))
+        merged = VaultTurn(planned=True, model=self._filer.model)
+        results: dict[int, str] = {}
+        failed: list[Step] = []
+        for layer in plan.layers():
+            outs = await asyncio.gather(*(
+                self._plan_step(step, results, {s.id for s in failed}, message,
+                                research=research, links=links, chat=chat, history=history,
+                                progress=progress) for step in layer))
+            for step, (text, sub_turn) in zip(layer, outs, strict=True):
+                if sub_turn is not None:
+                    merged.writes += sub_turn.writes
+                    merged.reminders += sub_turn.reminders
+                    merged.prompt_tokens += sub_turn.prompt_tokens
+                    merged.output_tokens += sub_turn.output_tokens
+                if text is None:
+                    failed.append(step)
+                else:
+                    results[step.id] = text
+        said = [results[s.id] for s in plan.steps if s.reply and s.id in results]
+        merged.answer = "\n\n".join(
+            [*said, *(texts.PLAN_PART_FAILED.format(what=s.text) for s in failed)])
+        if any(s.kind == "write" for s in failed):
+            # A part that should have written did not: the owner's own words are kept, once.
+            kept = await self._kept(message, FilerError("a plan step failed"), None)
+            merged.writes += kept.writes
+        return merged
+
+    async def _plan_step(self, step: Step, results: dict[int, str], failed: set[int],
+                         message: str, *, research: Research | None, links: tuple,
+                         chat: ChatRef | None, history: str,
+                         progress: Callable[[str], Awaitable[None]] | None,
+                         ) -> tuple[str | None, VaultTurn | None]:
+        """(what the step produced — None when it failed —, the turn it wrote in, if any)."""
+        if any(n in failed for n in step.needs):
+            return None, None
+        inputs = "\n\n".join(f"#{n}: {_cut(results[n])}" for n in step.needs)
+        try:
+            if step.kind in ("write", "ask"):
+                sub_turn = await self.handle(step.text, plain=True, inputs=inputs,
+                                             research=research, links=links, chat=chat,
+                                             history=history, progress=progress)
+                if step.kind == "write":
+                    text = "\n".join(texts.PLAN_STEP_WROTE.format(what=w.what)
+                                     for w in sub_turn.writes) or None
+                else:
+                    text = sub_turn.said or sub_turn.answer or None
+                return text, sub_turn
+            if step.kind == "research":
+                if research is None:
+                    return None, None
+                return (await research(message, step.text, "text")) or None, None
+            assert self._planner is not None
+            return await self._planner.derive(step.text, inputs), None
+        except (FilerError, ResearchError, ResearchQuestion) as e:
+            log.warning("plan step %d (%s) failed: %s", step.id, step.kind, e)
+            return None, None
+
     async def _kept(self, message: str, error: FilerError,
                     go: Callable[[], Awaitable[bool]] | None) -> VaultTurn:
         """The model could not be asked — Claude is down, out of credit, or answered rubbish.
@@ -699,7 +807,7 @@ class VaultPipeline:
                         research: Research | None = None,
                         progress: Callable[[str], Awaitable[None]] | None = None,
                         history: str = "", chat: ChatRef | None = None,
-                        words: str = "", replied: bool = False) -> str:
+                        words: str = "", replied: bool = False, inputs: str = "") -> str:
         """The answer to a question, in the chat: from the notes (with links to them), from
         general knowledge, or — when it needs fresh facts — from a web search. "" when there
         is no answerer or it failed, and the list of what the search found is the reply.
@@ -724,7 +832,7 @@ class VaultPipeline:
                 if known else question
             found = await self._answerer.answer(asked, hits, self._index, today,
                                                 history=history, google=google,
-                                                asker=self._asker(chat))
+                                                asker=self._asker(chat), inputs=inputs)
         except FilerError as e:
             log.warning("vault answer failed (%s); listing what was found", e)
             return ""
@@ -1052,3 +1160,7 @@ class VaultPipeline:
             if not await asyncio.to_thread(self._writer.undo, undo):
                 left.append(PurePosixPath(undo.path).stem)
         return left
+
+
+def _cut(text: str) -> str:
+    return text if len(text) <= MAX_INPUT else f"{text[:MAX_INPUT]}…"

@@ -395,6 +395,11 @@ POINTED_ANSWER = "последний ответ ассистента"
 POINTED_EARLIER = "ответ ассистента раньше"
 POINTED_QUOTE = "сообщение, на которое отвечают"
 ANSWER_GENERAL = "💬 {answer}"
+# A multi-step message (app/vault/planner.py): a part that could not be done, and what a write
+# step reports to the steps after it.
+PLAN_PART_FAILED = "⚠️ Не получилось: {what}"
+PLAN_STEP_WROTE = "записано: {what}"
+PLAN_STEP_UNCLEAR = "шаг не понят"
 # The answerer asking who the user is in the records before answering about them; the next
 # short message is taken as the name.
 ANSWER_WHO = "❓ {lead}Как вы записаны? Напишите своё имя так, как оно там."
