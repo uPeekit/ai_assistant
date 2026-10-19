@@ -212,15 +212,20 @@ class VaultAnswerer:
 
     async def answer(self, question: str, hits: list[Hit], index: VaultIndex,
                      today: str, history: str = "", google: list | tuple = (),
-                     asker: str = "", inputs: str = "") -> Answer:
+                     asker: str = "", inputs: str = "",
+                     about_records: bool = False) -> Answer:
         """The answer and the notes it came from. Raises FilerError when the model could not
         be asked: the caller then shows what the search found instead."""
         out = await self._answer(question, hits, index, today, history, google, asker,
                                  inputs)
-        if out.kind != "who" or self._second is None:
+        # The stronger model reads it again when this one cannot tell who asks, or says there
+        # is nothing (or goes to the web) about a question the reader tied to the owner's own
+        # folder or tag: "when are the next club meetings?" had every dated note in the catalog.
+        doubtful = out.kind == "who" or (about_records and out.kind in ("none", "web"))
+        if not doubtful or self._second is None:
             return out
-        log.info("vault answer: who is asking is unclear to %s; asking %s", self.model,
-                 self._second.model)
+        log.info("vault answer: %s from %s about the owner's records; asking %s", out.kind,
+                 self.model, self._second.model)
         try:
             again = await self._second._answer(question, hits, index, today, history, google,
                                                asker, inputs)

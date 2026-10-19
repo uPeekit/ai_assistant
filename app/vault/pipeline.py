@@ -610,7 +610,8 @@ class VaultPipeline:
             said = await self._answered(message, hits, turn, research=research,
                                         progress=progress, history=history, chat=chat,
                                         words=question.text, replied=first is not None,
-                                        inputs=inputs, plain=plain)
+                                        inputs=inputs, plain=plain,
+                                        about_records=bool(question.folder or question.tags))
             if said:
                 turn.answer = f"{turn.answer}\n{said}".strip() if turn.answer else said
         turn.writes, failed = await asyncio.to_thread(self._write_all, actions)
@@ -976,7 +977,7 @@ class VaultPipeline:
                         progress: Callable[[str], Awaitable[None]] | None = None,
                         history: str = "", chat: ChatRef | None = None,
                         words: str = "", replied: bool = False, inputs: str = "",
-                        plain: bool = False) -> str:
+                        plain: bool = False, about_records: bool = False) -> str:
         """The answer to a question, in the chat: from the notes (with links to them), from
         general knowledge, or — when it needs fresh facts — from a web search. "" when there
         is no answerer or it failed, and the list of what the search found is the reply.
@@ -1001,7 +1002,8 @@ class VaultPipeline:
                 if known else question
             found = await self._answerer.answer(asked, hits, self._index, today,
                                                 history=history, google=google,
-                                                asker=self._asker(chat), inputs=inputs)
+                                                asker=self._asker(chat), inputs=inputs,
+                                                about_records=about_records)
         except FilerError as e:
             log.warning("vault answer failed (%s); listing what was found", e)
             return ""

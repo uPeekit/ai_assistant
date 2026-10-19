@@ -327,3 +327,29 @@ async def test_the_answerer_sees_the_inputs(index):
     await VaultAnswerer(ask, "haiku").answer("что посоветуешь?", [], index, "2026-10-15, чт",
                                              inputs="#2: Имя розы")
     assert P.H_INPUTS in ask.shown[0] and "#2: Имя розы" in ask.shown[0]
+
+
+async def test_nothing_found_about_the_owners_own_records_goes_to_the_stronger_model(index):
+    """«когда следующие встречи клуба?» — the folder's dated notes were all in the catalog,
+    and Haiku said there was nothing (or went to the web). A question the reader already tied
+    to a folder or tag of the vault gets the stronger model's reading before such an answer."""
+    for kind in ("none", "web"):
+        first = Ask({"answer": "в заметках ничего нет", "sources": [], "more": [], "kind": kind,
+                     "web": "встречи"})
+        second = Ask({"answer": "9 ноября", "sources": [], "more": [], "kind": "notes"})
+        answerer = VaultAnswerer(first, "haiku", second=VaultAnswerer(second, "sonnet"))
+        found = await answerer.answer("когда следующие встречи?", [], index, "2026-10-19, пн",
+                                      about_records=True)
+        assert found.kind == "notes" and found.text == "9 ноября"
+
+
+async def test_a_general_question_is_not_sent_twice(index):
+    first = Ask({"answer": "", "sources": [], "more": [], "kind": "web", "web": "погода"})
+    second = Ask()
+    answerer = VaultAnswerer(first, "haiku", second=VaultAnswerer(second, "sonnet"))
+    found = await answerer.answer("какая погода завтра?", [], index, "2026-10-19, пн")
+    assert found.kind == "web" and second.shown == []
+
+
+def test_the_answer_prompt_says_how_to_find_the_next_dated_note():
+    assert P.NEXT_DATES_RULE in P.ANSWER_PROMPT
