@@ -139,6 +139,8 @@ class VaultContext:
     facts: str = ""
     note_props: dict[str, list[str]] = field(default_factory=dict)
     note_headings: dict[str, list[str]] = field(default_factory=dict)
+    # Every note's folder, by name: where a page asked for beside a picked note goes.
+    note_folders: dict[str, str] = field(default_factory=dict)
     # The pages behind the message's links (app.web.links.LinkPage), shown beside the message,
     # never inside it: the inbox keeps the user's words, not a pasted web page.
     links: tuple = ()
@@ -184,6 +186,7 @@ def context(index: VaultIndex, message: str, now: datetime) -> VaultContext:
         folder_tagged=folder_tagged(index),
         note_props={n.name: sorted(n.props) for n in shaped if n.props},
         note_headings={n.name: list(n.headings) for n in shaped if n.headings},
+        note_folders={n.name: n.folder for n in index.notes},
         open_tasks=index.open_tasks(message),
         groceries=[ln.name for ln in groceries_mod.read(index.groceries())][:MAX_GROCERIES],
         tasks_note=texts.VAULT_TASKS_NOTE,
