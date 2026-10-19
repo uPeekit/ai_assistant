@@ -227,3 +227,27 @@ async def test_a_write_is_handed_search_and_derived_text_as_its_content(index):
     [write] = turn.writes
     text = index.read(write.path)
     assert "1. Имя розы — монастырь, 1327" in text and "2. Шпион — холодная война" in text
+
+
+async def test_the_reply_of_a_plan_that_creates_something_is_asked_to_be_short(index):
+    """«дай рекомендацию» after «создай страницу» came back as five paragraphs: when the plan
+    writes, the step whose text is the reply is told the details are on the page."""
+    plan = Plan((Step(1, "research", "найди"),
+                 Step(2, "write", "создай заметку Детективы из #1", (1,)),
+                 Step(3, "derive", "посоветуй", (1,), reply=True)))
+    planner = FakePlanner(plan)
+    research = await research_of({"найди": "находки"})
+    await pipe(index, note_script(), planner).handle("найди, запиши и посоветуй",
+                                                     research=research)
+    [(text, _)] = planner.derived
+    assert P.PLAN_REPLY_SHORT in text
+
+
+async def test_a_plan_that_writes_nothing_gets_the_full_answer(index):
+    plan = Plan((Step(1, "research", "найди"), Step(2, "research", "ещё"),
+                 Step(3, "derive", "сравни", (1, 2), reply=True)))
+    planner = FakePlanner(plan)
+    research = await research_of({"найди": "a", "ещё": "b"})
+    await pipe(index, note_script(), planner).handle("найди и сравни", research=research)
+    [(text, _)] = planner.derived
+    assert P.PLAN_REPLY_SHORT not in text

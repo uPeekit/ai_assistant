@@ -737,7 +737,10 @@ class VaultPipeline:
                 # every step asked with the whole message would have been one search.
                 return (await research(step.text, step.text, "text")) or None, None
             assert self._planner is not None
-            return await self._planner.derive(step.text, inputs), None
+            # The reply of a plan that writes is short: the details are on the page.
+            text = (f"{step.text}\n{P.PLAN_REPLY_SHORT}"
+                    if step.reply and "write" in kinds.values() else step.text)
+            return await self._planner.derive(text, inputs), None
         except (FilerError, ResearchError, ResearchQuestion) as e:
             log.warning("plan step %d (%s) failed: %s", step.id, step.kind, e)
             return None, None
