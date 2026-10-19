@@ -141,7 +141,9 @@ async def test_a_question_reads_only_the_groups_notes_and_shows_no_links(index):
     turn = await pipe(index, script, VaultAnswerer(ask, "haiku")).handle("когда встреча?")
     line = turn.reply_line()
     assert "Встреча 1 ноября." in line and "obsidian://" not in line
-    shown = "\n".join(ask.shown)
+    # Nobody in a group can open the owner's notes: no source line at all.
+    assert texts.VAULT_ANSWER_SOURCES.split("{")[0] not in line
+    shown ="\n".join(ask.shown)
     assert "Встреча клуба" in shown
     for word in PRIVATE:
         assert word not in shown, word

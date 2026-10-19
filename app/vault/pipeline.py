@@ -756,8 +756,13 @@ class VaultPipeline:
         if found.kind == "notes":
             turn.said = found.text
         lines = [texts.VAULT_ANSWER.format(answer=found.text)]
-        if self._scope is not None:
-            named = [note.name for note in found.sources]
+        named = []
+        if self._scope is not None or (chat is not None and chat.chat_id < 0):
+            # Nobody in a group can open the owner's notes: which ones an answer came from
+            # is for the log only.
+            if found.sources:
+                log.info("vault answer from notes: %s",
+                         "; ".join(note.name for note in found.sources))
         else:
             vault = vault_name(self._index.root)
             named = [f"[{note.name}]({Hit(note.name, note.path).uri(vault)})"

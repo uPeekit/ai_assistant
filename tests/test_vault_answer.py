@@ -306,3 +306,17 @@ async def test_an_instruction_copied_into_the_answer_is_taken_out(index):
     found = await VaultAnswerer(ask, "haiku").answer("выводы?", [], index, "2026-10-15, чт",
                                                      google=google)
     assert found.text == "мысль"
+
+
+async def test_note_links_are_for_the_owners_own_chat_only(index):
+    """A group with full access answers from the same notes, but nobody there can open them."""
+    from app.chats import ChatRef
+
+    answer = {"answer": "Плитка серая.", "sources": ["n1"], "more": []}
+    own = await pipe(index, Ask(answer)).handle("что я решил про ремонт?",
+                                               chat=ChatRef(7, 7, owner=True))
+    group = await pipe(index, Ask(answer)).handle("что я решил про ремонт?",
+                                                 chat=ChatRef(-100, 7, owner=True))
+
+    assert "[Ремонт](obsidian://" in own.reply_line()
+    assert group.reply_line() == texts.VAULT_ANSWER.format(answer="Плитка серая.")
