@@ -349,3 +349,46 @@ async def test_a_general_question_is_not_sent_twice(index):
 
 def test_the_answer_prompt_says_how_to_find_the_next_dated_note():
     assert P.NEXT_DATES_RULE in P.ANSWER_PROMPT
+
+
+def test_the_answer_prompt_asks_for_each_listed_note_with_its_details():
+    """«когда следующие встречи?» from Haiku was bare titles; the same notes carried the book's
+    author in their properties, and Sonnet's answer named them."""
+    assert P.LIST_DETAILS_RULE in P.ANSWER_PROMPT
+
+
+def test_a_dated_catalog_line_says_how_far_its_date_is_from_today():
+    """Haiku listed a meeting held yesterday as the next one, and once the past ones: the line
+    says it in days, counted here, not left to the model."""
+    import datetime
+
+    from app.vault.answer import catalog_line
+    from app.vault.index import Note
+
+    today = datetime.date(2026, 10, 20)
+    by_name = Note(path="Кнуб/2026-11-09 Встреча.md", name="2026-11-09 Встреча", folder="Кнуб")
+    by_prop = Note(path="Кнуб/Встреча.md", name="Встреча", folder="Кнуб",
+                   props={"date": "2026-10-19"})
+    same_day = Note(path="a.md", name="a", folder="", props={"when": datetime.date(2026, 10, 20)})
+    undated = Note(path="b.md", name="b", folder="", props={"author": "X"})
+
+    assert catalog_line(by_name, today).endswith(P.WHEN_AHEAD.format(days=20))
+    assert catalog_line(by_prop, today).endswith(P.WHEN_AGO.format(days=1))
+    assert catalog_line(same_day, today).endswith(P.WHEN_TODAY)
+    assert catalog_line(undated, today) == "b · author: X"
+    assert catalog_line(undated) == "b · author: X"
+
+
+async def test_a_read_dated_note_says_how_far_its_date_is_too(tmp_path):
+    """The past meeting's own text, read in full, showed its bare date and Haiku named it next."""
+    from app.vault.index import VaultIndex
+    from app.vault.search import Hit
+
+    (tmp_path / "Встречи").mkdir()
+    (tmp_path / "Встречи/Танго.md").write_text("---\ndate: 2026-10-19\n---\n", encoding="utf-8")
+    vault = VaultIndex(tmp_path)
+    vault.refresh()
+    ask = Ask({"answer": "ок", "sources": [], "more": []})
+    await VaultAnswerer(ask, "haiku").answer("когда следующая?", [Hit("Танго", "Встречи/Танго.md")],
+                                             vault, "2026-10-20, вт")
+    assert f"### n1 · {P.WHEN_AGO.format(days=1)}\n" in ask.shown[0]

@@ -13,7 +13,9 @@ prompt treats every note as data, never as instructions."""
 
 from __future__ import annotations
 
+import datetime
 import logging
+import re
 from collections import Counter
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -100,12 +102,49 @@ def catalog(index: VaultIndex, first: list[Note]) -> dict[str, Note]:
     return {f"n{i}": note for i, note in enumerate(notes, start=1)}
 
 
-def catalog_line(note: Note) -> str:
+_ISO_DATE = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
+
+
+def note_date(note: Note) -> datetime.date | None:
+    """The note's date: one in its name first, else the first property that is a date."""
+    for value in (note.name, *note.props.values()):
+        if isinstance(value, datetime.datetime):
+            return value.date()
+        if isinstance(value, datetime.date):
+            return value
+        found = _ISO_DATE.search(value) if isinstance(value, str) else None
+        if found and (value is note.name or value.strip() == found.group(1)):
+            try:
+                return datetime.date.fromisoformat(found.group(1))
+            except ValueError:
+                continue
+    return None
+
+
+def _when(day: datetime.date, today: datetime.date) -> str:
+    days = (day - today).days
+    if days == 0:
+        return P.WHEN_TODAY
+    return P.WHEN_AHEAD.format(days=days) if days > 0 else P.WHEN_AGO.format(days=-days)
+
+
+def catalog_line(note: Note, today: datetime.date | None = None) -> str:
+    """Where the note is and a few properties; a dated note also says how far its date is
+    from today: the model, comparing dates itself, called yesterday's meeting the next one."""
     where = note.path.removesuffix(".md")
     props = [f"{k}: {_value(v)}" for k, v in note.props.items()
              if k not in ("aliases", "alias", "tags", "tag", "cssclasses")
              and _value(v)][:MAX_PROPS]
-    return " · ".join([where, *props])
+    day = note_date(note) if today is not None else None
+    return " · ".join([where, *props, *([_when(day, today)] if day else [])])
+
+
+def _day_of(today: str) -> datetime.date | None:
+    """Today's date from the line the model is shown (the date, then the weekday)."""
+    try:
+        return datetime.date.fromisoformat(today[:10])
+    except ValueError:
+        return None
 
 
 def folders_summary(notes: list[Note]) -> str:
@@ -245,6 +284,7 @@ class VaultAnswerer:
             if note is not None and note not in first:
                 first.append(note)
         keyed = catalog(index, first)
+        day = _day_of(today)
         by_path = {n.path: k for k, n in keyed.items()}
         read = [by_path[n.path] for n in first[:MAX_FIRST] if n.path in by_path]
         out = Answer(text="")
@@ -257,7 +297,7 @@ class VaultAnswerer:
         google_read = _within([k for k, f in found.items() if f.score > 0], found,
                               GOOGLE_BUDGET)
         for round_ in range(2):
-            texts_, shown = self._texts(index, keyed, read)
+            texts_, shown = self._texts(index, keyed, read, day)
             google_text = "\n\n".join(_google_block(k, found[k]) for k in google_read)
             rules = _google_rules(found.values())
             listed = {k: f.name for k, f in found.items() if k not in google_read}
@@ -269,7 +309,7 @@ class VaultAnswerer:
                           P.section(P.H_HISTORY, history),
                           P.section(P.H_SUMMARY, folders_summary(index.notes)),
                           P.section(P.H_CATALOG, P.keyed(
-                              {k: catalog_line(n) for k, n in keyed.items()})),
+                              {k: catalog_line(n, day) for k, n in keyed.items()})),
                           P.section(P.H_READ, texts_),
                           P.section(P.H_GOOGLE_LIST, P.keyed(dict(
                               list(listed.items())[:MAX_GOOGLE_LISTED]))),
@@ -332,9 +372,10 @@ class VaultAnswerer:
         return Answer(text=text, kind="web", prompt_tokens=used_in, output_tokens=used_out)
 
     @staticmethod
-    def _texts(index: VaultIndex, keyed: dict[str, Note],
-               read: list[str]) -> tuple[str, set[str]]:
-        """The notes to show, each under its key, until the budget is spent."""
+    def _texts(index: VaultIndex, keyed: dict[str, Note], read: list[str],
+               today: datetime.date | None = None) -> tuple[str, set[str]]:
+        """The notes to show, each under its key (and how far its date is, as in the
+        catalog), until the budget is spent."""
         blocks: list[str] = []
         shown: set[str] = set()
         left = MAX_READ
@@ -349,5 +390,7 @@ class VaultAnswerer:
                 break
             left -= len(text)
             shown.add(key)
-            blocks.append(f"### {key}\n{text}")
+            day = note_date(keyed[key]) if today is not None else None
+            head = f"{key} · {_when(day, today)}" if day else key
+            blocks.append(f"### {head}\n{text}")
         return "\n\n".join(blocks), shown
