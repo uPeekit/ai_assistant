@@ -1043,23 +1043,13 @@ class VaultPipeline:
         if found.kind == "notes":
             turn.said = found.text
         lines = [texts.VAULT_ANSWER.format(answer=found.text)]
-        named = []
-        if self._scope is not None or (chat is not None and chat.chat_id < 0):
-            # Nobody in a group can open the owner's notes: which ones an answer came from
-            # is for the log only.
-            if found.sources:
-                log.info("vault answer from notes: %s",
-                         "; ".join(note.name for note in found.sources))
-        else:
-            vault = vault_name(self._index.root)
-            named = [f"[{note.name}]({Hit(note.name, note.path).uri(vault)})"
-                     for note in found.sources]
+        # Which notes and Google parts an answer came from is for the log: links in a reply
+        # are for what was made, and a line of the notes read told the owner little.
+        if found.sources:
+            log.info("vault answer from notes: %s",
+                     "; ".join(note.name for note in found.sources))
         if found.google:
-            # Which Google parts an answer came from is for the log: in the reply it was a
-            # line of document and section names nobody could open.
             log.info("vault answer from google: %s", "; ".join(found.google))
-        if named:
-            lines.append(texts.VAULT_ANSWER_SOURCES.format(links=", ".join(named)))
         notice = self._google.sign_in_notice() if self._google and chat and chat.owner \
             and chat.chat_id > 0 else ""
         if notice:

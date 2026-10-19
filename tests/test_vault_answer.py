@@ -135,13 +135,12 @@ def pipe(index, ask: Ask) -> VaultPipeline:
                          answerer=VaultAnswerer(ask, "haiku"))
 
 
-async def test_the_reply_is_the_answer_with_links_to_where_it_came_from(index):
+async def test_the_reply_is_the_answer(index):
     ask = Ask({"answer": "Плитка серая.", "sources": ["n1"], "more": []})
     turn = await pipe(index, ask).handle("что я решил про ремонт?")
 
     line = turn.reply_line()
-    assert line.startswith(texts.VAULT_ANSWER.format(answer="Плитка серая."))
-    assert f"[Ремонт](obsidian://open?vault={turn.vault}&file=" in line
+    assert line == texts.VAULT_ANSWER.format(answer="Плитка серая.")
     assert texts.VAULT_SEARCH_HEADER not in line
     assert "2026-10-15, чт" in ask.shown[0]  # dates are counted from today
     assert turn.writes == [] and turn.prompt_tokens >= 1000
@@ -308,18 +307,15 @@ async def test_an_instruction_copied_into_the_answer_is_taken_out(index):
     assert found.text == "мысль"
 
 
-async def test_note_links_are_for_the_owners_own_chat_only(index):
-    """A group with full access answers from the same notes, but nobody there can open them."""
+async def test_an_answer_names_no_notes_it_came_from(index):
+    """Links go only to what was made: the notes an answer was read from were a line of
+    links that told the owner little, in their own chat as in a group."""
     from app.chats import ChatRef
 
     answer = {"answer": "Плитка серая.", "sources": ["n1"], "more": []}
-    own = await pipe(index, Ask(answer)).handle("что я решил про ремонт?",
-                                               chat=ChatRef(7, 7, owner=True))
-    group = await pipe(index, Ask(answer)).handle("что я решил про ремонт?",
-                                                 chat=ChatRef(-100, 7, owner=True))
-
-    assert "[Ремонт](obsidian://" in own.reply_line()
-    assert group.reply_line() == texts.VAULT_ANSWER.format(answer="Плитка серая.")
+    for chat in (ChatRef(7, 7, owner=True), ChatRef(-100, 7, owner=True)):
+        turn = await pipe(index, Ask(answer)).handle("что я решил про ремонт?", chat=chat)
+        assert turn.reply_line() == texts.VAULT_ANSWER.format(answer="Плитка серая.")
 
 
 async def test_the_answerer_sees_the_inputs(index):
