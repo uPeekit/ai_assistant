@@ -731,6 +731,10 @@ function renderSources() {
         });
       box.appendChild(labelled("Как делить документы", split));
     }
+    if (src.kind === "sheet") {
+      box.appendChild(labelled("Вкладки (через запятую; пусто — все)",
+                               textInput("source-tabs", (src.tabs || []).join(", "))));
+    }
     var note = document.createElement("textarea");
     note.className = "source-instruction";
     note.value = src.instruction || "";
@@ -771,6 +775,8 @@ function collectSources() {
     };
     var split = box.querySelector(".source-split");
     if (split) { source.split = split.value; }
+    var tabs = box.querySelector(".source-tabs");
+    if (tabs) { source.tabs = tabs.value; }
     if (box.dataset.id) { source.id = box.dataset.id; }
     if (box.dataset.fileId) {
       source.file_id = box.dataset.fileId;

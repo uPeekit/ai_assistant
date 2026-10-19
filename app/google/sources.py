@@ -76,6 +76,9 @@ class Source:
     chats: frozenset[int] = frozenset()
     instruction: str = ""
     split: str = "pieces"
+    # A sheet's tabs to read; none: every tab. Tabs that repeat the main one (by year, sorted)
+    # would otherwise crowd it out of what a question reads.
+    tabs: tuple[str, ...] = ()
 
 
 def _source(raw: dict) -> Source:
@@ -91,13 +94,21 @@ def _source(raw: dict) -> Source:
     return Source(id=str(raw.get("id") or file_id), file_id=file_id, kind=kind,
                   title=str(raw.get("title", "")).strip()[:200], chats=frozenset(chats),
                   instruction=str(raw.get("instruction", ""))[:2000],
-                  split=str(raw.get("split")) if raw.get("split") in SPLITS else "pieces")
+                  split=str(raw.get("split")) if raw.get("split") in SPLITS else "pieces",
+                  tabs=_tabs(raw.get("tabs")))
+
+
+def _tabs(value: object) -> tuple[str, ...]:
+    """Tab names from the page: a comma-separated line or a list."""
+    items = value if isinstance(value, list) else str(value or "").split(",")
+    return tuple(dict.fromkeys(str(t).strip() for t in items if str(t).strip()))
 
 
 def _dump(source: Source) -> dict:
     return {"id": source.id, "file_id": source.file_id, "kind": source.kind,
             "title": source.title, "chats": sorted(source.chats),
-            "instruction": source.instruction, "split": source.split}
+            "instruction": source.instruction, "split": source.split,
+            "tabs": list(source.tabs)}
 
 
 class Sources:
@@ -353,7 +364,9 @@ class GoogleSources:
         if copy is None or copy.error:
             return []
         if source.kind != "folder":
-            return [(source.title or copy.title, s) for s in copy.sections]
+            wanted = {t.casefold() for t in source.tabs}
+            return [(source.title or copy.title, s) for s in copy.sections
+                    if not wanted or source.kind != "sheet" or s.group.casefold() in wanted]
         out = []
         for child in copy.children:
             inner = self._load(child["id"])

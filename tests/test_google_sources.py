@@ -436,3 +436,35 @@ def test_a_tables_summary_counts_every_column_even_a_sparse_one():
     counts = "; ".join(texts.GOOGLE_COUNT.format(column=c, n=n, mean=m) for c, n, m in (
         ("avg", 8, "4.00"), ("аня", 8, "5.00"), ("новенький", 2, "3.00")))
     assert summary.text.startswith(texts.GOOGLE_COUNTS.format(rows=8, counts=counts))
+
+
+class TabbedClient(FakeClient):
+    async def sheet_values(self, sheet_id):
+        self.reads.append(sheet_id)
+        return ("Оценки", [
+            ("all", [["", "avg", "Аня"], ["Доктор Живаго", "4.2", "5"], ["Ганнибал", "3.1", "4"]]),
+            ("year1", [["", "avg", "Аня"], ["Доктор Живаго", "4.0", "5"], ["Ганнибал", "3", "4"]])])
+
+
+async def test_a_sheet_source_reads_only_the_tabs_the_owner_listed(tmp_path):
+    """The year tabs repeat the main one: listed tabs only, so the copies of the same rows do
+    not crowd the full table out of what is read."""
+    sources = Sources(tmp_path / "sources.json")
+    sources.save([{"link": "https://docs.google.com/spreadsheets/d/sheet1/edit",
+                   "chats": [GROUP], "tabs": "all"}])
+    google = GoogleSources(TabbedClient(), sources, tmp_path / "copies")
+
+    found = await google.find("оценка Ганнибал", GROUP, owner=False)
+
+    assert found and {f.group for f in found} == {"all"}
+    [saved] = sources.all()
+    assert saved.tabs == ("all",) and sources.dump()[0]["tabs"] == ["all"]
+
+
+async def test_no_tabs_listed_means_every_tab(tmp_path):
+    sources = Sources(tmp_path / "sources.json")
+    sources.save([{"link": "https://docs.google.com/spreadsheets/d/sheet1/edit",
+                   "chats": [GROUP]}])
+    google = GoogleSources(TabbedClient(), sources, tmp_path / "copies")
+    found = await google.find("оценка Ганнибал", GROUP, owner=False)
+    assert {f.group for f in found} == {"all", "year1"}

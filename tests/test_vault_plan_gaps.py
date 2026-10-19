@@ -237,3 +237,46 @@ async def test_a_spent_search_budget_is_said_in_the_owners_language(index):
     turn = await pipe(index, note_script(), FakePlanner(plan)).handle("x", research=research)
     assert "spent" not in turn.reply_line()
     assert texts.PLAN_SEARCHES_SPENT in turn.reply_line()
+
+
+async def test_the_dropped_readers_tokens_are_counted(index):
+    class Later(FakePlanner):
+        async def plan(self, message, context, tally=None):
+            await asyncio.sleep(0.05)  # the reader has finished by now
+            return await super().plan(message, context, tally)
+
+    plan = Plan((Step(1, "research", "a"), Step(2, "derive", "итог", (1,), reply=True)))
+    turn = await pipe(index, note_script(), Later(plan)).handle(
+        "найди детективы", research=await research_of({"a": "находки"}))
+    assert turn.prompt_tokens >= 300  # intent, place and folder stages, 100 each
+
+
+async def test_notes_meant_by_a_read_step_are_not_crowded_out_by_a_weak_table(index):
+    class Weak(FakeGoogle):
+        def __init__(self):
+            self.found = [Found(source="Таблица", title="t", group="t", order=1,
+                                text="ряд " * 20_000, score=1)]
+
+    (index.root / "Заметки/детективы.md").write_text("Детективы: Имя розы, Шпион\n",
+                                                     encoding="utf-8")
+    index.refresh()
+    plan = Plan((Step(1, "read", "заметки про детективы"),
+                 Step(2, "derive", "перечисли", (1,), reply=True)))
+    planner = FakePlanner(plan)
+    from app.chats import ChatRef
+    await pipe(index, note_script(), planner, google=Weak()).handle(
+        "что в заметках про детективы и перечисли", chat=ChatRef(1, 1))
+    assert "Имя розы" in planner.derived[0][1]
+
+
+async def test_a_search_repeated_in_one_message_takes_one_slot(index):
+    plan = Plan((Step(1, "research", "одно"), Step(2, "research", "одно"),
+                 Step(3, "research", "другое"), Step(4, "research", "третье"),
+                 Step(5, "derive", "итог", (1, 2, 3, 4), reply=True)))
+    research = await research_of({"одно": "a", "другое": "b", "третье": "c"})
+    turn = await pipe(index, note_script(), FakePlanner(plan)).handle("x", research=research)
+    assert texts.PLAN_SEARCHES_SPENT not in turn.reply_line()
+
+
+def test_the_remind_and_change_task_prompts_say_what_handed_data_is():
+    assert P.INPUTS_RULE in P.REMIND_PROMPT and P.INPUTS_RULE in P.CHANGE_TASK_PROMPT

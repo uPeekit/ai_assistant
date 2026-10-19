@@ -65,6 +65,7 @@ MAX_STEP_INPUTS = 12_000
 # A read step's result (a whole table) and a derive step's inputs together: the strong model
 # reads them once.
 MAX_READ = 40_000
+MAX_READ_NOTES = 10_000  # of a read: the room kept for the notes it finds
 MAX_DERIVE_INPUTS = 60_000
 MAX_PLAN_GUIDE = 3_000
 MAX_TITLE = 60
@@ -491,6 +492,10 @@ class VaultPipeline:
                     # Waited for, not awaited: the reader's own cancellation stays its own,
                     # and this message's (at shutdown) still reaches here.
                     await asyncio.wait({filing})
+                    if not filing.cancelled() and filing.exception() is None:
+                        _, used_in, used_out = filing.result()  # spent, so counted
+                        tally[0] += used_in
+                        tally[1] += used_out
                     return await self._run_plan(
                         message, plan, tally, research=research, links=links, chat=chat,
                         history=history, progress=progress, answers=answers, pointed=pointed,
@@ -723,12 +728,16 @@ class VaultPipeline:
         if research is not None:
             # One budget of searches for the whole message, steps' own lookups included.
             left = [MAX_RESEARCH]
+            asked: set[tuple[str, str]] = set()
             outer = research
 
             async def research(request: str, query: str, media: str = "text") -> str:
-                if left[0] <= 0:
-                    raise ResearchError(texts.PLAN_SEARCHES_SPENT)
-                left[0] -= 1
+                # The same search again is shared, not run: it takes no second slot.
+                if (request, media) not in asked:
+                    if left[0] <= 0:
+                        raise ResearchError(texts.PLAN_SEARCHES_SPENT)
+                    left[0] -= 1
+                    asked.add((request, media))
                 return await outer(request, query, media)
 
         results: dict[int, str] = {}
@@ -865,6 +874,10 @@ class VaultPipeline:
         matching table is handed on tab by tab in its own order, a document by its best parts,
         then the notes the vault search finds — within MAX_READ."""
         parts: list[str] = []
+        notes = await asyncio.to_thread(self._read_notes, text)
+        # A share is kept for the notes: a table matched on one common word would otherwise
+        # fill the whole read and push out the notes that were meant.
+        room = MAX_READ - min(len("\n\n".join(notes)), MAX_READ_NOTES)
         if self._google is not None and chat is not None:
             found = await self._google.find(text, chat.chat_id,
                                             owner=chat.owner and chat.chat_id > 0)
@@ -875,9 +888,9 @@ class VaultPipeline:
                                      and f.group == top.group), key=lambda f: f.order)
                 else:
                     picked = [f for f in found if f.source == top.source and f.score > 0]
-                parts += [f"### {f.name}\n{f.text}" for f in picked]
-        parts += await asyncio.to_thread(self._read_notes, text)
-        return _cut("\n\n".join(parts), MAX_READ)
+                parts.append(_cut("\n\n".join(f"### {f.name}\n{f.text}" for f in picked),
+                                  room))
+        return _cut("\n\n".join([*parts, *notes]), MAX_READ)
 
     def _read_notes(self, text: str) -> list[str]:
         out = []
