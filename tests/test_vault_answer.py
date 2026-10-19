@@ -274,3 +274,35 @@ async def test_a_failed_second_answer_still_asks_the_user(index):
     found = await answerer.answer("какую оценку я поставил?", [], index, "2026-10-15, чт")
 
     assert found.kind == "who"
+
+
+async def test_the_owners_instructions_stand_apart_from_the_documents_text(index):
+    """Told to quote a part as written, the model quoted the instruction printed above the part
+    too: the instructions now come once per document, in a section of their own."""
+    from app.google.sources import Found
+
+    rule = "приводи раздел дословно"
+    google = [Found(source="Выводы", title="Книга 1", text="мысль один", instruction=rule,
+                    score=3),
+              Found(source="Выводы", title="Книга 2", text="мысль два", instruction=rule,
+                    score=2)]
+    ask = Ask({"answer": "мысль один", "sources": ["g1"], "more": []})
+    await VaultAnswerer(ask, "haiku").answer("выводы по книге 1?", [], index, "2026-10-15, чт",
+                                             google=google)
+
+    shown = ask.shown[0]
+    assert shown.count(rule) == 1
+    assert shown.index(P.H_GOOGLE + ":") < shown.index(P.H_GOOGLE_RULES)
+    assert "### g1: Выводы — Книга 1\nмысль один" in shown
+
+
+async def test_an_instruction_copied_into_the_answer_is_taken_out(index):
+    from app.google.sources import Found
+
+    rule = "Только наши заметки по книгам. Приводи раздел дословно."
+    google = [Found(source="Выводы", title="Книга", text="мысль", instruction=rule, score=3)]
+    ask = Ask({"answer": f"{P.GOOGLE_INSTRUCTION}: {rule}\nмысль", "sources": ["g1"],
+               "more": []})
+    found = await VaultAnswerer(ask, "haiku").answer("выводы?", [], index, "2026-10-15, чт",
+                                                     google=google)
+    assert found.text == "мысль"

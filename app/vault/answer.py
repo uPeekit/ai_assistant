@@ -164,12 +164,23 @@ def _within(keys: list[str], found: dict, budget: int) -> list[str]:
 
 
 def _google_block(key: str, found) -> str:
-    """One Google section as the answerer reads it: its key and name, the owner's instruction
-    for that document, then its text."""
-    head = f"### {key}: {found.name}"
-    if found.instruction.strip():
-        head += f"\n{P.GOOGLE_INSTRUCTION}: {found.instruction.strip()}"
-    return f"{head}\n{found.text}"
+    """One Google section as the answerer reads it: its key and name, then its text."""
+    return f"### {key}: {found.name}\n{found.text}"
+
+
+def _google_rules(found) -> dict[str, str]:
+    """The owner's instruction for each document, once, apart from the documents' text: printed
+    above every part, it was quoted with the part when the owner asked for text as written."""
+    return {f.source: f.instruction.strip() for f in found if f.instruction.strip()}
+
+
+def _without_rules(text: str, rules: dict[str, str]) -> str:
+    """An answer with any instruction it copied taken out again."""
+    for rule in rules.values():
+        text = text.replace(rule, "")
+    lines = [ln for ln in text.splitlines() if not ln.strip().startswith(P.GOOGLE_INSTRUCTION)
+             and ln.strip(" :«»") not in rules]
+    return "\n".join(lines).strip()
 
 
 class VaultAnswerer:
@@ -241,6 +252,7 @@ class VaultAnswerer:
         for round_ in range(2):
             texts_, shown = self._texts(index, keyed, read)
             google_text = "\n\n".join(_google_block(k, found[k]) for k in google_read)
+            rules = _google_rules(found.values())
             listed = {k: f.name for k, f in found.items() if k not in google_read}
             data, used_in, used_out = await self._ask(
                 P.ANSWER_PROMPT, SCHEMA,
@@ -253,7 +265,12 @@ class VaultAnswerer:
                           P.section(P.H_READ, texts_),
                           P.section(P.H_GOOGLE_LIST, P.keyed(dict(
                               list(listed.items())[:MAX_GOOGLE_LISTED]))),
-                          P.section(P.H_GOOGLE, google_text), text=question),
+                          P.section(P.H_GOOGLE, google_text),
+                          # Last, next to the question: placed first, a "quote as written"
+                          # in it was read past and the part retold.
+                          P.section(P.H_GOOGLE_RULES, "\n".join(
+                              P.GOOGLE_RULE.format(source=s, rule=r) for s, r in rules.items())),
+                          text=question),
                 MAX_TOKENS)
             out.prompt_tokens += used_in
             out.output_tokens += used_out
@@ -269,7 +286,7 @@ class VaultAnswerer:
                 google_read = _within([*more_google, *google_read], found, GOOGLE_BUDGET)
                 continue
             break
-        text = str(data.get("answer", "")).strip()
+        text = _without_rules(str(data.get("answer", "")).strip(), rules)
         kind = str(data.get("kind", "notes"))
         out.kind = kind if kind in KINDS else "notes"
         out.web = str(data.get("web", "")).strip() if out.kind == "web" else ""

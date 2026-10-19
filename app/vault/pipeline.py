@@ -762,7 +762,10 @@ class VaultPipeline:
             vault = vault_name(self._index.root)
             named = [f"[{note.name}]({Hit(note.name, note.path).uri(vault)})"
                      for note in found.sources]
-        named += found.google  # Google documents by name only: plain text, no links
+        if found.google:
+            # Which Google parts an answer came from is for the log: in the reply it was a
+            # line of document and section names nobody could open.
+            log.info("vault answer from google: %s", "; ".join(found.google))
         if named:
             lines.append(texts.VAULT_ANSWER_SOURCES.format(links=", ".join(named)))
         notice = self._google.sign_in_notice() if self._google and chat and chat.owner \

@@ -243,7 +243,8 @@ async def test_save_this_landing_on_the_inbox_becomes_a_note_of_the_answer(index
 
 # ---- Google sources in an answer -----------------------------------------------------------------
 
-async def test_an_answer_reads_google_sections_and_names_them_without_links(index):
+async def test_an_answer_reads_google_sections_and_logs_them_instead_of_naming_them(index, caplog):
+    caplog.set_level("INFO")
     from app.chats import ChatRef
     from app.google.sources import Found
 
@@ -269,7 +270,9 @@ async def test_an_answer_reads_google_sections_and_names_them_without_links(inde
     shown = ask.shown[0][1]
     assert "g1: Рейтинги — лист" in shown and "строка — книга" in shown
     line = turn.reply_line()
-    assert "Рейтинги — лист" in line and "docs.google" not in line and "](" not in line
+    # The Google part an answer came from is for the log, not the reply: it only cluttered it.
+    assert line == texts.VAULT_ANSWER.format(answer="3.1")
+    assert any("Рейтинги — лист" in r.getMessage() for r in caplog.records)
     # In a group even an owner gets the group's sources only, never the Drive.
     await p.handle("какой рейтинг у Ганнибала?", chat=ChatRef(-100, 1, owner=True))
     assert google.asked == [(1, True), (-100, False)]
