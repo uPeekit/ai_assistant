@@ -99,6 +99,17 @@ def plan_from(answer: dict) -> Plan | None:
     return Plan(tuple(steps))
 
 
+def one_step(plan: Plan) -> bool:
+    """A plan that is one search feeding one write: what the one-step path already does — the
+    findings written as they stand — so it goes that way."""
+    kinds = sorted(s.kind for s in plan.steps)
+    if kinds != ["research", "write"]:
+        return False
+    search = next(s for s in plan.steps if s.kind == "research")
+    write = next(s for s in plan.steps if s.kind == "write")
+    return search.id in write.needs
+
+
 class VaultPlanner:
     def __init__(self, light: Ask, strong: Ask, light_model: str = "",
                  strong_model: str = "") -> None:
@@ -140,7 +151,10 @@ class VaultPlanner:
             return None
         plan = plan_from(answer)
         if plan is None:
-            log.warning("the plan the model gave cannot be run; one step")
+            log.info("no plan of several steps; one step")
+        elif one_step(plan):
+            log.info("the plan is one search into one write; one step")
+            return None
         return plan
 
     async def derive(self, text: str, inputs: str) -> str:

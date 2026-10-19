@@ -682,8 +682,9 @@ class VaultPipeline:
         for layer in plan.layers():
             outs = await asyncio.gather(*(
                 self._plan_step(step, results, {s.id for s in failed}, message,
-                                research=research, links=links, chat=chat, history=history,
-                                progress=progress) for step in layer))
+                                {s.id: s.kind for s in plan.steps}, research=research,
+                                links=links, chat=chat, history=history, progress=progress)
+                for step in layer))
             for step, (text, sub_turn) in zip(layer, outs, strict=True):
                 if sub_turn is not None:
                     merged.writes += sub_turn.writes
@@ -704,7 +705,8 @@ class VaultPipeline:
         return merged
 
     async def _plan_step(self, step: Step, results: dict[int, str], failed: set[int],
-                         message: str, *, research: Research | None, links: tuple,
+                         message: str, kinds: dict[int, str], *, research: Research | None,
+                         links: tuple,
                          chat: ChatRef | None, history: str,
                          progress: Callable[[str], Awaitable[None]] | None,
                          ) -> tuple[str | None, VaultTurn | None]:
@@ -714,9 +716,14 @@ class VaultPipeline:
         inputs = "\n\n".join(f"#{n}: {_cut(results[n])}" for n in step.needs)
         try:
             if step.kind in ("write", "ask"):
+                # Found and derived text a write is handed is written as it stands, as on the
+                # one-step path: a model retelling a search into note lines loses most of it.
+                content = "\n\n".join(results[n] for n in step.needs
+                                       if kinds.get(n) in ("research", "derive")) \
+                    if step.kind == "write" else ""
                 sub_turn = await self.handle(step.text, plain=True, inputs=inputs,
-                                             research=research, links=links, chat=chat,
-                                             history=history, progress=progress)
+                                             content=content, research=research, links=links,
+                                             chat=chat, history=history, progress=progress)
                 if step.kind == "write":
                     text = "\n".join(texts.PLAN_STEP_WROTE.format(what=w.what)
                                      for w in sub_turn.writes) or None
@@ -726,7 +733,9 @@ class VaultPipeline:
             if step.kind == "research":
                 if research is None:
                     return None, None
-                return (await research(message, step.text, "text")) or None, None
+                # The step's own words as the request: the shared research keys on it, and
+                # every step asked with the whole message would have been one search.
+                return (await research(step.text, step.text, "text")) or None, None
             assert self._planner is not None
             return await self._planner.derive(step.text, inputs), None
         except (FilerError, ResearchError, ResearchQuestion) as e:

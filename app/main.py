@@ -112,6 +112,7 @@ from app.vault.index import VaultIndex
 from app.vault.linker import Linker
 from app.vault.omnisearch import OmniSearch
 from app.vault.pipeline import VaultPipeline
+from app.vault.planner import VaultPlanner
 from app.vault.scope import ScopedIndex
 from app.vault.staged import StagedFiler, claude_ask
 from app.vault.writer import VaultWriter
@@ -311,7 +312,12 @@ def _vault_pipeline(settings: Settings, switches: Switches, tuning: Tuning,
                          reminders=reminders, zone=settings.timezone, google=google,
                          web_words=lambda: tuning.web_words,
                          date_props=lambda: tuning.date_props,
-                         askers=Askers(settings.db_path.with_name("askers.json")))
+                         askers=Askers(settings.db_path.with_name("askers.json")),
+                         # A message of several steps is planned by the stronger model, after
+                         # one cheap question to the light one (app/vault/planner.py).
+                         planner=(VaultPlanner.claude(key, settings.filer_model,
+                                                      strong or settings.rewrite_model,
+                                                      health=health) if staged else None))
 
 
 def _google_sources(settings: Settings, sources: Sources) -> GoogleSources | None:

@@ -68,7 +68,9 @@ def case(eid: int, text: str, ts: str, index: VaultIndex) -> dict:
         "id": f"e{eid}",
         "text": text,
         "sent": when.isoformat(timespec="seconds"),
-        "context": asdict(ctx),
+        # Sets as sorted lists: YAML has no set, and a frozen case must be readable back.
+        "context": {k: sorted(v) if isinstance(v, set | frozenset) else v
+                    for k, v in asdict(ctx).items()},
     }
 
 

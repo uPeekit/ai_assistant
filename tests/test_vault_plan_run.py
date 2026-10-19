@@ -190,3 +190,40 @@ async def test_a_huge_result_is_cut_before_it_is_handed_on(index):
     await pipe(index, note_script(), planner).handle("найди и сократи", research=research)
 
     assert len(planner.derived[0][1]) <= MAX_INPUT + 20
+
+
+async def test_each_research_step_is_its_own_search_through_the_shared_research(index):
+    """The shared research (one search per message for both sides) keys on the request: a
+    plan's searches, all asked with the same message, would have been one search."""
+    from app.conversation.shared_research import SharedResearch
+
+    class Researcher:
+        async def research(self, request, query, media="text"):
+            return f"находки: {query}"
+
+    plan = Plan((Step(1, "research", "детективы"), Step(2, "research", "триллеры"),
+                 Step(3, "derive", "сравни", (1, 2), reply=True)))
+    planner = FakePlanner(plan)
+    await pipe(index, note_script(), planner).handle(
+        "найди детективы и триллеры и сравни", research=SharedResearch(Researcher()).research)
+
+    inputs = planner.derived[0][1]
+    assert "находки: детективы" in inputs and "находки: триллеры" in inputs
+
+
+async def test_a_write_is_handed_search_and_derived_text_as_its_content(index):
+    """Found and derived text is written as it stands, as on the one-step path; a model
+    retelling a search into note lines loses most of it."""
+    plan = Plan((Step(1, "research", "найди"), Step(2, "derive", "отбери", (1,)),
+                 Step(3, "write", "создай заметку Детективы из #2", (2,)),
+                 Step(4, "derive", "посоветуй", (2,), reply=True)))
+    planner = FakePlanner(plan, derive=lambda text, inputs: (
+        "1. Имя розы — монастырь, 1327\n2. Шпион — холодная война" if text == "отбери"
+        else "Советую «Имя розы»."))
+    research = await research_of({"найди": "находки"})
+    turn = await pipe(index, note_script(), planner).handle("найди, запиши и посоветуй",
+                                                           research=research)
+
+    [write] = turn.writes
+    text = index.read(write.path)
+    assert "1. Имя розы — монастырь, 1327" in text and "2. Шпион — холодная война" in text

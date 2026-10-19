@@ -88,3 +88,14 @@ async def test_a_derive_that_fails_raises():
 def test_plan_is_a_value():
     plan = plan_from({"steps": [step(1), step(2, needs=[1])]})
     assert isinstance(plan, Plan) and [s.kind for s in plan.steps] == ["write", "write"]
+
+
+async def test_one_search_feeding_one_write_is_one_step():
+    """«find X and write it to a page» split into a search and a write is what the one-step
+    path already does, findings written as they stand: such a plan is no plan."""
+    strong = Ask({"steps": [step(1, "research"), step(2, "write", [1], reply=True)]},
+                 {"steps": [step(1, "research"), step(2, "research"),
+                            step(3, "derive", [1, 2], reply=True)]})
+    planner = VaultPlanner(Ask(), strong)
+    assert await planner.plan("найди и запиши", "") is None
+    assert await planner.plan("найди два варианта и сравни", "") is not None
