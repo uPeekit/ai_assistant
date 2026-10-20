@@ -60,7 +60,7 @@ def test_a_doc_without_headings_becomes_overlapping_pieces():
 
 def test_a_sheet_row_names_itself_by_its_first_cell():
     [section] = sheet_sections(*SHEET_TABS)
-    assert "Доктор Живаго — min: 3; max: 5; avg: 4.2; Аня: 5" in section.text
+    assert "Доктор Живаго [чисел: 4] — min: 3; max: 5; avg: 4.2; Аня: 5" in section.text
 
 
 def test_a_quiz_lists_questions_correct_answers_and_each_response():
@@ -487,3 +487,39 @@ def test_each_source_shows_its_link_and_a_new_link_moves_it(tmp_path):
     moved = registry.dump()[0]
     assert (moved["id"], moved["file_id"], moved["kind"], moved["title"]) == (
         sheet["id"], "D2", "doc", "Оценки")
+
+
+BOOKS = ("Оценки", [("knub", [
+    ["", "min", "max", "avg", "эля", "нина", "лиза", "женя", "юра"],
+    ["Клара и Солнце", "1.73", "4.1", "3.33", "4", "4.1", "3.5", "1.73", "3.3"],
+    ["Цветы для Элджернона", "2.1", "4", "3.03", "3", "", "4", "2.1", ""],
+    ["Лавкрафт", "3.32", "5", "4.13", "4.5", "3.7", "5", "3.32", ""],
+    ["Король в жёлтом", "3.7", "5", "4.4", "", "3.7", "5", "4.5", ""],
+    ["Единственный", "2", "3.5", "2.75", "2", "3", "", "2.5", "3.5"],
+])])
+
+
+def test_a_row_says_how_many_numbers_it_has_besides_the_total_columns():
+    """«сколько человек оценили Клару и Солнце?» — the model counted 10 of 12: the row held
+    min, max and avg among the people, and nothing said they were not people."""
+    text = "\n".join(s.text for s in sheet_sections(*BOOKS) if not s.summary)
+    line = next(ln for ln in text.splitlines() if ln.startswith("Клара и Солнце"))
+    # Next to the name: at the end of a long row it was read past.
+    assert line.startswith("Клара и Солнце " + texts.GOOGLE_ROW_NUMBERS_BUT.format(
+        n=5, columns="min, max, avg") + " — min: 1.73")
+    flowers = next(ln for ln in text.splitlines() if ln.startswith("Цветы"))
+    assert texts.GOOGLE_ROW_NUMBERS_BUT.format(n=3, columns="min, max, avg") in flowers
+
+
+def test_a_column_of_peoples_scores_is_not_taken_for_a_total():
+    """Женя is the lowest on two books of five: a person, not the min column."""
+    text = "\n".join(s.text for s in sheet_sections(*BOOKS) if not s.summary)
+    tag = text.splitlines()[0].split("[", 1)[1].split("]", 1)[0]
+    assert tag.endswith("min, max, avg") and "женя" not in tag
+
+
+def test_a_table_without_totals_still_counts_its_numbers():
+    tabs = ("T", [("t", [["", "a", "b"], ["x", "1", "2"], ["y", "3", ""]])])
+    [section] = sheet_sections(*tabs)
+    assert section.text.splitlines()[0] == "x " + texts.GOOGLE_ROW_NUMBERS.format(n=2) + \
+        " — a: 1; b: 2"

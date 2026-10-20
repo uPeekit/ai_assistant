@@ -398,3 +398,14 @@ def test_the_answer_prompt_keeps_the_lines_of_what_it_quotes():
     """A club's conclusions, one per line in the document, came back joined by «; » into one
     paragraph nobody could read."""
     assert P.KEEP_LINES_RULE in P.ANSWER_PROMPT
+
+
+def test_the_answer_prompt_takes_a_rows_count_from_its_tag():
+    """«сколько человек оценили» was counted by the model down the row, ten of twelve."""
+    assert P.ROW_COUNT_RULE in P.ANSWER_PROMPT
+
+
+def test_kept_copies_are_read_again_for_the_row_counts():
+    from app.google.sources import COPY_FORMAT
+
+    assert COPY_FORMAT >= 5

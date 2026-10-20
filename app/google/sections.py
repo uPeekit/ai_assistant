@@ -21,6 +21,8 @@ MAX_PART = 5000  # characters of one heading's section before it is split into p
 SUMMARY_LINE = 160  # characters of a response shown in a quiz's score summary
 EXTREMES = 5  # rows shown at each end of a number column in a tab's summary
 MIN_NUMBERS = 3  # numbers a column needs to be summarised
+MIN_TOTAL_ROWS = 5  # rows a column must total the others in, to be taken for a total
+TOTAL_SHARE = 0.9  # of its rows a total column must match
 
 
 @dataclass(frozen=True)
@@ -106,18 +108,65 @@ def _pieces(title: str, text: str) -> list[Section]:
     return out
 
 
-def _row(header: list[str], row: list[str]) -> str:
-    """One row as "name — column: value; …". The first cell names the row when its column has
-    no header of its own (a list of books down the left); otherwise every cell is a pair."""
-    def name(i: int) -> str:
-        return header[i] if i < len(header) and header[i] else \
-            texts.GOOGLE_COLUMN.format(n=i + 1)
+def _name(header: list[str], i: int) -> str:
+    return header[i] if i < len(header) and header[i] else texts.GOOGLE_COLUMN.format(n=i + 1)
 
+
+def _row(header: list[str], row: list[str], totals: list[int] = ()) -> str:
+    """One row as "name — column: value; …". The first cell names the row when its column has
+    no header of its own (a list of books down the left); otherwise every cell is a pair. A row
+    with numbers ends with how many it holds, the total columns left out: a model counting
+    "how many rated it" down a row of fifteen counted ten, min, max and mean among them."""
     cells = list(enumerate(row))
-    if row and row[0] and not (header and header[0]):
-        rest = "; ".join(f"{name(i)}: {v}" for i, v in cells[1:] if v)
-        return f"{row[0]} — {rest}" if rest else row[0]
-    return "; ".join(f"{name(i)}: {v}" for i, v in cells if v)
+    named = bool(row and row[0] and not (header and header[0]))
+    n = sum(1 for i, v in cells[1 if named else 0:]
+            if i not in totals and _number(v) is not None)
+    tag = "" if not n else texts.GOOGLE_ROW_NUMBERS_BUT.format(
+        n=n, columns=", ".join(_name(header, i) for i in totals)) if totals else \
+        texts.GOOGLE_ROW_NUMBERS.format(n=n)
+    if named:
+        # Next to the row's name: at the end of a long row it was read past.
+        rest = "; ".join(f"{_name(header, i)}: {v}" for i, v in cells[1:] if v)
+        head = f"{row[0]} {tag}" if tag else row[0]
+        return f"{head} — {rest}" if rest else head
+    line = "; ".join(f"{_name(header, i)}: {v}" for i, v in cells if v)
+    return f"{tag} {line}" if tag else line
+
+
+def _matches(value: float, text: str, others: list[float]) -> bool:
+    """Is `value` the min, max, mean or sum of `others`, to the decimals it is written with?"""
+    decimals = len(text.replace(",", ".").partition(".")[2])
+    near = 0.5 * 10 ** -decimals + 1e-9
+    return any(abs(value - stat) <= near for stat in (
+        min(others), max(others), sum(others) / len(others), sum(others)))
+
+
+def _totals(header: list[str], rows: list[list[str]]) -> list[int]:
+    """The columns that only total each row's other numbers (its min, max, mean or sum) — told
+    by their values, not their names. Found in rounds: the mean is the mean of the people once
+    min and max are set aside, not before."""
+    width = max((len(r) for r in rows), default=0)
+    named = not (header and header[0])
+    found: list[int] = []
+    while True:
+        new = []
+        for i in range(1 if named else 0, width):
+            if i in found:
+                continue
+            checked = hits = 0
+            for r in rows:
+                value = _number(r[i]) if i < len(r) else None
+                others = [n for j, c in enumerate(r) if j != i and j not in found
+                          and (j or not named) and (n := _number(c)) is not None]
+                if value is None or len(others) < MIN_NUMBERS:
+                    continue
+                checked += 1
+                hits += _matches(value, r[i], others)
+            if checked >= MIN_TOTAL_ROWS and hits >= TOTAL_SHARE * checked:
+                new.append(i)
+        if not new:
+            return sorted(found)
+        found += new
 
 
 def _number(text: str) -> float | None:
@@ -168,7 +217,8 @@ def sheet_sections(title: str, tabs: list[tuple[str, list[list]]]) -> list[Secti
             continue
         header = rows[header_at]
         body = [row for row in rows[header_at + 1:] if any(row)]
-        lines = [_row(header, row) for row in body]
+        totals = _totals(header, body)
+        lines = [_row(header, row, totals) for row in body]
         summary = _extremes(header, body)
         if summary:
             out.append(Section(texts.GOOGLE_SUMMARY.format(title=f"{title} / {tab}"), summary,

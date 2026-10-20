@@ -437,6 +437,10 @@ GOOGLE_EXTREMES = "{column}: больше всего — {top}; меньше в�
 GOOGLE_COUNTS = ("Строк: {rows}. По каждой колонке — сколько строк с числом и среднее этих "
                  "чисел: {counts}")
 GOOGLE_COUNT = "{column} {n} (ср. {mean})"
+# The end of a sheet's row: how many numbers it holds, counted by the bot; the columns that only
+# total the others (min, max, mean, sum of the row) are not among them.
+GOOGLE_ROW_NUMBERS = "[чисел: {n}]"
+GOOGLE_ROW_NUMBERS_BUT = "[чисел: {n}, не считая итоговых колонок {columns}]"
 GOOGLE_QUESTIONS = "Вопросы:"
 GOOGLE_CORRECT = "верный ответ"
 GOOGLE_RESPONSES = "Ответов: {n}"
