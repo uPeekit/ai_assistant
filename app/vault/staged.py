@@ -963,8 +963,9 @@ class _Run:
         and nothing is written."""
         ctx = self.ctx
         choices = {f"r{i}": label for i, label in enumerate(ctx.reminders, start=1)}
-        schema = _obj({"op": _enum(("add", "list", "cancel")), "text": _STRING,
-                       "due": _STRING, "time": _STRING, "repeat": _STRING,
+        item = _obj({"text": _STRING, "due": _STRING, "time": _STRING, "repeat": _STRING})
+        schema = _obj({"op": _enum(("add", "list", "cancel")),
+                       "items": {"type": "array", "items": item},
                        "target": _enum([*choices, NONE])})
         answer = await self._ask(
             P.REMIND_PROMPT, schema,
@@ -979,21 +980,26 @@ class _Run:
             key = str(answer.get("target", ""))
             number = list(choices).index(key) + 1 if key in choices else 0
             return [{"action": "reminder_cancel", "reminder": number}]
-        words = str(answer.get("text", "")).split()
-        if len(words) > 1 and words[0].casefold() in texts.REMIND_LEADING:
-            words = words[1:]  # "about charging" is a reminder to charge
-        words = " ".join(words) or text
+        # Several at once: «remind me at 19 to do A, and on the 27th at 18 to do B» is two,
+        # each with its own time — one answer used to keep only the first.
+        items = [i for i in answer.get("items") or [] if isinstance(i, dict)] or [{}]
         gate = self._gate(text, "")
-        due = gate.date(answer.get("due"))
-        time = gate.clock(answer.get("time"), relative=True)
-        rule = str(answer.get("repeat", "")).strip()
-        rule = rule if repeat_rules.valid(rule) else ""
-        reminder = {"action": "reminder", "text": words, "due": due, "time": time,
-                    "repeat": rule}
-        if not (due or time or rule):
-            return [reminder]
-        return [reminder, {"action": "task", "text": words, "due": due, "time": time,
-                           "repeat": rule}]
+        actions: list[dict] = []
+        for one in items:
+            words = str(one.get("text", "")).split()
+            if len(words) > 1 and words[0].casefold() in texts.REMIND_LEADING:
+                words = words[1:]  # "about charging" is a reminder to charge
+            what = " ".join(words) or text
+            due = gate.date(one.get("due"))
+            time = gate.clock(one.get("time"), relative=True)
+            rule = str(one.get("repeat", "")).strip()
+            rule = rule if repeat_rules.valid(rule) else ""
+            actions.append({"action": "reminder", "text": what, "due": due, "time": time,
+                            "repeat": rule})
+            if due or time or rule:
+                actions.append({"action": "task", "text": what, "due": due, "time": time,
+                                "repeat": rule})
+        return actions
 
     # ---- change --------------------------------------------------------------------------
 

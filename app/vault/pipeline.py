@@ -147,7 +147,7 @@ class VaultTurn:
         return [w.undo for w in self.writes if w.undo is not None]
 
     def reply_line(self) -> str:
-        if self.planned and self.answer:
+        if self.planned and self.answer and not self.writes:
             return self.answer
         why = (texts.LLM_DOWN_SHORT.get(self.reason) or self.error) if self.error else ""
         if why and not self.writes:
@@ -744,6 +744,7 @@ class VaultPipeline:
         results: dict[int, str] = {}
         facts: set[int] = set()  # the results a later write may take values from
         failed: list[tuple[Step, str]] = []
+        noted: dict[int, str] = {}  # what a write step said besides its writes (a reminder set)
         who = ""
         kinds = {s.id: s.kind for s in plan.steps}
         for n, layer in enumerate(plan.layers()):
@@ -769,6 +770,8 @@ class VaultPipeline:
                     merged.prompt_tokens += sub_turn.prompt_tokens
                     merged.output_tokens += sub_turn.output_tokens
                     who = who or sub_turn.who
+                    if step.kind == "write" and sub_turn.answer and text is not None:
+                        noted[step.id] = sub_turn.answer
                 if text is None:
                     failed.append((step, why))
                 else:
@@ -779,12 +782,16 @@ class VaultPipeline:
             # The answerer needs to know who asks: asked with the whole message, so the name
             # the user gives next replays all of it.
             self._askers.asked(chat.chat_id, chat.user_id, message)
-        said = [results[s.id] for s in plan.steps if s.reply and s.id in results]
+        # The writes are listed by the reply itself, each with its link: a write step's own
+        # "written: …" line as the reply said one thing of several written.
+        said = [results[s.id] for s in plan.steps
+                if s.reply and s.kind != "write" and s.id in results]
         last = plan.steps[-1]
         if not any(s.reply for s in plan.steps) and last.id in results \
                 and last.kind in ("derive", "ask"):
             said = [results[last.id]]  # no step marked: the last one's answer is the reply
         lines = [*([who] if who else []), *said,
+                 *(noted[s.id] for s in plan.steps if s.id in noted),
                  *(texts.PLAN_PART_FAILED_WHY.format(what=s.text, why=why) if why
                    else texts.PLAN_PART_FAILED.format(what=s.text) for s, why in failed
                    if not (who and s.kind == "ask"))]

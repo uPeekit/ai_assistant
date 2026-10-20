@@ -80,8 +80,10 @@ async def test_a_write_or_ask_step_gets_at_most_the_total_input_cap(index):
 
 async def test_the_remind_stage_sees_handed_inputs():
     script = Script(INTENT_PROMPT={"intent": "remind"},
-                    REMIND_PROMPT={"op": "add", "text": "прочитать Имя розы", "due": "",
-                                   "time": "", "repeat": "", "target": "none"})
+                    REMIND_PROMPT={"op": "add", "items": [{"text": "прочитать Имя розы",
+                                                             "due": "", "time": "",
+                                                             "repeat": ""}],
+                                   "target": "none"})
     await StagedFiler(script, "haiku").file("напомни прочитать первую книгу из #2",
                                             ctx(inputs="#2: 1. Имя розы"))
     remind = next(c for name, _, c in script.asked if name == "REMIND_PROMPT")

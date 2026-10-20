@@ -62,8 +62,9 @@ def pipe(index, store, script) -> VaultPipeline:
 
 def add(text, due="", time="", repeat="") -> Script:
     return Script(INTENT_PROMPT={"intent": "remind"},
-                  REMIND_PROMPT={"op": "add", "text": text, "due": due, "time": time,
-                                 "repeat": repeat, "target": "none"})
+                  REMIND_PROMPT={"op": "add", "items": [{"text": text, "due": due,
+                                                          "time": time, "repeat": repeat}],
+                                 "target": "none"})
 
 
 async def test_a_reminder_is_stored_and_its_task_filed_with_the_same_date(setup):
@@ -119,15 +120,13 @@ async def test_list_and_cancel_by_key(setup):
     store.add(42, 1, "купить хлеб", local(2026, 10, 16, 9, 0))
     store.add(42, 1, "позвонить маме", local(2026, 10, 17, 9, 0))
     script = Script(INTENT_PROMPT={"intent": "remind"},
-                    REMIND_PROMPT={"op": "list", "text": "", "due": "", "time": "",
-                                   "repeat": "", "target": "none"})
+                    REMIND_PROMPT={"op": "list", "items": [], "target": "none"})
     listed = (await pipe(index, store, script).handle("какие напоминания", chat=ME)).reply_line()
     assert listed.startswith(texts.REMIND_LIST) and "позвонить маме" in listed
     assert "купить хлеб" in script.shown[-1]  # the stage is shown the chat's reminders
 
     script = Script(INTENT_PROMPT={"intent": "remind"},
-                    REMIND_PROMPT={"op": "cancel", "text": "", "due": "", "time": "",
-                                   "repeat": "", "target": "r2"})
+                    REMIND_PROMPT={"op": "cancel", "items": [], "target": "r2"})
     turn = await pipe(index, store, script).handle("отмени про маму", chat=ME)
     assert turn.reply_line() == texts.REMIND_CANCELLED.format(text="позвонить маме")
     assert [r.text for r in store.pending(42)] == ["купить хлеб"]
@@ -138,8 +137,7 @@ async def test_in_a_group_a_member_cancels_only_their_own(setup):
     store.add(-100, 501, "печенье", local(2026, 10, 16, 9, 0))
     scope = ChatScope(chat_id=-100, rights=frozenset({"remind"}), tag="клуб", folder="Клуб")
     script = Script(INTENT_PROMPT={"intent": "remind"},
-                    REMIND_PROMPT={"op": "cancel", "text": "", "due": "", "time": "",
-                                   "repeat": "", "target": "r1"})
+                    REMIND_PROMPT={"op": "cancel", "items": [], "target": "r1"})
     bob = ChatRef(chat_id=-100, user_id=502, owner=False)
     turn = await pipe(index, store, script).scoped(scope).handle("отмени печенье", chat=bob)
     assert turn.reply_line() == texts.SCOPE_NOT_YOURS and len(store.pending(-100)) == 1
@@ -167,8 +165,8 @@ async def test_undo_cancels_the_reminder_and_takes_the_task_back(staged_bot, tmp
     staged_bot.vault._zone = TZ
     staged_bot.script.answers.update(
         INTENT_PROMPT={"intent": "remind"},
-        REMIND_PROMPT={"op": "add", "text": "купить хлеб", "due": "2026-09-23", "time": "",
-                       "repeat": "", "target": "none"})
+        REMIND_PROMPT={"op": "add", "items": [{"text": "купить хлеб", "due": "2026-09-23",
+                                               "time": "", "repeat": ""}], "target": "none"})
     reply = await staged_bot.orch.handle_text(CHAT, USER, "напомни завтра купить хлеб")
     assert len(store.pending(CHAT)) == 1 and reply.undo_id
     assert "купить хлеб" in staged_bot.index.read(f"{texts.VAULT_TASKS_NOTE}.md")
@@ -183,8 +181,7 @@ async def test_a_question_about_reminders_is_the_remind_stages(setup):
     index, store = setup
     store.add(42, 1, "купить хлеб", local(2026, 10, 16, 9, 0))
     script = Script(INTENT_PROMPT={"intent": "ask"},
-                    REMIND_PROMPT={"op": "list", "text": "", "due": "", "time": "",
-                                   "repeat": "", "target": "none"})
+                    REMIND_PROMPT={"op": "list", "items": [], "target": "none"})
     turn = await pipe(index, store, script).handle("какие у меня напоминания?", chat=ME)
     assert turn.reply_line().startswith(texts.REMIND_LIST)
 
@@ -224,8 +221,8 @@ async def test_a_fix_keeps_the_reminder_and_undo_still_cancels_it(staged_bot):  
     staged_bot.vault._zone = TZ
     staged_bot.script.answers.update(
         INTENT_PROMPT={"intent": "remind"},
-        REMIND_PROMPT={"op": "add", "text": "купить хлеб", "due": "2026-09-23", "time": "",
-                       "repeat": "", "target": "none"})
+        REMIND_PROMPT={"op": "add", "items": [{"text": "купить хлеб", "due": "2026-09-23",
+                                               "time": "", "repeat": ""}], "target": "none"})
     first = await staged_bot.orch.handle_text(CHAT, USER, "напомни завтра купить хлеб")
     staged_bot.script.answers["FIX_PROMPT"] = {
         "changes": [{"key": "a1", "op": "set", "field": "text", "prop": "",
@@ -236,3 +233,22 @@ async def test_a_fix_keeps_the_reminder_and_undo_still_cancels_it(staged_bot):  
     await staged_bot.orch.handle_callback(CHAT, USER, f"u:{fixed.undo_id}")
     assert store.pending() == []
     store.close()
+
+
+async def test_one_message_sets_each_of_its_reminders(setup):
+    """«напомни сегодня в 19:00 заняться выводами, а 27 числа в 18:00 — дизайном шагомера»:
+    one answer kept only the first; each item is its own reminder, with its own task."""
+    index, store = setup
+    script = Script(INTENT_PROMPT={"intent": "remind"}, REMIND_PROMPT={
+        "op": "add", "target": "none", "items": [
+            {"text": "заняться выводами", "due": "2026-10-16", "time": "19:00", "repeat": ""},
+            {"text": "заняться дизайном шагомера", "due": "2026-10-27", "time": "18:00",
+             "repeat": ""}]})
+
+    turn = await pipe(index, store, script).handle(
+        "напомни завтра в 19:00 заняться выводами, а 27 числа в 18:00 заняться дизайном "
+        "шагомера", chat=ME)
+
+    assert sorted(r.text for r in store.pending(42)) == ["заняться выводами",
+                                                         "заняться дизайном шагомера"]
+    assert len(turn.reminders) == 2 and len(turn.writes) == 2

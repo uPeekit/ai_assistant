@@ -105,3 +105,10 @@ def test_a_derive_with_nothing_to_derive_from_is_refused():
     """A derive step with no needs is the model answering from memory, and its output would
     count as a source for the writes after it."""
     assert plan_from({"steps": [step(1, "derive"), step(2, "write", [1])]}) is None
+
+
+def test_a_step_keeps_the_users_own_verb():
+    """Two reminders were split into two steps worded as plain tasks: no reminder was set."""
+    from app.llm import staged_prompts as SP
+
+    assert SP.STEP_VERB_RULE in SP.PLAN_STEPS_PROMPT

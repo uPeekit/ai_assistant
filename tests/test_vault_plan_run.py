@@ -104,7 +104,10 @@ async def test_a_plan_runs_in_order_and_hands_results_on(index):
     folder = next(c for name, _, c in script.asked if name == "FOLDER_PROMPT")
     assert P.H_INPUTS in folder and "1. Имя розы" in folder  # the write was handed #2
     assert [w.kind for w in turn.writes] == ["note"] and turn.planned
-    assert turn.reply_line() == "Советую «Имя розы»."  # the short answer, no ✅ line
+    # What was made, with its link, then the short answer.
+    line = turn.reply_line()
+    assert line.startswith(texts.VAULT_REPLY.format(what=turn.writes[0].what))
+    assert line.endswith("\nСоветую «Имя розы».")
 
 
 async def test_independent_steps_run_together(index):
@@ -382,3 +385,20 @@ async def test_steps_do_not_refresh_the_index_themselves(index):
     p._refreshed, p.handle = counted, spy
     await real_handle("x", research=await research_of({"a": "находки"}))
     assert inside["refreshed_inside"] == 0
+
+
+async def test_a_plan_of_writes_says_each_thing_it_wrote(index):
+    """Two reminders split into two steps: the reply was the last step's line alone."""
+    script = Script(INTENT_PROMPT={"intent": "add"}, TARGET_PROMPT={"target": "t"},
+                    TASKS_PROMPT={"items": [{"text": "дело", "due": "", "time": "",
+                                             "repeat": "", "heading": "", "tag": "",
+                                             "countdown": False}], "lookup": ""})
+    plan = Plan((Step(1, "write", "запиши дело один"),
+                 Step(2, "write", "запиши дело два", reply=True)))
+
+    turn = await pipe(index, script, FakePlanner(plan)).handle("запиши дела один и два")
+
+    assert len(turn.writes) == 2
+    line = turn.reply_line()
+    assert all(w.what in line for w in turn.writes)
+    assert texts.PLAN_STEP_WROTE.split("{")[0] not in line
