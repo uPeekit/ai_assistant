@@ -28,7 +28,7 @@ import logging
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -64,11 +64,15 @@ class Folder:
         return self.title or Path(self.path).name or self.path
 
 
+def _path_id(path: str) -> str:
+    return hashlib.sha1(path.encode()).hexdigest()[:10]
+
+
 def _folder(raw: dict) -> Folder:
     path = str(raw.get("path", "")).strip()
     if not path:
         raise ValueError("a watched folder needs a path")
-    return Folder(id=str(raw.get("id") or hashlib.sha1(path.encode()).hexdigest()[:10]),
+    return Folder(id=str(raw.get("id") or _path_id(path)),
                   path=path, title=str(raw.get("title", "")).strip()[:200],
                   pattern=str(raw.get("pattern", "")).strip() or "*",
                   instruction=str(raw.get("instruction", ""))[:2000],
@@ -109,8 +113,11 @@ class Folders:
     def save(self, payload: object) -> int:
         if not isinstance(payload, list) or not all(isinstance(r, dict) for r in payload):
             raise ValueError("'folders' must be a list of objects")
-        wanted = [_folder(r) for r in payload]
         old = {f.id: f for f in self.all()}
+        # A folder given another path is another folder: a new id, so it takes a new baseline
+        # instead of reporting every file already in the new place.
+        wanted = [replace(f, id=_path_id(f.path)) if f.id in old and old[f.id].path != f.path
+                  else f for f in (_folder(r) for r in payload)]
         changed = sum(1 for f in wanted if old.get(f.id) != f) + len(
             set(old) - {f.id for f in wanted})
         if changed:

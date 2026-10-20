@@ -446,8 +446,9 @@ def _folder_digest(settings: Settings, switches: Switches, tuning: Tuning, folde
                    application: Callable[[], Application],
                    ) -> tuple[DailyMessage | None, FolderWatch | None,
                               Callable[[], Awaitable[None]] | None]:
-    """Watched folders read at the mail digest's times (app/watch/folders.py), whether or not
-    the mail digest itself is on. Needs Claude: the files are read with the owner's words."""
+    """Watched folders read at their own times — the mail digest's unless set —
+    (app/watch/folders.py), whether or not the mail digest itself is on. Needs Claude: the
+    files are read with the owner's words."""
     key = settings.anthropic_api_key.get_secret_value()
     if not key or not settings.allowed_user_ids:
         return None, None, None
@@ -465,7 +466,7 @@ def _folder_digest(settings: Settings, switches: Switches, tuning: Tuning, folde
         else:
             log.info("watched folders: nothing new, nothing sent")
 
-    return (DailyMessage(send, lambda: parse_times(tuning.mail_at), settings.timezone,
+    return (DailyMessage(send, lambda: parse_times(tuning.folders_at), settings.timezone,
                          remember=LastRun(settings.db_path.with_name("daily_state.json"),
                                           "folders")),
             watch, sdk.close)

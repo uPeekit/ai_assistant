@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from datetime import datetime, time, timedelta
@@ -77,9 +78,37 @@ def parse_at(value: str) -> time | None:
         return None
 
 
+_EVERY = re.compile(r"every\s+(\d+)\s*([hm])(?:\s+(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2}))?",
+                    re.IGNORECASE)
+MIN_STEP = 5  # minutes: a shorter interval is a typo, not a schedule
+
+
+def _every(part: str) -> list[time] | None:
+    """"every 2h 08:00-22:00" -> 08:00, 10:00 … 22:00; no range: the whole day. A range whose
+    end is before its start runs past midnight. None: not an interval at all."""
+    m = _EVERY.fullmatch(part.strip())
+    if not m:
+        return None
+    step = int(m.group(1)) * (60 if m.group(2).lower() == "h" else 1)
+    start, end = (parse_at(m.group(3)), parse_at(m.group(4))) if m.group(3) else (
+        time(0, 0), time(23, 59))
+    if not MIN_STEP <= step <= 24 * 60 or start is None or end is None:
+        log.warning("bad interval %r: expected e.g. every 2h 08:00-22:00", part)
+        return []
+    first, last = start.hour * 60 + start.minute, end.hour * 60 + end.minute
+    if last < first:
+        last += 24 * 60
+    return [time(*divmod(t % (24 * 60), 60)) for t in range(first, last + 1, step)]
+
+
 def parse_times(value: str) -> tuple[time, ...]:
-    """"12:00,19:00" -> two times a day, in order. Bad entries are dropped with a warning."""
-    found = [parse_at(part) for part in value.split(",")]
+    """"12:00,19:00" -> two times a day, in order; "every 3h 09:00-21:00" -> every three hours
+    from nine to nine; both may be mixed, comma-separated. Bad entries are dropped with a
+    warning."""
+    found: list[time | None] = []
+    for part in value.split(","):
+        spaced = _every(part)
+        found += spaced if spaced is not None else [parse_at(part)]
     return tuple(sorted({t for t in found if t is not None}))
 
 

@@ -329,3 +329,22 @@ async def test_a_file_left_unfinished_for_hours_is_reported_as_it_is(tmp_path):
     assert message == texts.FOLDER_ATTENTION.format(title="Runs", text="run-2: stopped halfway")
     assert P.FOLDER_STALE.split("{")[0] in ask.shown[1]
     assert await watch.run() == ""
+
+
+async def test_a_folder_given_a_new_path_takes_a_new_baseline(tmp_path):
+    """The path is editable on the page: the files already in the new place are old news."""
+    reports, watch, ask, _ = setup(tmp_path, OK)
+    write(reports, "run-1.md", "old")
+    await watch.run()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    write(elsewhere, "run-9.md", "was there before")
+
+    [entry] = watch._folders.dump()
+    watch._folders.save([{**entry, "path": str(elsewhere)}])
+    [moved] = watch._folders.all()
+    assert moved.path == str(elsewhere) and moved.id != entry["id"]
+
+    assert await watch.run() == ""  # a baseline, not a flood
+    write(elsewhere, "run-10.md", "new")
+    assert await watch.run() == texts.FOLDER_OK.format(title="Runs", n=1)

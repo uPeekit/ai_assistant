@@ -468,3 +468,22 @@ async def test_no_tabs_listed_means_every_tab(tmp_path):
     google = GoogleSources(TabbedClient(), sources, tmp_path / "copies")
     found = await google.find("оценка Ганнибал", GROUP, owner=False)
     assert {f.group for f in found} == {"all", "year1"}
+
+
+def test_each_source_shows_its_link_and_a_new_link_moves_it(tmp_path):
+    """The page showed a source's name only: its link could not be checked or changed."""
+    from app.google.sources import Sources
+
+    registry = Sources(tmp_path / "sources.json")
+    registry.save([{"link": "https://docs.google.com/spreadsheets/d/S1/edit#gid=0",
+                    "title": "Оценки"}, {"link": "https://docs.google.com/forms/d/F1/edit"}])
+    sheet, form = registry.dump()
+    assert sheet["link"] == "https://docs.google.com/spreadsheets/d/S1/edit"
+    assert form["link"] == "https://docs.google.com/forms/d/F1/edit"
+    assert parse_link(sheet["link"]) == ("S1", "sheet")
+
+    sheet["link"] = "https://docs.google.com/document/d/D2/edit"
+    registry.save([sheet, form])
+    moved = registry.dump()[0]
+    assert (moved["id"], moved["file_id"], moved["kind"], moved["title"]) == (
+        sheet["id"], "D2", "doc", "Оценки")

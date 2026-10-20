@@ -95,6 +95,7 @@ class Tuning:
             "bot_name": self.bot_name,
             "agenda_at": self.agenda_at,
             "mail_at": self.mail_at,
+            "folders_at": self._text("folders_at", ""),  # empty: the mail digest's times
             "web_words": ", ".join(self.web_words),
             "countdown_tag": self.countdown_tag,
             "date_props": ", ".join(self.date_props),
@@ -130,6 +131,11 @@ class Tuning:
     @property
     def mail_at(self) -> str:
         return self._text("mail_at", self._defaults.mail_at)
+
+    @property
+    def folders_at(self) -> str:
+        """When the watched folders are read: their own times, or the mail digest's."""
+        return self._text("folders_at", "") or self.mail_at
 
     @property
     def web_words(self) -> tuple[str, ...]:
@@ -179,5 +185,5 @@ def _site(entry: str) -> str:
 def _clean(key: str, value: object) -> str:
     if not isinstance(value, str):
         raise ValueError(f"{key!r} must be a string")
-    return " ".join(value.split()) if key in ("bot_name", "agenda_at", "mail_at",
-                                               "countdown_tag") else value.strip()[:MAX_TEXT]
+    one_line = ("bot_name", "agenda_at", "mail_at", "folders_at", "countdown_tag")
+    return " ".join(value.split()) if key in one_line else value.strip()[:MAX_TEXT]

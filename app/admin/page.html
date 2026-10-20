@@ -183,8 +183,9 @@
 <details>
   <summary>Почта</summary>
   <label class="field">Время сводок
-    <input type="text" id="tuning-mail_at" placeholder="12:00,19:00">
+    <input type="hidden" id="tuning-mail_at">
   </label>
+  <div class="schedule" data-input="tuning-mail_at"></div>
   <p class="hint">Сводка охватывает всё, что пришло с прошлой.</p>
   <h3>Корзины</h3>
   <p class="hint">
@@ -262,11 +263,15 @@
 <details>
   <summary>Папки</summary>
   <p class="hint">
-    Папки на этом компьютере, за которыми следит бот. В часы сводки по почте он читает новые
-    файлы (уже дописанные — не менявшиеся 15 минут) и пишет вам по вашему указанию: что
-    искать в файлах и о чём сообщать. Нет новых файлов — молчит; всё в порядке — одна строка.
-    Каждый файл читается один раз.
+    Папки на этом компьютере, за которыми следит бот. В заданное время он читает новые
+    файлы (уже дописанные — не менявшиеся 15 минут и не помеченные как ещё пишущиеся) и пишет
+    вам по вашему указанию: что искать в файлах и о чём сообщать. Нет новых файлов — молчит;
+    всё в порядке — одна строка. Каждый файл читается один раз.
   </p>
+  <label class="field">Когда проверять
+    <input type="hidden" id="tuning-folders_at">
+  </label>
+  <div class="schedule" data-input="tuning-folders_at" data-inherit="tuning-mail_at"></div>
   <div id="folders"></div>
   <label class="field">Новая папка — путь на этом компьютере
     <input type="text" id="new-folder-path" placeholder="D:\reports">
@@ -488,11 +493,13 @@ function load() {
       state.inboxLocked = !!data.inbox_locked;
       document.getElementById("workspace-note").value = data.workspace_note || "";
       var tuning = data.tuning || {};
-      ["bot_name", "agenda_at", "mail_at", "web_words", "countdown_tag", "date_props",
-       "research_note", "linker_note", "never_open", "sync_after"].forEach(function (name) {
+      ["bot_name", "agenda_at", "mail_at", "folders_at", "web_words", "countdown_tag",
+       "date_props", "research_note", "linker_note", "never_open", "sync_after"].forEach(
+        function (name) {
         var el = document.getElementById("tuning-" + name);
         if (el) { el.value = tuning[name] || ""; }
       });
+      renderSchedules();
       document.getElementById("vault-note").textContent = data.obsidian_vault
         ? "Хранилище: " + data.obsidian_vault
         : "Хранилище не настроено: укажите OBSIDIAN_VAULT в .env.";
@@ -712,6 +719,15 @@ function renderSources() {
     head.textContent = (src.title || seen.title || src.link || src.file_id) + " · " +
       (KIND_NAMES[src.kind] || "ссылка");
     box.appendChild(head);
+    box.appendChild(labelled("Ссылка", textInput("source-link", src.link)));
+    if (src.link) {
+      var open = document.createElement("a");
+      open.href = src.link;
+      open.target = "_blank";
+      open.rel = "noopener";
+      open.textContent = "Открыть в Google";
+      box.appendChild(open);
+    }
     var meta = document.createElement("p");
     meta.className = "hint";
     meta.textContent = seen.sections === undefined ? "Ещё не прочитан." :
@@ -778,11 +794,13 @@ function collectSources() {
     var tabs = box.querySelector(".source-tabs");
     if (tabs) { source.tabs = tabs.value; }
     if (box.dataset.id) { source.id = box.dataset.id; }
-    if (box.dataset.fileId) {
+    // The link as it stands in its field: a new one moves the source to another file.
+    var link = box.querySelector(".source-link").value.trim();
+    if (link) {
+      source.link = link;
+    } else if (box.dataset.fileId) {
       source.file_id = box.dataset.fileId;
       source.kind = box.dataset.kind;
-    } else {
-      source.link = box.dataset.link;
     }
     return source;
   });
@@ -797,6 +815,124 @@ document.getElementById("add-source").addEventListener("click", function () {
   input.value = "";
   renderSources();
 });
+
+// ---- schedules: a list of times, or every N hours between two times -----------------------
+// Kept in the hidden field as the server reads it: "09:00,12:00" or "every 2h 08:00-22:00";
+// anything else typed into the list stays as typed. The preview counts the way the server
+// does (app/daily.py: parse_times).
+
+var EVERY = /^every\s+(\d+)\s*h\s+(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})$/i;
+
+function minutesOf(text) {
+  var m = /^(\d{1,2}):(\d{2})$/.exec(text.trim());
+  if (!m || Number(m[1]) > 23 || Number(m[2]) > 59) { return null; }
+  return Number(m[1]) * 60 + Number(m[2]);
+}
+
+function scheduleTimes(value) {
+  var found = {};
+  value.split(",").forEach(function (part) {
+    var m = /^every\s+(\d+)\s*([hm])(?:\s+(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2}))?$/i
+      .exec(part.trim());
+    if (!m) {
+      var at = minutesOf(part);
+      if (at !== null) { found[at] = true; }
+      return;
+    }
+    var step = Number(m[1]) * (m[2].toLowerCase() === "h" ? 60 : 1);
+    var first = m[3] ? minutesOf(m[3]) : 0;
+    var last = m[4] ? minutesOf(m[4]) : 23 * 60 + 59;
+    if (step < 5 || step > 1440 || first === null || last === null) { return; }
+    if (last < first) { last += 1440; }
+    for (var t = first; t <= last; t += step) { found[t % 1440] = true; }
+  });
+  return Object.keys(found).map(Number).sort(function (a, b) { return a - b; })
+    .map(function (t) {
+      return String(Math.floor(t / 60)).padStart(2, "0") + ":" + String(t % 60).padStart(2, "0");
+    });
+}
+
+function renderSchedules() {
+  Array.prototype.forEach.call(document.querySelectorAll(".schedule"), renderSchedule);
+}
+
+function renderSchedule(root) {
+  var input = document.getElementById(root.dataset.input);
+  var inherit = root.dataset.inherit ? document.getElementById(root.dataset.inherit) : null;
+  root.textContent = "";
+  var value = input.value.trim();
+  var every = EVERY.exec(value);
+  var mode = every ? "every" : (!value && inherit ? "inherit" : "list");
+  var select = document.createElement("select");
+  var modes = [["list", "Время списком"], ["every", "Каждые N часов"]];
+  if (inherit) { modes.unshift(["inherit", "Как у сводки по почте"]); }
+  modes.forEach(function (o) {
+    var option = document.createElement("option");
+    option.value = o[0];
+    option.textContent = o[1];
+    option.selected = o[0] === mode;
+    select.appendChild(option);
+  });
+  root.appendChild(select);
+  var list = textInput("schedule-list", mode === "list" ? value : "");
+  list.placeholder = "09:00, 12:00, 19:00";
+  var hours = document.createElement("input");
+  hours.type = "number";
+  hours.min = "1";
+  hours.max = "24";
+  hours.value = every ? every[1] : "2";
+  var from = document.createElement("input");
+  from.type = "time";
+  from.value = every ? every[2].padStart(5, "0") : "08:00";
+  var to = document.createElement("input");
+  to.type = "time";
+  to.value = every ? every[3].padStart(5, "0") : "22:00";
+  var listBox = labelled("Времена через запятую", list);
+  var everyBox = document.createElement("div");
+  everyBox.className = "schedule-every";
+  everyBox.appendChild(document.createTextNode("Каждые "));
+  everyBox.appendChild(hours);
+  everyBox.appendChild(document.createTextNode(" ч, с "));
+  everyBox.appendChild(from);
+  everyBox.appendChild(document.createTextNode(" до "));
+  everyBox.appendChild(to);
+  root.appendChild(listBox);
+  root.appendChild(everyBox);
+  var preview = document.createElement("p");
+  preview.className = "hint";
+  root.appendChild(preview);
+
+  function update() {
+    var chosen = select.value;
+    listBox.style.display = chosen === "list" ? "" : "none";
+    everyBox.style.display = chosen === "every" ? "" : "none";
+    if (chosen === "list") {
+      input.value = list.value.trim();
+    } else if (chosen === "every") {
+      input.value = "every " + (hours.value || "1") + "h " + from.value + "-" + to.value;
+    } else {
+      input.value = "";
+    }
+    var times = scheduleTimes(chosen === "inherit" ? inherit.value : input.value);
+    preview.textContent = times.length
+      ? "Получится: " + times.join(", ") + " (раз в день: " + times.length + ")"
+      : "Ни одного времени — не отправляется.";
+    root.dispatchEvent(new Event("schedulechange"));
+  }
+  [select, list, hours, from, to].forEach(function (el) {
+    el.addEventListener("input", update);
+    el.addEventListener("change", update);
+  });
+  update();
+  if (inherit && !root.dataset.listening) {
+    // A change of the mail times changes what "as the mail digest" comes to.
+    root.dataset.listening = "1";
+    var source = document.querySelector(".schedule[data-input='" + inherit.id + "']");
+    if (source) {
+      source.addEventListener("schedulechange", function () { renderSchedule(root); });
+    }
+  }
+}
 
 // ---- watched folders and Syncthing ----------------------------------------------------------
 
@@ -840,11 +976,10 @@ function renderFolders() {
     var head = document.createElement("h2");
     head.textContent = folder.title || folder.path;
     box.appendChild(head);
-    var path = document.createElement("p");
-    path.className = "hint";
-    path.textContent = folder.path;
-    box.appendChild(path);
     if (info[folder.id]) { box.appendChild(statusLine(info[folder.id])); }
+    box.appendChild(labelled("Путь на этом компьютере (другой путь — другая папка: файлы, " +
+                             "что уже там лежат, сочтутся старыми)",
+                             textInput("folder-path", folder.path)));
     box.appendChild(checkbox("folder-enabled", folder.enabled !== false, "Следить"));
     box.appendChild(labelled("Название (необязательно)", textInput("folder-title",
                                                                      folder.title)));
@@ -872,7 +1007,7 @@ function collectFolders() {
   var boxes = Array.prototype.slice.call(document.querySelectorAll("#folders .folder"));
   return boxes.map(function (box) {
     var folder = {
-      path: box.dataset.path,
+      path: box.querySelector(".folder-path").value.trim() || box.dataset.path,
       title: box.querySelector(".folder-title").value,
       pattern: box.querySelector(".folder-pattern").value,
       instruction: box.querySelector(".folder-instruction").value,
@@ -1074,8 +1209,8 @@ function collectBody() {
   var body = {
     targets: targets,
     workspace_note: document.getElementById("workspace-note").value,
-    tuning: ["bot_name", "agenda_at", "mail_at", "web_words", "countdown_tag", "date_props",
-             "research_note", "linker_note", "never_open", "sync_after"].reduce(
+    tuning: ["bot_name", "agenda_at", "mail_at", "folders_at", "web_words", "countdown_tag",
+             "date_props", "research_note", "linker_note", "never_open", "sync_after"].reduce(
       function (acc, name) {
       var el = document.getElementById("tuning-" + name);
       if (el) { acc[name] = el.value; }

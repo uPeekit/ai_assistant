@@ -57,6 +57,17 @@ _LINKS = (
 )
 
 
+# Each kind's own link, made back from the file id: what the page shows and lets the owner edit.
+_OPEN = {"doc": "https://docs.google.com/document/d/{}/edit",
+         "sheet": "https://docs.google.com/spreadsheets/d/{}/edit",
+         "form": "https://docs.google.com/forms/d/{}/edit",
+         "folder": "https://drive.google.com/drive/folders/{}"}
+
+
+def link_of(file_id: str, kind: str) -> str:
+    return _OPEN[kind].format(file_id) if kind in _OPEN else ""
+
+
 def parse_link(link: str) -> tuple[str, str] | None:
     """(file id, kind) from a Google link. A form's public "/forms/d/e/…" link carries another
     id than the form's own: the editor's link is the one to paste."""
@@ -84,7 +95,10 @@ class Source:
 def _source(raw: dict) -> Source:
     file_id, kind = str(raw.get("file_id", "")).strip(), str(raw.get("kind", "")).strip()
     link = str(raw.get("link", "")).strip()
-    if link and (parsed := parse_link(link)):
+    if link:
+        parsed = parse_link(link)
+        if parsed is None:  # a link the owner typed is never quietly ignored
+            raise ValueError(f"not a Google doc, sheet, form or folder link: {link[:200]}")
         file_id, kind = parsed
     if not file_id or kind not in KINDS:
         raise ValueError("a source needs a Google doc, sheet, form or folder link")
@@ -148,7 +162,8 @@ class Sources:
         return [s for s in self.all() if owner or chat_id in s.chats]
 
     def dump(self) -> list[dict]:
-        return [_dump(s) for s in self.all()]
+        """For the page: each source with its link, to check and to edit."""
+        return [{**_dump(s), "link": link_of(s.file_id, s.kind)} for s in self.all()]
 
     def save(self, payload: object) -> int:
         if not isinstance(payload, list) or not all(isinstance(r, dict) for r in payload):

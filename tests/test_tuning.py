@@ -62,7 +62,7 @@ def test_only_strings_are_accepted(tuning):
 
 def test_the_prompts_themselves_are_not_editable(tuning):
     """Deliberate: the extra-instruction fields add to a prompt, they never replace it."""
-    assert set(tuning.all()) == {"bot_name", "agenda_at", "mail_at", "web_words",
+    assert set(tuning.all()) == {"bot_name", "agenda_at", "mail_at", "folders_at", "web_words",
                                  "countdown_tag", "date_props", "research_note", "linker_note",
                                  "never_open", "sync_after"}
 
@@ -105,3 +105,30 @@ def test_a_malformed_never_open_entry_breaks_nothing(tuning):
     tuning.save({"never_open": "http://[bad, mybank.example"})
     assert "mybank.example" in tuning.never_open
     assert "never_open" in tuning.all()
+
+
+def test_times_every_n_hours_within_a_range():
+    """«every 2h 08:00-22:00»: the owner's wish for the folder digest, besides a plain list."""
+    assert parse_times("every 3h 09:00-21:00") == tuple(time(h, 0) for h in (9, 12, 15, 18, 21))
+    assert parse_times("every 2h 08:30-13:00") == (time(8, 30), time(10, 30), time(12, 30))
+    assert parse_times("every 6h") == tuple(time(h, 0) for h in (0, 6, 12, 18))
+    assert parse_times("every 30m 10:00-11:00") == (time(10, 0), time(10, 30), time(11, 0))
+
+
+def test_an_interval_may_cross_midnight_and_mix_with_plain_times():
+    assert parse_times("every 2h 22:00-02:00") == (time(0, 0), time(2, 0), time(22, 0))
+    assert parse_times("every 4h 08:00-16:00, 21:30") == (
+        time(8, 0), time(12, 0), time(16, 0), time(21, 30))
+
+
+def test_a_bad_interval_is_dropped_like_a_bad_time():
+    assert parse_times("every 0h, 12:00") == (time(12, 0),)
+    assert parse_times("every 2h 25:00-26:00") == ()
+    assert parse_times("every 1m") == ()  # under five minutes: a typo, not a schedule
+
+
+def test_the_folder_digest_has_its_own_times_and_follows_the_mail_until_set(tuning):
+    assert tuning.folders_at == "12:00,19:00" and tuning.all()["folders_at"] == ""
+    tuning.save({"folders_at": "every 2h   08:00-22:00"})
+    assert tuning.folders_at == "every 2h 08:00-22:00"
+    assert tuning.mail_at == "12:00,19:00"
