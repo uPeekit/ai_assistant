@@ -281,3 +281,51 @@ async def test_a_removed_and_re_added_folder_takes_a_new_baseline(tmp_path):
     watch._folders.save(entry)
 
     assert await watch.run() == "" and ask.shown == []
+
+
+async def test_a_file_the_model_reads_as_still_being_written_waits_until_it_changes(tmp_path):
+    """An agent writes its run report at the start and adds to it for hours; quiet for fifteen
+    minutes, it was sent half-done. The model says which files are not done yet."""
+    reports, watch, ask, _ = setup(
+        tmp_path, {"attention": True, "text": "run-2: half", "unfinished": ["run-2.md"]}, OK)
+    await watch.run()
+    write(reports, "run-2.md", "## Done this run\n_(updated as the run proceeds)_")
+
+    assert await watch.run() == ""
+    assert await watch.run() == ""  # unchanged: not asked again
+    assert len(ask.shown) == 1
+    write(reports, "run-2.md", "## Done this run\n1. all of it")
+
+    assert await watch.run() == texts.FOLDER_OK.format(title="Runs", n=1)
+    assert len(ask.shown) == 2
+    assert await watch.run() == ""  # done now: reported once
+
+
+async def test_a_finished_file_is_reported_beside_one_still_being_written(tmp_path):
+    reports, watch, ask, _ = setup(
+        tmp_path, {"attention": False, "text": "", "unfinished": ["run-3.md"]})
+    await watch.run()
+    write(reports, "run-2.md", "done", age_s=7200)
+    write(reports, "run-3.md", "half")
+
+    assert await watch.run() == texts.FOLDER_OK.format(title="Runs", n=1)
+    assert await watch.run() == ""
+    assert len(ask.shown) == 1
+
+
+async def test_a_file_left_unfinished_for_hours_is_reported_as_it_is(tmp_path):
+    """A run that died mid-report never finishes it: past STALE it is sent, said to be stale."""
+    from app.watch.folders import STALE
+
+    half = {"attention": True, "text": "run-2: stopped halfway", "unfinished": ["run-2.md"]}
+    reports, watch, ask, clock = setup(tmp_path, half, half)
+    await watch.run()
+    write(reports, "run-2.md", "half")
+    assert await watch.run() == ""
+
+    clock.t += STALE.total_seconds()
+    message = await watch.run()
+
+    assert message == texts.FOLDER_ATTENTION.format(title="Runs", text="run-2: stopped halfway")
+    assert P.FOLDER_STALE.split("{")[0] in ask.shown[1]
+    assert await watch.run() == ""

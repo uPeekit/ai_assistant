@@ -12,8 +12,12 @@ file matter and what counts as wrong is the instruction's to say — none of it 
     something needs the owner  -> the model's words, with the file each point came from
 
 A file is reported once (a later change to it is not read again), and only after the model has
-answered: a failed call leaves it for the next time. `data/folders.json` holds the folders,
-edited on the admin page; the files already reported are kept next to it."""
+answered: a failed call leaves it for the next time. Fifteen quiet minutes do not make a file
+done — an agent writes its report at the start of a run and adds to it for hours — so the model
+also names the files that read as still being written: those are not reported, and are read
+again when they change, or as they are once they have not changed for STALE.
+`data/folders.json` holds the folders, edited on the admin page; the files already reported
+are kept next to it."""
 
 from __future__ import annotations
 
@@ -36,11 +40,14 @@ log = logging.getLogger(__name__)
 
 LATER = object()  # a file that could not be opened now: read it next time
 QUIET = timedelta(minutes=15)  # changed more recently than this: still being written
+STALE = timedelta(hours=6)  # unchanged this long, a file said to be unfinished is sent as it is
+WAITING = "unfinished"  # the mark on a file the model read as still being written
 MAX_CHARS = 40_000  # of all a folder's new files together, per run
 MAX_TOKENS = 1_500
 FOLDER_SCHEMA = {"type": "object", "additionalProperties": False,
-                 "required": ["attention", "text"],
-                 "properties": {"attention": {"type": "boolean"}, "text": {"type": "string"}}}
+                 "required": ["attention", "text", "unfinished"],
+                 "properties": {"attention": {"type": "boolean"}, "text": {"type": "string"},
+                                "unfinished": {"type": "array", "items": {"type": "string"}}}}
 
 
 @dataclass(frozen=True)
@@ -120,11 +127,13 @@ class Folders:
 
 class FolderWatch:
     def __init__(self, folders: Folders, state_path: Path, ask, *, quiet: timedelta = QUIET,
-                 max_chars: int = MAX_CHARS, clock: Callable[[], float] = time.time) -> None:
+                 stale: timedelta = STALE, max_chars: int = MAX_CHARS,
+                 clock: Callable[[], float] = time.time) -> None:
         self._folders = folders
         self._path = state_path
         self._ask = ask
         self._quiet = quiet.total_seconds()
+        self._stale = stale.total_seconds()
         self._max_chars = max_chars
         self._clock = clock
         self._status: dict[str, dict] = {}
@@ -167,8 +176,7 @@ class FolderWatch:
             self._seen(folder, listing)
             return ""
         now = self._clock()
-        new = sorted((n for n, (_, mtime) in listing.items()
-                      if n not in reported and now - mtime >= self._quiet),
+        new = sorted((n for n in listing if self._due(reported.get(n), listing[n], now)),
                      key=lambda n: listing[n][1])
         if not new:
             self._seen(folder, listing)
@@ -189,10 +197,12 @@ class FolderWatch:
             cut = text[:budget]
             budget -= len(cut)
             sent.append(name)
+            stale = now - listing[name][1] >= self._stale
             blocks.append(P.FOLDER_FILE.format(
                 name=name, when=datetime.fromtimestamp(listing[name][1]).strftime("%d.%m %H:%M"),
-                text=cut + (f"\n{texts.FOLDER_CUT}" if longer or len(cut) < len(text)
-                            else "")))
+                text=(P.FOLDER_STALE.format(hours=int(self._stale // 3600)) + "\n"
+                      if stale else "")
+                + cut + (f"\n{texts.FOLDER_CUT}" if longer or len(cut) < len(text) else "")))
         if not blocks:
             self._seen(folder, listing)
             return ""
@@ -206,13 +216,34 @@ class FolderWatch:
                         folder.id, e)
             self._status[folder.id] = {"ok": False, "detail": texts.FOLDER_MODEL_FAILED}
             return ""
+        named = answer.get("unfinished")
+        unfinished = {str(n) for n in named} if isinstance(named, list) else set()
+        done = 0
         for name in sent:  # what did not fit waits for the next run
-            reported[name] = list(listing[name])
+            if name in unfinished and now - listing[name][1] < self._stale:
+                reported[name] = [*listing[name], WAITING]
+            else:
+                reported[name] = list(listing[name])
+                done += 1
         self._seen(folder, listing)
+        if not done:  # all still being written: nothing to say yet
+            return ""
         text = str(answer.get("text", "")).strip()
         if answer.get("attention") and text:
             return texts.FOLDER_ATTENTION.format(title=folder.name, text=text)
-        return texts.FOLDER_OK.format(title=folder.name, n=len(blocks))
+        return texts.FOLDER_OK.format(title=folder.name, n=done)
+
+    def _due(self, entry: list | None, seen: tuple[int, float], now: float) -> bool:
+        """Is the file to be read now: new and quiet, or waiting to be finished and changed
+        since (or unchanged past STALE)."""
+        size, mtime = seen
+        if now - mtime < self._quiet:
+            return False
+        if entry is None:
+            return True
+        if len(entry) < 3 or entry[2] != WAITING:
+            return False  # reported
+        return [size, mtime] != list(entry[:2]) or now - mtime >= self._stale
 
     def _listing(self, folder: Folder) -> dict[str, tuple[int, float]]:
         root = Path(folder.path)
