@@ -392,3 +392,9 @@ async def test_a_read_dated_note_says_how_far_its_date_is_too(tmp_path):
     await VaultAnswerer(ask, "haiku").answer("когда следующая?", [Hit("Танго", "Встречи/Танго.md")],
                                              vault, "2026-10-20, вт")
     assert f"### n1 · {P.WHEN_AGO.format(days=1)}\n" in ask.shown[0]
+
+
+def test_the_answer_prompt_keeps_the_lines_of_what_it_quotes():
+    """A club's conclusions, one per line in the document, came back joined by «; » into one
+    paragraph nobody could read."""
+    assert P.KEEP_LINES_RULE in P.ANSWER_PROMPT
