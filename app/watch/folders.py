@@ -44,6 +44,9 @@ STALE = timedelta(hours=6)  # unchanged this long, a file said to be unfinished 
 WAITING = "unfinished"  # the mark on a file the model read as still being written
 MAX_CHARS = 40_000  # of all a folder's new files together, per run
 MAX_TOKENS = 1_500
+CONFIRM_READS = 2  # readings of a file said to be unfinished; either one holds it
+STILL_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["still"],
+                "properties": {"still": {"type": "boolean"}}}
 FOLDER_SCHEMA = {"type": "object", "additionalProperties": False,
                  "required": ["attention", "text", "unfinished"],
                  "properties": {"attention": {"type": "boolean"}, "text": {"type": "string"},
@@ -133,12 +136,15 @@ class Folders:
 
 
 class FolderWatch:
-    def __init__(self, folders: Folders, state_path: Path, ask, *, quiet: timedelta = QUIET,
-                 stale: timedelta = STALE, max_chars: int = MAX_CHARS,
-                 clock: Callable[[], float] = time.time) -> None:
+    def __init__(self, folders: Folders, state_path: Path, ask, *, confirm=None,
+                 quiet: timedelta = QUIET, stale: timedelta = STALE,
+                 max_chars: int = MAX_CHARS, clock: Callable[[], float] = time.time) -> None:
         self._folders = folders
         self._path = state_path
         self._ask = ask
+        # A file said to be unfinished is read again, alone, by this (a stronger model): read
+        # beside an older report, a finished one was taken for one still being written.
+        self._confirm = confirm
         self._quiet = quiet.total_seconds()
         self._stale = stale.total_seconds()
         self._max_chars = max_chars
@@ -188,7 +194,8 @@ class FolderWatch:
         if not new:
             self._seen(folder, listing)
             return ""
-        blocks, sent, budget = [], [], self._max_chars
+        blocks: dict[str, tuple[str, str]] = {}  # name: (the text shown, the stale mark)
+        sent, budget = [], self._max_chars
         for name in new:
             read = self._text(Path(folder.path) / name, self._max_chars)
             if read is LATER:
@@ -205,29 +212,49 @@ class FolderWatch:
             budget -= len(cut)
             sent.append(name)
             stale = now - listing[name][1] >= self._stale
-            blocks.append(P.FOLDER_FILE.format(
-                name=name, when=datetime.fromtimestamp(listing[name][1]).strftime("%d.%m %H:%M"),
-                text=(P.FOLDER_STALE.format(hours=int(self._stale // 3600)) + "\n"
-                      if stale else "")
-                + cut + (f"\n{texts.FOLDER_CUT}" if longer or len(cut) < len(text) else "")))
+            blocks[name] = (cut + (f"\n{texts.FOLDER_CUT}" if longer or len(cut) < len(text)
+                                   else ""),
+                            P.FOLDER_STALE.format(hours=int(self._stale // 3600)) + "\n"
+                            if stale else "")
         if not blocks:
             self._seen(folder, listing)
             return ""
-        try:
+
+        def shown(name: str, mark: str = "") -> str:
+            body, stale_mark = blocks[name]
+            return P.FOLDER_FILE.format(
+                name=name, when=datetime.fromtimestamp(listing[name][1]).strftime("%d.%m %H:%M"),
+                text=(mark or stale_mark) + body)
+
+        async def summary(done: set[str]) -> dict:
+            parts = [shown(n, P.FOLDER_DONE + "\n" if n in done else "") for n in sent]
             answer, _, _ = await self._ask(
                 P.FOLDER_PROMPT, FOLDER_SCHEMA,
                 "\n\n".join([P.FOLDER_INSTRUCTION.format(instruction=folder.instruction),
-                             *blocks]), MAX_TOKENS)
+                             *parts]), MAX_TOKENS)
+            return answer
+
+        try:
+            answer = await summary(set())
+            named = answer.get("unfinished")
+            unfinished = {str(n) for n in named if str(n) in blocks
+                          and now - listing[str(n)][1] < self._stale} \
+                if isinstance(named, list) else set()
+            if unfinished and self._confirm is not None:
+                finished = {n for n in sorted(unfinished) if not await self._still(shown(n))}
+                if finished:
+                    log.info("watched folder %s: %s read as finished on their own",
+                             folder.id, ", ".join(sorted(finished)))
+                    unfinished -= finished
+                    answer = await summary(finished)
         except FilerError as e:
             log.warning("watched folder %s: the model could not be asked (%s); next time",
                         folder.id, e)
             self._status[folder.id] = {"ok": False, "detail": texts.FOLDER_MODEL_FAILED}
             return ""
-        named = answer.get("unfinished")
-        unfinished = {str(n) for n in named} if isinstance(named, list) else set()
         done = 0
         for name in sent:  # what did not fit waits for the next run
-            if name in unfinished and now - listing[name][1] < self._stale:
+            if name in unfinished:
                 reported[name] = [*listing[name], WAITING]
             else:
                 reported[name] = list(listing[name])
@@ -239,6 +266,17 @@ class FolderWatch:
         if answer.get("attention") and text:
             return texts.FOLDER_ATTENTION.format(title=folder.name, text=text)
         return texts.FOLDER_OK.format(title=folder.name, n=done)
+
+    async def _still(self, block: str) -> bool:
+        """Is this one file, read on its own, still being written? Read twice, and either
+        reading holds it: a report with every section written up front was read as finished
+        one time in six, and sent half-done is the failure that matters."""
+        for _ in range(CONFIRM_READS):
+            answer, _, _ = await self._confirm(P.FOLDER_UNFINISHED_PROMPT, STILL_SCHEMA, block,
+                                               MAX_TOKENS)
+            if answer.get("still") is True:
+                return True
+        return False
 
     def _due(self, entry: list | None, seen: tuple[int, float], now: float) -> bool:
         """Is the file to be read now: new and quiet, or waiting to be finished and changed

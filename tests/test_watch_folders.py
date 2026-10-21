@@ -348,3 +348,70 @@ async def test_a_folder_given_a_new_path_takes_a_new_baseline(tmp_path):
     assert await watch.run() == ""  # a baseline, not a flood
     write(elsewhere, "run-10.md", "new")
     assert await watch.run() == texts.FOLDER_OK.format(title="Runs", n=1)
+
+
+
+class Confirm:
+    """The second reading of a file said to be unfinished: answers in turn."""
+
+    def __init__(self, *still: bool) -> None:
+        self.still = list(still)
+        self.shown: list[str] = []
+
+    async def __call__(self, system, schema, content, max_tokens=0):
+        assert system == P.FOLDER_UNFINISHED_PROMPT
+        self.shown.append(content)
+        return {"still": self.still.pop(0)}, 10, 1
+
+
+def confirmed(tmp_path, confirm, *answers):
+    reports, watch, ask, clock = setup(tmp_path, *answers)
+    watch._confirm = confirm
+    return reports, watch, ask, clock
+
+
+async def test_a_file_said_to_be_unfinished_is_read_again_alone_before_it_waits(tmp_path):
+    """Read beside an older report, a finished one («the next pass is already running» — a
+    background job) was taken for one still being written, and its news waited six hours."""
+    first = {"attention": True, "text": "run-2: decide", "unfinished": ["run-3.md"]}
+    again = {"attention": True, "text": "run-2: decide; run-3: nothing urgent",
+             "unfinished": []}
+    confirm = Confirm(False, False)  # twice finished: it does not wait
+    reports, watch, ask, _ = confirmed(tmp_path, confirm, first, again)
+    await watch.run()
+    write(reports, "run-2.md", "## Needs the owner\n- decide", age_s=7200)
+    write(reports, "run-3.md", "## Needs you\nNothing urgent. The next pass is already running.")
+
+    message = await watch.run()
+
+    assert len(confirm.shown) == 2 and "run-3.md" in confirm.shown[0]
+    assert "run-2.md" not in confirm.shown[0]  # alone
+    assert len(ask.shown) == 2 and P.FOLDER_DONE in ask.shown[1]
+    assert message == texts.FOLDER_ATTENTION.format(
+        title="Runs", text="run-2: decide; run-3: nothing urgent")
+    assert await watch.run() == ""  # both reported
+
+
+async def test_a_file_confirmed_unfinished_still_waits(tmp_path):
+    first = {"attention": False, "text": "", "unfinished": ["run-2.md"]}
+    confirm = Confirm(True)
+    reports, watch, ask, _ = confirmed(tmp_path, confirm, first)
+    await watch.run()
+    write(reports, "run-2.md", "_(updated as the run proceeds)_")
+
+    assert await watch.run() == ""
+    assert len(ask.shown) == 1 and len(confirm.shown) == 1
+
+
+
+async def test_one_reading_of_still_being_written_is_enough_to_wait(tmp_path):
+    """A report with every section written up front and «updated as the run proceeds» under
+    one of them was read as finished one time in six: two readings, either one holds it."""
+    first = {"attention": False, "text": "", "unfinished": ["run-2.md"]}
+    confirm = Confirm(False, True)
+    reports, watch, ask, _ = confirmed(tmp_path, confirm, first)
+    await watch.run()
+    write(reports, "run-2.md", "## Done\n_(updated as the run proceeds)_\n## Next\n- more")
+
+    assert await watch.run() == ""
+    assert len(ask.shown) == 1 and len(confirm.shown) == 2

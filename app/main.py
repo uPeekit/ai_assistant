@@ -453,9 +453,11 @@ def _folder_digest(settings: Settings, switches: Switches, tuning: Tuning, folde
     if not key or not settings.allowed_user_ids:
         return None, None, None
     sdk = anthropic.AsyncAnthropic(api_key=key, timeout=90.0, max_retries=1)
+    strong = settings.escalate_model.strip()
     watch = FolderWatch(folders, settings.db_path.with_name("folders_state.json"),
                         claude_ask(sdk, settings.vault_answer_model or settings.claude_model,
-                                   think=False))
+                                   think=False),
+                        confirm=claude_ask(sdk, strong, think=False) if strong else None)
 
     async def send() -> None:
         if not switches.get("folders"):
