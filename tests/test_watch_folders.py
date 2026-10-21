@@ -203,8 +203,7 @@ def test_folders_registry_round_trip_and_bad_entry_raises(tmp_path):
     [folder] = Folders(tmp_path / "folders.json").all()
     assert folder.path == "C:/some/where" and folder.pattern == "*" and folder.enabled
     assert registry.dump() == [{"id": folder.id, "path": "C:/some/where", "title": "T",
-                                "pattern": "*", "instruction": "i", "enabled": True,
-                                "busy": ""}]
+                                "pattern": "*", "instruction": "i", "enabled": True}]
     with pytest.raises(ValueError):
         registry.save([{"title": "no path"}])
 
@@ -416,60 +415,3 @@ async def test_one_reading_of_still_being_written_is_enough_to_wait(tmp_path):
 
     assert await watch.run() == ""
     assert len(ask.shown) == 1 and len(confirm.shown) == 2
-
-
-
-def busy_setup(tmp_path, *answers, pattern="20*.md"):
-    reports = tmp_path / "reports"
-    return setup(tmp_path, *answers, folders=[{
-        "path": str(reports), "title": "Runs", "pattern": pattern,
-        "instruction": INSTRUCTION, "busy": "IN-PROGRESS.md"}])
-
-
-async def test_while_the_busy_file_is_there_the_folder_is_not_read(tmp_path):
-    """The reporting agent keeps IN-PROGRESS.md while a run works; without it, the newest
-    report is final. The owner names that file; the watcher waits while it is there."""
-    reports, watch, ask, _ = busy_setup(tmp_path, OK)
-    await watch.run()
-    write(reports, "2026-10-21_1300.md", "## Done this run\n(Filled in at the end.)")
-    write(reports, "IN-PROGRESS.md", "run 13:00", age_s=600)
-
-    assert await watch.run() == ""
-    assert ask.shown == []
-    [status] = watch.status()
-    assert status["detail"].startswith(texts.FOLDER_BUSY.split("{")[0])
-
-    (reports / "IN-PROGRESS.md").unlink()
-    write(reports, "2026-10-21_1300.md", "## Done this run\n1. all of it")
-    assert await watch.run() == texts.FOLDER_OK.format(title="Runs", n=1)
-
-
-async def test_a_busy_file_left_behind_for_hours_does_not_hold_the_folder(tmp_path):
-    from app.watch.folders import STALE
-
-    reports, watch, ask, _ = busy_setup(tmp_path, OK)
-    await watch.run()
-    write(reports, "2026-10-21_1300.md", "done")
-    write(reports, "IN-PROGRESS.md", "run 13:00", age_s=STALE.total_seconds() + 60)
-
-    assert await watch.run() == texts.FOLDER_OK.format(title="Runs", n=1)
-
-
-async def test_the_busy_file_itself_is_never_reported(tmp_path):
-    reports, watch, ask, _ = busy_setup(tmp_path, pattern="*")
-    await watch.run()
-    write(reports, "IN-PROGRESS.md", "run", age_s=STALE_AGE)
-    assert await watch.run() == ""
-    assert ask.shown == []
-
-
-STALE_AGE = 7 * 3600.0  # older than STALE: the busy file no longer holds the folder
-
-
-def test_the_busy_file_is_kept_with_the_folder(tmp_path):
-    registry = Folders(tmp_path / "folders.json")
-    registry.save([{"path": "C:/r", "busy": " IN-PROGRESS.md "}])
-    [folder] = registry.all()
-    assert folder.busy == "IN-PROGRESS.md" and registry.dump()[0]["busy"] == "IN-PROGRESS.md"
-    with pytest.raises(ValueError):
-        registry.save([{"path": "C:/r", "busy": "../elsewhere.md"}])

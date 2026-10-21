@@ -986,9 +986,6 @@ function renderFolders() {
     box.appendChild(labelled("Какие файлы (шаблон, например *.md; пусто — все)",
                              textInput("folder-pattern", folder.pattern === "*" ? "" :
                                        folder.pattern)));
-    box.appendChild(labelled("Файл «идёт работа» — пока он лежит в папке, её не читать " +
-                             "(например IN-PROGRESS.md; пусто — нет такого)",
-                             textInput("folder-busy", folder.busy)));
     var note = document.createElement("textarea");
     note.className = "folder-instruction";
     note.value = folder.instruction || "";
@@ -1013,7 +1010,6 @@ function collectFolders() {
       path: box.querySelector(".folder-path").value.trim() || box.dataset.path,
       title: box.querySelector(".folder-title").value,
       pattern: box.querySelector(".folder-pattern").value,
-      busy: box.querySelector(".folder-busy").value,
       instruction: box.querySelector(".folder-instruction").value,
       enabled: box.querySelector(".folder-enabled").checked,
     };
@@ -1027,8 +1023,7 @@ document.getElementById("add-folder").addEventListener("click", function () {
   var path = input.value.trim();
   if (!path) { return; }
   state.folders = collectFolders();
-  state.folders.push({path: path, title: "", pattern: "", instruction: "", enabled: true,
-                      busy: ""});
+  state.folders.push({path: path, title: "", pattern: "", instruction: "", enabled: true});
   input.value = "";
   renderFolders();
 });
