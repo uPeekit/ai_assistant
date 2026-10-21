@@ -665,6 +665,7 @@ FOLDER_MISSING = "папки нет или она недоступна"
 FOLDER_MODEL_FAILED = "не удалось прочитать моделью — попробую в следующий раз"
 FOLDER_SEEN = "файлов: {n}, последний изменён {last}"
 FOLDER_NOT_YET = "ещё не проверялась"
+FOLDER_BUSY = "идёт работа — лежит {name} (с {since}); прочитаю, когда его не станет"
 
 # A plan with a write part that failed: the message is kept whole in the inbox note.
 PLAN_KEPT = f"Сообщение целиком сохранено в «{VAULT_INBOX_NOTE}»."

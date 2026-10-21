@@ -61,6 +61,9 @@ class Folder:
     pattern: str = "*"
     instruction: str = ""
     enabled: bool = True
+    # A file that is in the folder while its writer works ("IN-PROGRESS.md"): the folder is
+    # not read then. Empty: none.
+    busy: str = ""
 
     @property
     def name(self) -> str:
@@ -75,7 +78,10 @@ def _folder(raw: dict) -> Folder:
     path = str(raw.get("path", "")).strip()
     if not path:
         raise ValueError("a watched folder needs a path")
-    return Folder(id=str(raw.get("id") or _path_id(path)),
+    busy = str(raw.get("busy", "")).strip()[:200]
+    if busy and (busy in (".", "..") or any(c in busy for c in "/\\:")):
+        raise ValueError("the busy file is a file name in the folder, not a path")
+    return Folder(id=str(raw.get("id") or _path_id(path)), busy=busy,
                   path=path, title=str(raw.get("title", "")).strip()[:200],
                   pattern=str(raw.get("pattern", "")).strip() or "*",
                   instruction=str(raw.get("instruction", ""))[:2000],
@@ -183,12 +189,18 @@ class FolderWatch:
         except OSError:
             self._status[folder.id] = {"ok": False, "detail": texts.FOLDER_MISSING}
             return ""
+        now = self._clock()
+        since = self._busy(folder, now)
+        if since is not None:
+            # The writer is at work: nothing is read, and what it writes waits for its end.
+            self._status[folder.id] = {"ok": True, "detail": texts.FOLDER_BUSY.format(
+                name=folder.busy, since=datetime.fromtimestamp(since).strftime("%d.%m %H:%M"))}
+            return ""
         reported = self._state.get(folder.id)
         if reported is None:  # just added: what is there now is old
             self._state[folder.id] = {n: list(v) for n, v in listing.items()}
             self._seen(folder, listing)
             return ""
-        now = self._clock()
         new = sorted((n for n in listing if self._due(reported.get(n), listing[n], now)),
                      key=lambda n: listing[n][1])
         if not new:
@@ -290,13 +302,29 @@ class FolderWatch:
             return False  # reported
         return [size, mtime] != list(entry[:2]) or now - mtime >= self._stale
 
+    def _busy(self, folder: Folder, now: float) -> float | None:
+        """When the folder's busy file appeared, while it holds the folder. One left behind
+        for STALE (a writer that died) no longer does."""
+        if not folder.busy:
+            return None
+        try:
+            mtime = (Path(folder.path) / folder.busy).stat().st_mtime
+        except OSError:
+            return None
+        if now - mtime >= self._stale:
+            log.warning("watched folder %s: %s is %d h old; read anyway", folder.id,
+                        folder.busy, (now - mtime) // 3600)
+            return None
+        return mtime
+
     def _listing(self, folder: Folder) -> dict[str, tuple[int, float]]:
         root = Path(folder.path)
         if not root.is_dir():
             raise OSError(f"not a folder: {root}")
         out = {}
         for entry in root.iterdir():
-            if entry.is_file() and fnmatch.fnmatch(entry.name, folder.pattern):
+            if entry.is_file() and fnmatch.fnmatch(entry.name, folder.pattern) \
+                    and entry.name != folder.busy:
                 stat = entry.stat()
                 out[entry.name] = (stat.st_size, stat.st_mtime)
         return out
