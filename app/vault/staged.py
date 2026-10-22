@@ -29,7 +29,7 @@ import re
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from time import monotonic
 
 import anthropic
@@ -330,8 +330,9 @@ class StagedFiler:
                                                  max_retries=1)
         lookup = None
         closers = [sdk.close]
-        if lookup_model and lookup_model != model:
-            # A list from memory is a longer answer from a model that thinks first.
+        if lookup_model:
+            # A list from memory is a longer answer from a model that thinks first — the
+            # reader's own model too, whose stages do not think.
             strong = anthropic.AsyncAnthropic(api_key=api_key, timeout=120.0, max_retries=1)
             lookup = claude_ask(strong, lookup_model, health)
             closers.append(strong.close)
@@ -340,7 +341,9 @@ class StagedFiler:
             for closer in closers:
                 await closer()
 
-        return cls(claude_ask(sdk, model, health), model, close, lookup=lookup)
+        # Thinking off for the stages: Sonnet 5 thinks unless told not to, and a narrow
+        # question then spent its token cap thinking.
+        return cls(claude_ask(sdk, model, health, think=False), model, close, lookup=lookup)
 
     async def aclose(self) -> None:
         if self._close is not None:
@@ -426,7 +429,19 @@ class _Run:
         return _Gate(text, guide, pages)
 
     def _today(self) -> str:
-        return P.section(P.H_TODAY, f"{self.ctx.today} ({self.ctx.weekday})")
+        """Today, and the coming week by weekday: on a Thursday, «on Friday» was taken for
+        the Saturday after, a model counting the days itself."""
+        line = f"{self.ctx.today} ({self.ctx.weekday})"
+        try:
+            day = date.fromisoformat(self.ctx.today)
+        except ValueError:
+            return P.section(P.H_TODAY, line)
+        week = []
+        for n in range(1, 7):
+            d = day + timedelta(days=n)
+            week.append(f"{d.isoformat()} {texts.VAULT_WEEKDAYS_SHORT[d.weekday()]}"
+                        + (f" ({texts.VAULT_SUM_TOMORROW})" if n == 1 else ""))
+        return P.section(P.H_TODAY, line + "\n" + P.WEEK_AHEAD.format(days=", ".join(week)))
 
     def _notes(self) -> dict[str, str]:
         """The notes a message may be about: the hubs the user's guide links to, and any other

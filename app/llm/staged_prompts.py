@@ -231,6 +231,7 @@ NOTE_LINE = "заметка «{name}»"
 
 H_GUIDE = "Инструкция пользователя"
 H_TODAY = "Сегодня"
+WEEK_AHEAD = "Ближайшие дни: {days}"
 H_PLACES = "Места"
 H_TASKS = "Открытые задачи"
 H_CHOICES = "Варианты"

@@ -836,3 +836,31 @@ async def test_without_inputs_nothing_changes():
     actions, _, _ = await StagedFiler(_book_with_author(), "haiku").file(
         "добавь в книги омон ра", ctx())
     assert actions[0]["props"] == []
+
+
+
+def test_the_reader_asks_without_thinking_and_its_lookup_with(monkeypatch):
+    """Sonnet 5 thinks unless told not to: as the reader, every stage would think, slow and
+    over its token cap. A list from memory is the one ask that thinks — on the same model too."""
+    from app.vault import staged
+
+    made = []
+    monkeypatch.setattr(staged, "claude_ask",
+                        lambda sdk, model, health=None, *, think=True: made.append((model, think))
+                        or (lambda *a: None))
+    staged.StagedFiler.claude("key", "claude-sonnet-5", lookup_model="claude-sonnet-5")
+    assert sorted(made) == [("claude-sonnet-5", False), ("claude-sonnet-5", True)]
+
+
+async def test_the_stages_see_the_coming_week_by_weekday():
+    """«напомни завтра … и в пятницу …» on a Thursday: «в пятницу» became Saturday, the model
+    counting days itself. The coming week is given, each day with its weekday."""
+    script = Script(INTENT_PROMPT={"intent": "remind"}, REMIND_PROMPT={
+        "op": "add", "items": [], "target": "none"})
+
+    await StagedFiler(script, "haiku").file("в пятницу забрать посылку",
+                                            ctx(today="2026-10-22", weekday="четверг"))
+
+    content = next(c for name, _, c in script.asked if name == "REMIND_PROMPT")
+    assert "2026-10-23 пт (" in content and "2026-10-24 сб" in content
+    assert "2026-10-28 ср" in content and "2026-10-29" not in content

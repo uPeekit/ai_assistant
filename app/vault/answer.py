@@ -243,7 +243,8 @@ class VaultAnswerer:
                                                  max_retries=1)
         second = (cls(claude_ask(sdk, second_model, health, think=False), second_model)
                   if second_model and second_model != model else None)
-        return cls(claude_ask(sdk, model, health), model, sdk.close, second=second)
+        # Thinking off: Sonnet 5 thinks unless told not to, slower and past MAX_TOKENS.
+        return cls(claude_ask(sdk, model, health, think=False), model, sdk.close, second=second)
 
     async def aclose(self) -> None:
         if self._close is not None:

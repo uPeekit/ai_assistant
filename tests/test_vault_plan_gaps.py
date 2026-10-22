@@ -74,7 +74,7 @@ async def test_a_write_or_ask_step_gets_at_most_the_total_input_cap(index):
     await pipe(index, script, FakePlanner(plan)).handle("x", research=research)
 
     folder = next(c for name, _, c in script.asked if name == "FOLDER_PROMPT")
-    section = folder.split(P.H_INPUTS)[1]
+    section = folder.split(P.H_INPUTS)[1].split("\n\n" + P.H_TODAY)[0]  # the inputs alone
     assert len(section) <= MAX_STEP_INPUTS + 200
 
 

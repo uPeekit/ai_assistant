@@ -440,3 +440,15 @@ async def test_the_google_search_looks_for_the_askers_names_too(index):
     await p.handle("какой книге я поставила самую высокую оценку?",
                    chat=ChatRef(-100, 7, name="Ольга", owner=False))
     assert google.queries and "оля" in google.queries[-1].split()
+
+
+
+def test_the_answerer_asks_without_thinking(monkeypatch):
+    from app.vault import answer as answer_module
+
+    made = []
+    monkeypatch.setattr(answer_module, "claude_ask",
+                        lambda sdk, model, health=None, *, think=True: made.append((model, think))
+                        or (lambda *a: None))
+    VaultAnswerer.claude("key", "claude-sonnet-5", second_model="claude-sonnet-5")
+    assert made == [("claude-sonnet-5", False)]  # the same model is no second opinion
