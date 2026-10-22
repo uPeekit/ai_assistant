@@ -723,3 +723,16 @@ def test_without_syncthing_the_page_is_told_so(settings, discovery, descriptions
         assert served["syncthing"] is None and "folders" not in served
     finally:
         s.stop()
+
+
+def test_every_right_a_chat_may_have_has_its_checkbox():
+    """«remind» had none: a group could not be given reminders on the page, and saving a chat
+    that had the right took it away."""
+    import re
+    from pathlib import Path
+
+    from app.chats import RIGHTS
+
+    html = (Path(__file__).parent.parent / "app" / "admin" / "page.html").read_text("utf-8")
+    block = re.search(r"var RIGHTS = \[(.*?)\];", html, re.S).group(1)
+    assert set(re.findall(r'\["(\w+)",', block)) == set(RIGHTS)

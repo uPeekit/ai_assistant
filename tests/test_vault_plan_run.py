@@ -402,3 +402,25 @@ async def test_a_plan_of_writes_says_each_thing_it_wrote(index):
     line = turn.reply_line()
     assert all(w.what in line for w in turn.writes)
     assert texts.PLAN_STEP_WROTE.split("{")[0] not in line
+
+
+
+async def test_a_question_no_step_takes_on_is_in_the_reply(index):
+    """Two questions planned apart, only the second marked as the reply: the first answer
+    («выводы по книге») was lost. A question's answer no later step takes on is the user's."""
+    from app.vault.answer import VaultAnswerer
+    from tests.test_vault_answer import Ask as AnswerAsk
+
+    answers = AnswerAsk({"answer": "Выводы: книга длинная.", "sources": [], "more": []})
+    script = Script(INTENT_PROMPT={"intent": "ask"},
+                    ASK_PROMPT={"op": "search", "query": "выводы", "folder": "", "tags": []})
+    plan = Plan((Step(1, "ask", "выводы по книге"),
+                 Step(2, "research", "найди отзывы"),
+                 Step(3, "derive", "сравни отзывы", (2,), reply=True)))
+    research = await research_of({"найди отзывы": "отзывы"})
+    turn = await pipe(index, script, FakePlanner(plan),
+                      answerer=VaultAnswerer(answers, "haiku")).handle(
+        "выводы по книге и сравни отзывы", research=research)
+
+    line = turn.reply_line()
+    assert "Выводы: книга длинная." in line and "вывод: сравни отзывы" in line

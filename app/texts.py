@@ -440,6 +440,10 @@ GOOGLE_COUNT = "{column} {n} (ср. {mean})"
 # The end of a sheet's row: how many numbers it holds, counted by the bot; the columns that only
 # total the others (min, max, mean, sum of the row) are not among them.
 GOOGLE_ROW_NUMBERS = "[чисел: {n}]"
+# A sheet's column as a section of its own: every number in it, highest first, by row.
+GOOGLE_COLUMN_SECTION = "{title} (колонка «{column}»: все числа по убыванию)"
+GOOGLE_COLUMN_HEAD = "{column}: чисел {n}, среднее {mean}; по убыванию:"
+GOOGLE_COLUMN_SKIPPED = "[… ещё {n} в середине не показаны]"
 GOOGLE_ROW_NUMBERS_BUT = "[чисел: {n}, не считая итоговых колонок {columns}]"
 GOOGLE_QUESTIONS = "Вопросы:"
 GOOGLE_CORRECT = "верный ответ"

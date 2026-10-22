@@ -113,7 +113,11 @@ def _count(tally: list[int] | None, used_in: int, used_out: int) -> None:
 
 def one_step(plan: Plan) -> bool:
     """A plan that is one search feeding one write: what the one-step path already does — the
-    findings written as they stand — so it goes that way."""
+    findings written as they stand — so it goes that way. So are questions that hand nothing
+    on to each other: one answer reads for all of them, with what the message said for all
+    (split, «who won the quiz» lost the book the quiz was on)."""
+    if all(s.kind == "ask" and not s.needs for s in plan.steps):
+        return True
     kinds = sorted(s.kind for s in plan.steps)
     if kinds != ["research", "write"]:
         return False
@@ -168,7 +172,8 @@ class VaultPlanner:
         if plan is None:
             log.info("no plan of several steps; one step")
         elif one_step(plan):
-            log.info("the plan is one search into one write; one step")
+            log.info("the plan is one step's work (%s); one step",
+                     ", ".join(s.kind for s in plan.steps))
             return None
         return plan
 

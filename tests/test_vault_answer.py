@@ -409,3 +409,34 @@ def test_kept_copies_are_read_again_for_the_row_counts():
     from app.google.sources import COPY_FORMAT
 
     assert COPY_FORMAT >= 5
+
+
+def test_the_answer_prompt_keeps_its_keys_to_itself():
+    """A group was told the quiz results were «в отдельных формах (g132–g297)»."""
+    assert P.NO_KEYS_RULE in P.ANSWER_PROMPT
+
+
+
+async def test_the_google_search_looks_for_the_askers_names_too(index):
+    """«какой книге я поставила самую высокую оценку?» from Ольга, known as «оля»: her column
+    of the sheet is found by that name, which the question does not carry."""
+    from app.chats import ChatRef
+
+    class FakeGoogle:
+        def __init__(self):
+            self.queries = []
+
+        async def find(self, query, chat_id, *, owner):
+            self.queries.append(query)
+            return []
+
+        def sign_in_notice(self):
+            return ""
+
+    answer = {"answer": "ок", "sources": [], "more": []}
+    p, ask, askers = _who_pipe(index, answer)
+    askers._remember(7, "оля")
+    p._google = google = FakeGoogle()
+    await p.handle("какой книге я поставила самую высокую оценку?",
+                   chat=ChatRef(-100, 7, name="Ольга", owner=False))
+    assert google.queries and "оля" in google.queries[-1].split()

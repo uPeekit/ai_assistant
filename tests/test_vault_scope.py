@@ -161,3 +161,13 @@ def test_links_to_the_owners_notes_read_as_their_words(index, tmp_path):
 def test_a_tasks_words_lose_the_owners_hashtags(scoped):
     [task], _ = gate([VaultAction(action="task", text="купить чай #home #club_my")], scoped)
     assert task.text == "купить чай" and task.tags == ["клуб"]
+
+
+def test_a_refused_reminder_takes_its_task_with_it(scoped):
+    """«напомни 11 ноября …» in a chat without the reminder right: the reminders were refused
+    and their two tasks written anyway — a «remind me» never leaves a lone task behind."""
+    actions = [VaultAction(action="reminder", text="у сони презентация", due="2026-11-11"),
+               VaultAction(action="task", text="у сони презентация", due="2026-11-11"),
+               VaultAction(action="task", text="купить чай")]
+    kept, refused = gate(actions, scoped)
+    assert [a.text for a in kept] == ["купить чай"] and refused == ["reminder"]

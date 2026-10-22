@@ -784,8 +784,11 @@ class VaultPipeline:
             self._askers.asked(chat.chat_id, chat.user_id, message)
         # The writes are listed by the reply itself, each with its link: a write step's own
         # "written: …" line as the reply said one thing of several written.
-        said = [results[s.id] for s in plan.steps
-                if s.reply and s.kind != "write" and s.id in results]
+        # A question no later step takes on is the user's too, marked as the reply or not: two
+        # questions planned apart, only the second marked, lost the first answer.
+        taken = {n for s in plan.steps for n in s.needs}
+        said = [results[s.id] for s in plan.steps if s.id in results and (
+                (s.reply and s.kind != "write") or (s.kind == "ask" and s.id not in taken))]
         last = plan.steps[-1]
         if not any(s.reply for s in plan.steps) and last.id in results \
                 and last.kind in ("derive", "ask"):
@@ -996,13 +999,16 @@ class VaultPipeline:
         now = self._now()
         today = f"{now:%Y-%m-%d}, {texts.VAULT_WEEKDAYS_SHORT[now.weekday()]}"
         google = []
+        known = self._askers.known(chat.user_id) if chat is not None else ()
         if self._google is not None and chat is not None:
             # A private chat of an owner sees every source and the Drive; a group only its own.
             query = f"{question} {words}" if words and words not in question else question
+            # The names the asker goes by in the records: «my highest rating» finds their own
+            # column of a sheet by the name, which the question does not carry.
+            query = " ".join([query, *(n for n in known if n not in query)])
             google = await self._google.find(query, chat.chat_id,
                                              owner=chat.owner and chat.chat_id > 0)
         try:
-            known = self._askers.known(chat.user_id) if chat is not None else ()
             # Said inside the question, not only beside it: told who the asker is in a context
             # line, a model still asked them again.
             asked = P.ASKER_IN_QUESTION.format(question=question, known=P.names(known)) \

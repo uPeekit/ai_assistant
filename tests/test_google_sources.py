@@ -59,7 +59,7 @@ def test_a_doc_without_headings_becomes_overlapping_pieces():
 
 
 def test_a_sheet_row_names_itself_by_its_first_cell():
-    [section] = sheet_sections(*SHEET_TABS)
+    section = sheet_sections(*SHEET_TABS)[0]  # the rows; each column follows on its own
     assert "Доктор Живаго [чисел: 4] — min: 3; max: 5; avg: 4.2; Аня: 5" in section.text
 
 
@@ -520,6 +520,43 @@ def test_a_column_of_peoples_scores_is_not_taken_for_a_total():
 
 def test_a_table_without_totals_still_counts_its_numbers():
     tabs = ("T", [("t", [["", "a", "b"], ["x", "1", "2"], ["y", "3", ""]])])
-    [section] = sheet_sections(*tabs)
+    section = sheet_sections(*tabs)[0]
     assert section.text.splitlines()[0] == "x " + texts.GOOGLE_ROW_NUMBERS.format(n=2) + \
         " — a: 1; b: 2"
+
+
+
+def test_each_column_is_a_section_of_its_numbers_highest_first():
+    """«какой книге Нина поставила самую высокую оценку» was answered from the first block of
+    rows read — her 4.4, not her 5. A column's own section holds all its numbers, sorted."""
+    sections = sheet_sections(*BOOKS)
+    column = next(s for s in sections if s.title == texts.GOOGLE_COLUMN_SECTION.format(
+        title="Оценки / knub", column="женя"))
+    lines = column.text.splitlines()
+    assert lines[0] == texts.GOOGLE_COLUMN_HEAD.format(column="женя", n=5, mean="2.83")
+    assert lines[1:] == ["Король в жёлтом — 4.5", "Лавкрафт — 3.32", "Единственный — 2.5",
+                         "Цветы для Элджернона — 2.1", "Клара и Солнце — 1.73"]
+    assert column.group == "knub" and not column.summary
+
+
+def test_a_question_naming_a_person_reads_their_column_first():
+    from app.google.sources import _ranked
+
+    sections = sheet_sections(*BOOKS)
+    found = _ranked("какой книге женя поставила самую высокую оценку",
+                    [("Оценки", "", s) for s in sections])
+    assert found[0].title == texts.GOOGLE_COLUMN_SECTION.format(
+        title="Оценки / knub", column="женя")
+
+
+def test_a_long_column_keeps_its_top_and_bottom():
+    from app.google.sections import MAX_COLUMN
+
+    rows = [["", "оценка", "заметка"]] + [[f"Книга номер {i} с длинным названием",
+                                            str(i / 10), ""] for i in range(400)]
+    [column] = [s for s in sheet_sections("T", [("t", rows)])
+                if s.title == texts.GOOGLE_COLUMN_SECTION.format(title="T / t", column="оценка")]
+    assert len(column.text) <= MAX_COLUMN + 200
+    assert "Книга номер 399 с длинным названием — 39.9" in column.text  # the top
+    assert "Книга номер 0 с длинным названием — 0" in column.text  # and the bottom
+    assert texts.GOOGLE_COLUMN_SKIPPED.split("{")[0] in column.text

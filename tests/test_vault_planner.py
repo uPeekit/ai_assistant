@@ -112,3 +112,14 @@ def test_a_step_keeps_the_users_own_verb():
     from app.llm import staged_prompts as SP
 
     assert SP.STEP_VERB_RULE in SP.PLAN_STEPS_PROMPT
+
+
+async def test_independent_questions_are_one_step():
+    """«скинь выводы по книге X и кто победил в квизе» was split into two questions, and the
+    second lost the book: one answer reads both, with the book. Questions that hand nothing
+    on to each other are one message, as it was asked."""
+    strong = Ask({"steps": [step(1, "ask"), step(2, "ask", reply=True)]},
+                 {"steps": [step(1, "ask"), step(2, "derive", [1], reply=True)]})
+    planner = VaultPlanner(Ask(), strong)
+    assert await planner.plan("выводы по книге и кто победил в квизе", "") is None
+    assert await planner.plan("найди в заметках и посоветуй", "") is not None

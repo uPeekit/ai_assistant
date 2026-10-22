@@ -193,9 +193,15 @@ def gate(actions: list[VaultAction], scoped: ScopedIndex) -> tuple[list[VaultAct
     scope = scoped.scope
     kept: list[VaultAction] = []
     refused: list[str] = []
+    # A reminder refused here takes its task (the same words) with it, as one that cannot be
+    # set does in the pipeline: «remind me» never leaves a lone task behind.
+    orphans = set() if scope.full or "remind" in scope.rights else {
+        a.text for a in actions if a.action == "reminder"}
     for action in actions:
         if scope.full:
             kept.append(action)
+            continue
+        if action.action == "task" and action.text in orphans:
             continue
         if action.action == "grocery" and action.scope == GROCERY_LIST:
             refused.append("grocery")  # "what to buy" is the owner's shopping list

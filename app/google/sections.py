@@ -21,6 +21,7 @@ MAX_PART = 5000  # characters of one heading's section before it is split into p
 SUMMARY_LINE = 160  # characters of a response shown in a quiz's score summary
 EXTREMES = 5  # rows shown at each end of a number column in a tab's summary
 MIN_NUMBERS = 3  # numbers a column needs to be summarised
+MAX_COLUMN = 4_500  # characters of a column's own section; a longer one keeps both ends
 MIN_TOTAL_ROWS = 5  # rows a column must total the others in, to be taken for a total
 TOTAL_SHARE = 0.9  # of its rows a total column must match
 
@@ -208,6 +209,49 @@ def _extremes(header: list[str], rows: list[list[str]]) -> str:
                       *lines])
 
 
+def _columns(name: str, tab: str, header: list[str], rows: list[list[str]]) -> list[Section]:
+    """Every column with numbers as a section of its own: all of them, highest first, each
+    with its row's name. "Which book did Nina rate highest" read the first block of rows and
+    took the best there; her column, found by her name, holds the whole answer."""
+    named = not (header and header[0])
+    label = (lambda r: r[0]) if named else (lambda r: "; ".join(r[:2]))
+    out = []
+    for i in range(1 if named else 0, max((len(r) for r in rows), default=0)):
+        values = [(n, label(r), r[i]) for r in rows
+                  if i < len(r) and (n := _number(r[i])) is not None and label(r)]
+        if not values:
+            continue
+        values.sort(key=lambda v: -v[0])
+        column = _name(header, i)
+        lines = [f"{who} — {cell}" for _, who, cell in values]
+        head = texts.GOOGLE_COLUMN_HEAD.format(
+            column=column, n=len(values), mean=f"{sum(v[0] for v in values) / len(values):.2f}")
+        out.append(Section(texts.GOOGLE_COLUMN_SECTION.format(title=f"{name} / {tab}",
+                                                              column=column),
+                           "\n".join([head, *_both_ends(lines)]), group=tab))
+    return out
+
+
+def _both_ends(lines: list[str]) -> list[str]:
+    """The lines within MAX_COLUMN; too many: the top and the bottom, the middle said."""
+    if sum(len(ln) + 1 for ln in lines) <= MAX_COLUMN:
+        return lines
+    top, bottom, size = [], [], 0
+    i, j = 0, len(lines) - 1
+    while i <= j:
+        line = lines[i] if len(top) <= len(bottom) else lines[j]
+        if size + len(line) + 1 > MAX_COLUMN:
+            break
+        size += len(line) + 1
+        if len(top) <= len(bottom):
+            top.append(line)
+            i += 1
+        else:
+            bottom.insert(0, line)
+            j -= 1
+    return [*top, texts.GOOGLE_COLUMN_SKIPPED.format(n=j - i + 1), *bottom]
+
+
 def sheet_sections(title: str, tabs: list[tuple[str, list[list]]]) -> list[Section]:
     out: list[Section] = []
     for tab, rows in tabs:
@@ -236,6 +280,7 @@ def sheet_sections(title: str, tabs: list[tuple[str, list[list]]]) -> list[Secti
         if block:
             out.append(Section(texts.GOOGLE_ROWS.format(title=name, n=part) if part > 1
                                else name, "\n".join(block), group=tab))
+        out += _columns(title, tab, header, body)
     return out
 
 
