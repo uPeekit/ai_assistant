@@ -31,7 +31,7 @@ from app import texts
 from app.google.client import KIND_OF, GoogleClient
 from app.google.errors import GoogleError, SignInNeeded
 from app.google.sections import Section, doc_sections, form_sections, sheet_sections
-from app.vault.index import overlap, words
+from app.vault.index import MIN_WORD, overlap, words
 
 log = logging.getLogger(__name__)
 
@@ -44,8 +44,9 @@ MAX_SECTION = 5_000
 MAX_RANKED = 400  # sections handed on per question; the answerer reads within its budget
 # The shape of a kept copy. A copy of another shape is read again from Google: a change in how
 # sections are cut reaches files that have not changed since.
-COPY_FORMAT = 6  # 6: a sheet's every column a section of its own
+COPY_FORMAT = 7  # 7: a column section is marked, and found by its name only
 TITLE_WEIGHT = 3
+_SHORT = re.compile(r"[^\W\d_]+")
 PARALLEL = 6
 SEARCH_RESULTS = 3
 NOTICE_EVERY_S = 24 * 3600.0
@@ -253,7 +254,7 @@ class GoogleSources:
         copy = _Copy(title=raw.get("title", ""), modified=raw.get("modified", ""), checked=0.0,
                      split=raw.get("split", ""),
                      sections=[Section(s["title"], s["text"], bool(s.get("summary")),
-                                       str(s.get("group", "")))
+                                       str(s.get("group", "")), bool(s.get("column")))
                                for s in raw.get("sections", [])],
                      children=raw.get("children", []), error=raw.get("error", ""))
         self._copies[file_id] = copy
@@ -464,14 +465,33 @@ class GoogleSources:
 
 def _ranked(query: str, candidates: list[tuple[str, str, Section]]) -> list[Found]:
     wanted = {w for w in words(query) if w not in texts.SEARCH_STOP_WORDS}
+    # Words under the search's four letters ("Olya", "Yura") count where they are a whole word
+    # of a section's title: a sheet's column named by a person's short name.
+    short = {w for w in _SHORT.findall(query.casefold())
+             if 3 <= len(w) < MIN_WORD and w not in texts.SEARCH_STOP_WORDS}
+    rows = []
+    for name, instruction, section in candidates:
+        own = len(overlap(wanted, words(section.title))) + len(
+            short & set(_SHORT.findall(section.title.casefold())))
+        text_hits = 0 if section.column else len(overlap(wanted, words(section.text))) + (
+            len(short & set(_SHORT.findall(section.text.casefold()))) if short else 0)
+        # The source's name and the owner's instruction ("ratings of the club") name what the
+        # file is about, and tell one source from another — never one of its sections from
+        # the next: "conclusions" in a question lifted all eighty books' conclusions above
+        # the quiz it asked about. So they count for the sections that match something
+        # themselves, and for all of a source only when none of its sections does.
+        about = overlap(wanted, words(f"{name} {instruction}")) - overlap(
+            wanted, words(section.title))
+        rows.append((name, instruction, section, own, text_hits, len(about)))
+    matched = {name for name, _, _, own, text_hits, _ in rows if own or text_hits}
     scored = []
     in_text: dict[int, int] = {}
-    for name, instruction, section in candidates:
-        # The owner's instruction describes the source in their words ("ratings of the club"):
-        # it names what the file is about when its own titles do not.
-        about = f"{name} {section.title} {instruction}"
-        in_text[id(section)] = len(overlap(wanted, words(section.text)))
-        score = TITLE_WEIGHT * len(overlap(wanted, words(about))) + in_text[id(section)]
+    for name, instruction, section, own, text_hits, about in rows:
+        # A column found by its name names something in the rows (a person), as a row found
+        # by its words does: the table's summary goes below it, not above.
+        in_text[id(section)] = text_hits or (own if section.column else 0)
+        bonus = about if own or text_hits or name not in matched else 0
+        score = TITLE_WEIGHT * (own + bonus) + text_hits
         if score:
             scored.append((score, name, instruction, section))
     # A table's summary answers "the best", "the most" — what no block of its rows can — and

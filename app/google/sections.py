@@ -35,10 +35,13 @@ class Section:
     # The table a section belongs to (a sheet's tab): a summary goes with its own rows, not
     # with every tab of the file.
     group: str = ""
+    # A sheet's column as a section of its own: found by its name only — its text lists
+    # every row, and a book asked about matched sixty columns as well as its own row.
+    column: bool = False
 
     def as_dict(self) -> dict:
         return {"title": self.title, "text": self.text, "summary": self.summary,
-                "group": self.group}
+                "group": self.group, "column": self.column}
 
 
 def _paragraph_text(paragraph: dict) -> str:
@@ -228,7 +231,7 @@ def _columns(name: str, tab: str, header: list[str], rows: list[list[str]]) -> l
             column=column, n=len(values), mean=f"{sum(v[0] for v in values) / len(values):.2f}")
         out.append(Section(texts.GOOGLE_COLUMN_SECTION.format(title=f"{name} / {tab}",
                                                               column=column),
-                           "\n".join([head, *_both_ends(lines)]), group=tab))
+                           "\n".join([head, *_both_ends(lines)]), group=tab, column=True))
     return out
 
 

@@ -452,3 +452,28 @@ def test_the_answerer_asks_without_thinking(monkeypatch):
                         or (lambda *a: None))
     VaultAnswerer.claude("key", "claude-sonnet-5", second_model="claude-sonnet-5")
     assert made == [("claude-sonnet-5", False)]  # the same model is no second opinion
+
+
+
+async def test_the_askers_names_are_searched_for_only_when_the_question_is_about_them(index):
+    """The owner's own column, found by his name on «how many rated this book», took the room
+    the book's row needed."""
+    from app.chats import ChatRef
+
+    class FakeGoogle:
+        def __init__(self):
+            self.queries = []
+
+        async def find(self, query, chat_id, *, owner):
+            self.queries.append(query)
+            return []
+
+        def sign_in_notice(self):
+            return ""
+
+    answer = {"answer": "ок", "sources": [], "more": []}
+    p, ask, askers = _who_pipe(index, answer)
+    askers._remember(7, "женя")
+    p._google = google = FakeGoogle()
+    await p.handle("сколько человек оценили книгу?", chat=ChatRef(1, 7, name="Evgeny"))
+    assert google.queries and "женя" not in google.queries[-1].split()

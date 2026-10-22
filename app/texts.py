@@ -418,6 +418,9 @@ ASKER_LEADS = ("я", "это я", "меня зовут", "зовут", "там �
 ANSWER_WHO_NOT_FOUND = "🔍 Не нашёл в записях {names}."
 # Words between the names in one reply («соня или лиза»); commas, «;» and «/» too.
 ASKER_SEPARATORS = ("или", "либо", "и", "or")
+# A question about the asker themselves: then their names in the records are searched for too.
+ASKER_SELF_WORDS = ("я", "мне", "меня", "мной", "мой", "моя", "моё", "мое", "мои", "моих",
+                    "моим", "моей", "моего", "моему", "моими", "моё")
 ANSWER_WEB = "🌐 {answer}"
 ANSWER_SEARCHING = "🔎 Ищу в интернете…"
 ANSWER_WEB_ASK = "🌐 Чтобы поискать, уточните: {question}"

@@ -864,3 +864,8 @@ async def test_the_stages_see_the_coming_week_by_weekday():
     content = next(c for name, _, c in script.asked if name == "REMIND_PROMPT")
     assert "2026-10-23 пт (" in content and "2026-10-24 сб" in content
     assert "2026-10-28 ср" in content and "2026-10-29" not in content
+
+
+def test_a_day_without_a_month_is_the_nearest_one():
+    """«27 числа» on 20 October: Sonnet set 27 November, every time."""
+    assert P.DAY_ONLY_RULE in P.REMIND_PROMPT and P.DAY_ONLY_RULE in P.TASKS_PROMPT

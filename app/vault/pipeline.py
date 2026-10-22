@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import logging
+import re
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass, field, replace
@@ -1003,9 +1004,13 @@ class VaultPipeline:
         if self._google is not None and chat is not None:
             # A private chat of an owner sees every source and the Drive; a group only its own.
             query = f"{question} {words}" if words and words not in question else question
-            # The names the asker goes by in the records: «my highest rating» finds their own
-            # column of a sheet by the name, which the question does not carry.
-            query = " ".join([query, *(n for n in known if n not in query)])
+            # The names the asker goes by in the records, when the question is about them: «my
+            # highest rating» finds their own column of a sheet by the name, which the
+            # question does not carry — and only then: on any other question their column
+            # took the room the rows asked about needed.
+            said = set(re.findall(r"[^\W\d_]+", question.casefold()))
+            if said & set(texts.ASKER_SELF_WORDS):
+                query = " ".join([query, *(n for n in known if n not in query)])
             google = await self._google.find(query, chat.chat_id,
                                              owner=chat.owner and chat.chat_id > 0)
         try:

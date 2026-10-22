@@ -560,3 +560,43 @@ def test_a_long_column_keeps_its_top_and_bottom():
     assert "Книга номер 399 с длинным названием — 39.9" in column.text  # the top
     assert "Книга номер 0 с длинным названием — 0" in column.text  # and the bottom
     assert texts.GOOGLE_COLUMN_SKIPPED.split("{")[0] in column.text
+
+
+
+def test_a_name_every_section_of_a_document_shares_tells_none_apart():
+    """«скинь выводы по книге X и кто победил в квизе»: «выводы» matched the conclusions
+    document's own name, so every one of its eighty sections outranked the quiz on X."""
+    from app.google.sections import Section
+    from app.google.sources import _ranked
+
+    conclusions = [("Выводы клуба", "", Section(f"Роман {i}", "мысль")) for i in range(30)]
+    book = ("Выводы клуба", "", Section("Скорбь Сатаны", "мысль"))
+    quiz = ("скорбь сатаны", "", Section("скорбь сатаны", "Больше всего баллов — Наташа 9"))
+    found = _ranked("скинь выводы по книге скорби сатаны и кто победил в квизе",
+                    [*conclusions, book, quiz])
+    assert [f.title for f in found[:2]] == ["Скорбь Сатаны", "скорбь сатаны"]
+
+
+def test_a_short_name_finds_its_column():
+    """«оля», «юра»: three letters, under the four a search word needs — her column was never
+    found by her name."""
+    from app.google.sources import _ranked
+
+    sections = sheet_sections(*BOOKS)
+    found = _ranked("какой книге я поставила самую высокую оценку юра",
+                    [("Оценки", "", s) for s in sections])
+    assert found[0].title == texts.GOOGLE_COLUMN_SECTION.format(
+        title="Оценки / knub", column="юра")
+
+
+
+def test_a_book_asked_about_finds_its_row_not_every_column_that_lists_it():
+    """«сколько человек и какая оценка у книги клара и солнце?»: every person's column lists
+    the book, so sixty columns outranked its own row and the answer counted commenters."""
+    from app.google.sources import _ranked
+
+    sections = sheet_sections(*BOOKS)
+    found = _ranked("сколько человек и какая оценка у книги клара и солнце",
+                    [("Оценки", "", s) for s in sections])
+    assert found[0].title == "Оценки / knub"  # the rows
+    assert all(s.column for s in sections if "колонка «" in s.title)
