@@ -118,10 +118,12 @@ def register(
     # possibly match, never for the other MessageHandler's chain too. `filters=gate` on the
     # CommandHandlers above needs no such ordering: CommandHandler.check_update already resolves
     # the command name before it ever consults `self.filters`.
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & gate, _on_text))
-    app.add_handler(
-        MessageHandler((filters.VOICE | filters.AUDIO | filters.VIDEO_NOTE) & gate, _on_voice)
-    )
+    # New messages only: an edit arrives without a message of its own, and the text handler
+    # fell over on it (the edited words were handled once already).
+    new = filters.UpdateType.MESSAGE
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & new & gate, _on_text))
+    app.add_handler(MessageHandler(
+        (filters.VOICE | filters.AUDIO | filters.VIDEO_NOTE) & new & gate, _on_voice))
     # Before the general one: a mail button is answered here and never reaches it.
     app.add_handler(CallbackQueryHandler(_on_mail_callback,
                                          pattern=rf"^({MAIL_READ}|{MAIL_UNREAD}):"))

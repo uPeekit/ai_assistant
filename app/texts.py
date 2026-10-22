@@ -415,7 +415,9 @@ WHO_NOT_HERE = "Здесь нет {names}. "
 # Words before the name in a reply to that question («я женя», «меня зовут Саша»).
 ASKER_LEADS = ("я", "это я", "меня зовут", "зовут", "там я", "я там", "я записан как",
                "я записана как", "записан как", "записана как", "я —", "я -")
-ANSWER_WHO_NOT_FOUND = "🔍 Не нашёл в записях «{name}»."
+ANSWER_WHO_NOT_FOUND = "🔍 Не нашёл в записях {names}."
+# Words between the names in one reply («соня или лиза»); commas, «;» and «/» too.
+ASKER_SEPARATORS = ("или", "либо", "и", "or")
 ANSWER_WEB = "🌐 {answer}"
 ANSWER_SEARCHING = "🔎 Ищу в интернете…"
 ANSWER_WEB_ASK = "🌐 Чтобы поискать, уточните: {question}"

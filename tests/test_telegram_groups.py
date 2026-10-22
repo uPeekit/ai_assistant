@@ -246,3 +246,13 @@ async def test_replying_to_the_bots_answer_quotes_its_words_not_its_marks(with_r
     await dispatch(w.app, _msg(w.bot, GROUP, MEMBER, text=text, entities=mention(text),
                                reply_to=quoted), w.context)
     assert w.orch.pointed[0] == ("q", "Плитка серая.")
+
+
+
+async def test_an_edited_message_is_left_alone(harness):
+    """An edit arrives with no message of its own: the text handler fell over on it."""
+    text = f"@{FakeBot.username} добавь встречу"
+    update = _msg(harness.bot, GROUP, MEMBER, text=text, entities=mention(text))
+    edited = Update(update_id=2, edited_message=update.message)
+    await dispatch(harness.app, edited, harness.context)
+    assert harness.orch.calls == []

@@ -1043,7 +1043,8 @@ class VaultPipeline:
                 return ""
             if replied:
                 # Told and still not found: asking again would go round in circles.
-                return texts.ANSWER_WHO_NOT_FOUND.format(name=known[-1])
+                return texts.ANSWER_WHO_NOT_FOUND.format(
+                    names=", ".join(f"«{n}»" for n in self._askers.given(chat.user_id)))
             # Names they gave before are not in these records (a quiz under a joke name): ask
             # once more, saying so.
             lead = texts.WHO_NOT_HERE.format(names=", ".join(f"«{n}»" for n in known)) \

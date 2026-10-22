@@ -251,7 +251,7 @@ async def test_a_known_name_not_in_these_records_is_asked_once_more_then_not_fou
 
     second = await p.handle("капитан", chat=chat)
 
-    assert second.answer == texts.ANSWER_WHO_NOT_FOUND.format(name="капитан")
+    assert second.answer == texts.ANSWER_WHO_NOT_FOUND.format(names="«капитан»")
     assert askers.known(7) == ("женя", "капитан")
 
 

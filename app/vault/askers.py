@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 import time
 from collections.abc import Callable
@@ -39,6 +40,7 @@ class Askers:
         self._names: dict[str, list[str]] = {}
         # (chat, user) -> (the question asked, when the bot asked back)
         self._waiting: dict[tuple[int, int], tuple[str, float]] = {}
+        self._given: dict[int, tuple[str, ...]] = {}  # user -> the names of their last reply
         if path is not None:
             try:
                 raw = json.loads(path.read_text(encoding="utf-8"))
@@ -66,12 +68,18 @@ class Askers:
         if waiting is None:
             return None
         question, at = waiting
-        name = _name(message)
-        if (self._clock() - at > WAIT_S or not name or "?" in name
-                or len(name.split()) > MAX_REPLY_WORDS):
+        names = _names(message)
+        if (self._clock() - at > WAIT_S or not names or "?" in message
+                or sum(len(n.split()) for n in names) > MAX_REPLY_WORDS):
             return None
-        self._remember(user_id, name[:MAX_NAME])
+        for name in names:
+            self._remember(user_id, name[:MAX_NAME])
+        self._given[user_id] = tuple(n[:MAX_NAME] for n in names)
         return question
+
+    def given(self, user_id: int) -> tuple[str, ...]:
+        """The names this person gave in their latest reply ("Sonya or Liza": both)."""
+        return self._given.get(user_id) or self.known(user_id)[-1:]
 
     def _remember(self, user_id: int, name: str) -> None:
         with self._lock:
@@ -89,6 +97,16 @@ class Askers:
             except OSError as e:
                 log.warning("could not keep a name in %s: %s", self._path, e)
         log.info("an asker's name in the records was kept (user %s)", user_id)
+
+
+_SEPARATOR = re.compile(r"\s*[,;/]\s*|\s+(?:" + "|".join(texts.ASKER_SEPARATORS) + r")\s+",
+                        re.IGNORECASE)
+
+
+def _names(message: str) -> list[str]:
+    """The names in a reply: "Sonya or Liza" is two."""
+    names = [n.strip(".!«»\"' ") for n in _SEPARATOR.split(_name(message))]
+    return list(dict.fromkeys(n for n in names if n))
 
 
 def _name(message: str) -> str:

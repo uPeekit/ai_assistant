@@ -50,3 +50,16 @@ def test_the_words_before_a_name_are_not_part_of_it():
         askers.asked(1, 7, "q")
         assert askers.reply(1, 7, said) == "q"
         assert askers.known(7)[-1] == name
+
+
+
+def test_a_reply_with_two_names_keeps_both():
+    """Asked how she is listed, she wrote «соня или лиза»: one name «соня или лиза» was kept,
+    and nothing was found under it."""
+    askers = Askers()
+    askers.asked(-1, 7, "сколько раз я приходила?")
+    assert askers.reply(-1, 7, "соня или лиза") == "сколько раз я приходила?"
+    assert askers.known(7) == ("соня", "лиза") and askers.given(7) == ("соня", "лиза")
+    askers.asked(-1, 8, "моя оценка?")
+    askers.reply(-1, 8, "я Лиза, Лизок / Лиза К")
+    assert askers.known(8) == ("Лиза", "Лизок", "Лиза К")
