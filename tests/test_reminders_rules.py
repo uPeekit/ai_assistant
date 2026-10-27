@@ -116,7 +116,9 @@ async def test_a_task_rule_uses_the_tasks_own_time_on_its_day(tmp_path, vault, s
 
 
 async def test_a_group_rule_sees_only_the_groups_scope(tmp_path, vault, store):
-    scope = ChatScope(chat_id=GROUP, rights=frozenset({"remind"}), tag="клуб", folder="Клуб")
+    # The group's home is elsewhere: in «Клуб» only the notes with its tag are the group's.
+    scope = ChatScope(chat_id=GROUP, rights=frozenset({"remind"}), tag="клуб",
+                      folder="Группа")
     r = rules(tmp_path, {"kind": "notes", "folder": "Клуб", "days_before": 1,
                          "chat_id": GROUP})
     send = Sender()

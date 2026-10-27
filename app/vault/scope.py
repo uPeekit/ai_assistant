@@ -10,10 +10,12 @@ Three layers, each enough on its own to keep a group chat out of the owner's not
   chat's things go. Deterministic: a prompt rule alone does not hold.
 - `allows_path()`: the writer refuses any other file, in case the gate has a hole.
 
-A whole note is in scope when its *frontmatter* carries the chat's tag. An inline `#tag` only
-brings single task lines of the tasks note into scope: tags in a note's text also come from task
-lines, and the task archive would otherwise be handed over whole the day one of the chat's tasks
-was archived."""
+A whole note is in scope when its *frontmatter* carries the chat's tag, or when it lies in the
+chat's home folder (or below it): the owner gave the folder to the chat, and notes made there
+from a template without the tag are the chat's too. An inline `#tag` only brings single task
+lines of the tasks note into scope: tags in a note's text also come from task lines, and the
+task archive would otherwise be handed over whole the day one of the chat's tasks was
+archived."""
 
 from __future__ import annotations
 
@@ -51,7 +53,10 @@ def _front_tags(note: Note) -> set[str]:
     return {str(t).strip().lstrip("#").casefold() for t in raw if str(t).strip()}
 
 
-def in_scope(note: Note, tag: str) -> bool:
+def in_scope(note: Note, tag: str, folder: str = "") -> bool:
+    home = folder.strip("/")
+    if home and note.path.startswith(f"{home}/"):
+        return True
     return bool(tag) and tag.casefold() in _front_tags(note)
 
 
@@ -69,7 +74,8 @@ class ScopedIndex(VaultIndex):
         self.base = base
         self.scope = scope
         self._tasks = base.by_name(texts.VAULT_TASKS_NOTE)
-        self._notes = {n.path: n for n in base.notes if in_scope(n, scope.tag)}
+        self._notes = {n.path: n for n in base.notes
+                       if in_scope(n, scope.tag, scope.folder)}
         if self._tasks is not None:
             self._notes[self._tasks.path] = self._tasks
         self._task_tag = _tag_re(scope.tag)

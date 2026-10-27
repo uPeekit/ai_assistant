@@ -32,7 +32,7 @@ def index(tmp_path):
     (tmp_path / "Дневник").mkdir()
     (tmp_path / "Клуб/Встреча клуба.md").write_text(
         "---\ntags: [клуб]\ndate: 2026-11-01\n---\n\nобщие планы встречи\n", encoding="utf-8")
-    (tmp_path / "Клуб/Доктор Живаго.md").write_text(
+    (tmp_path / "Книги/Доктор Живаго.md").write_text(  # the owner's: outside the chat's home
         "---\nbook: Доктор Живаго\n---\n\nмои выводы о встрече\n", encoding="utf-8")
     (tmp_path / "Книги/Дюна.md").write_text("---\nstatus: Read\n---\nвстреча\n",
                                             encoding="utf-8")
@@ -119,8 +119,8 @@ async def test_a_new_meeting_never_lands_in_the_owners_note_of_that_name(index):
     turn = await pipe(index, script).handle("добавь встречу Доктор Живаго, обсудим финал")
     [write] = turn.writes
     assert write.path == "Клуб/Доктор Живаго (клуб).md"
-    assert "мои выводы" in index.read("Клуб/Доктор Живаго.md")
-    assert "обсудим финал" not in index.read("Клуб/Доктор Живаго.md")
+    assert "мои выводы" in index.read("Книги/Доктор Живаго.md")
+    assert "обсудим финал" not in index.read("Книги/Доктор Живаго.md")
     assert "клуб" in index.read(write.path)  # tagged, so the group sees it next time
 
 

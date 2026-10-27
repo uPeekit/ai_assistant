@@ -21,8 +21,12 @@ def index(tmp_path):
     (tmp_path / "Книги").mkdir()
     (tmp_path / "Клуб/Встреча клуба.md").write_text(
         "---\ntags: [клуб]\ndate: 2026-11-01\n---\n\nобщие планы\n", encoding="utf-8")
-    (tmp_path / "Клуб/Доктор Живаго.md").write_text(  # the owner's own meeting note
+    (tmp_path / "Клуб/Доктор Живаго.md").write_text(  # at home, made without the tag
         "---\nbook: Доктор Живаго\n---\n\nмои выводы\n", encoding="utf-8")
+    (tmp_path / "Клуб/Архив").mkdir()
+    (tmp_path / "Клуб/Архив/Сатанинское танго.md").write_text(
+        "---\nbook: Сатанинское танго\n---\n", encoding="utf-8")
+    (tmp_path / "Клубный.md").write_text("не папка клуба\n", encoding="utf-8")
     (tmp_path / "Книги/Дюна.md").write_text("---\nstatus: Read\n---\n", encoding="utf-8")
     (tmp_path / "Заметка с тегом в тексте.md").write_text(
         "личное #клуб\n", encoding="utf-8")  # inline only: not shared as a whole note
@@ -42,7 +46,11 @@ def scoped(index):
 
 
 def test_the_chat_sees_only_its_notes_and_its_task_lines(scoped):
-    assert sorted(n.name for n in scoped.notes) == ["Встреча клуба", texts.VAULT_TASKS_NOTE]
+    # Its tag in the properties, or anywhere in its home folder (the meetings a template made
+    # without the tag); the tasks note for its lines.
+    assert sorted(n.name for n in scoped.notes) == sorted([
+        "Встреча клуба", "Доктор Живаго", "Сатанинское танго", texts.VAULT_TASKS_NOTE])
+    assert "мои выводы" in scoped.read("Клуб/Доктор Живаго.md")
     tasks = scoped.read(f"{texts.VAULT_TASKS_NOTE}.md")
     assert "принести печенье" in tasks and "## клуб" in tasks  # its own section's heading
     # Nothing of the owner's: no task, not even the names of the owner's sections.
@@ -53,7 +61,7 @@ def test_the_chat_sees_only_its_notes_and_its_task_lines(scoped):
         scoped.read("Книги/Дюна.md")
     assert scoped.guide() == "Встречи книжного клуба." and scoped.groceries() == ""
     assert scoped.folders() == ["Клуб"] and scoped.tags() == ["клуб"]
-    assert scoped.by_name("Доктор Живаго") is None
+    assert scoped.by_name("Дюна") is None and scoped.by_name("Клубный") is None
 
 
 def test_rights_decide_what_passes(scoped):
@@ -79,11 +87,11 @@ def test_rights_decide_what_passes(scoped):
 
 
 def test_a_new_note_goes_home_with_the_tag_and_never_into_the_owners_namesake(scoped):
-    kept, _ = gate([VaultAction(action="note", folder="Книги", title="Доктор Живаго",
+    kept, _ = gate([VaultAction(action="note", folder="Книги", title="Дюна",
                                 tags=["книги"])], scoped)
     [note] = kept
     assert note.folder == "Клуб" and note.tags == ["клуб", "книги"]
-    assert note.title == "Доктор Живаго (клуб)"
+    assert note.title == "Дюна (клуб)"
     kept, _ = gate([VaultAction(action="note", title="Новая встреча")], scoped)
     assert kept[0].title == "Новая встреча"
 
@@ -108,8 +116,9 @@ def test_a_full_access_chat_is_not_narrowed(index):
 def test_the_writer_may_touch_only_the_chats_files(scoped):
     allow = allows_path(scoped)
     assert allow(f"{texts.VAULT_TASKS_NOTE}.md") and allow("Клуб/Встреча клуба.md")
-    assert not allow("Клуб/Доктор Живаго.md")  # in the folder, but the owner's
+    assert allow("Клуб/Доктор Живаго.md")  # at home: the chat's, tag or not
     assert not allow("Книги/Дюна.md") and not allow("Дневник/2026-10-15.md")
+    assert not allow("Клубный.md")
     assert allow("Клуб/Новая встреча.md")  # a new note at home ...
     assert allow("Клуб/Новая встреча.md")  # ... which the turn may write again
     assert not allow("Клуб/sub/deeper.md") and not allow("../outside.md")
