@@ -13,6 +13,7 @@ dependencies = [
     "tzdata>=2026.3",
     "anthropic>=1.7",
     "jsonschema>=4.23",
+    "yt-dlp>=2026.10.26",
 ]
 
 [dependency-groups]

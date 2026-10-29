@@ -780,16 +780,27 @@ own. With both off, a message is refused rather than swallowed.
 access. A group is answered only when listed in `data/chats.json` (the admin page's «Чаты»,
 which also offers the groups the bot has seen) and only when addressed — @mention, reply to the
 bot, its name, a command; anything else in the group costs nothing. A listed group's scope is
-one tag plus a home folder, and six rights (`ask`, `add`, `tasks`, `tick`, `change`, `move`).
+one tag plus a home folder, and its rights (`ask`, `add`, `tasks`, `tick`, `change`, `move`,
+`remind`, `media`).
 Its message goes to the vault only, through `VaultPipeline.scoped(scope)`, which rebuilds three
 layers per turn: `ScopedIndex` (every reader — staged reader, `check()`, search, answerer,
-agenda, Omnisearch — sees only notes whose *frontmatter* carries the tag, and the tasks note
+agenda, Omnisearch — sees only notes whose *frontmatter* carries the tag or that lie in the
+home folder, and the tasks note
 with only the lines carrying `#tag`); `gate()` after `check()` (rights per action kind; tasks
 always get the tag; new notes go to the home folder, renamed when an owner's note has the
 title; diary, groceries and inbox never); and a guarded writer that refuses any other file. No
 linker, no inbox fallback, no `obsidian://` links in replies. Undo and «Поправить» in a group
 belong to the member who asked (`events.telegram_user_id`) or an owner; after Fix is pressed,
 only the presser's next message is the correction.
+
+**Instagram links** (`app/media/instagram.py`, `app/telegram/media.py`). In a group with the
+`media` right, a message with an Instagram post link that is *not* addressed to the bot gets
+the post back as a reply: a video, a photo, or an album of a carousel with the caption under
+the first item. Its own handler group and `block=False`, so a download never holds up the
+conversation. yt-dlp asks Instagram first (no login, no ffmpeg: a progressive format); when
+Instagram refuses, `INSTAGRAM_MIRRORS` are tried in order — URL templates, `{n}` for a numbered
+carousel item (a repeated file ends it). Nothing fetched, or Telegram refusing the upload
+(50 MB a video, 10 MB a photo): nothing is said in the chat, one INFO line in the log.
 
 **Reminders** (`app/reminders/`).
 «напомни …» is the staged reader's `remind` intent: `REMIND_PROMPT` returns add/list/cancel, and

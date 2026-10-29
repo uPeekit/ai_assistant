@@ -53,6 +53,7 @@ from app.config import Settings
 from app.conversation.orchestrator import Orchestrator
 from app.conversation.reply import Reply
 from app.logging_setup import event_id_var
+from app.media.instagram import Instagram
 from app.notion.discovery import Discovery
 from app.notion.snapshot import WorkspaceSnapshot
 from app.pointing import clean_answer, points_back
@@ -63,9 +64,11 @@ from app.telegram.auth import (
     chat_filter,
     deny,
     is_allowed,
+    media_filter,
     strip_mention,
 )
 from app.telegram.keyboards import to_markup
+from app.telegram.media import reply_with_posts
 from app.telegram.recent import RecentMessages
 from app.telegram.sending import send_text
 
@@ -79,6 +82,7 @@ _DISCOVERY = "discovery"
 _STORE = "store"
 _CHATS = "chats"
 _RECENT = "recent"
+_INSTAGRAM = "instagram"
 # How many recent group messages a message pointing back is shown.
 MAX_POINTED = 10
 # The mail service, when mail is on: its digests' buttons are answered here, not by the
@@ -91,7 +95,7 @@ def register(
     app: Application, orch: Orchestrator, settings: Settings, speech: SpeechToText,
     discovery: Discovery, store: AuditStore, mail=None, chats: Chats | None = None,
     names: Callable[[], tuple[str, ...]] = lambda: (),
-    recent: RecentMessages | None = None,
+    recent: RecentMessages | None = None, instagram: Instagram | None = None,
 ) -> None:
     app.bot_data[_ORCH] = orch
     app.bot_data[_SETTINGS] = settings
@@ -101,6 +105,7 @@ def register(
     app.bot_data[MAIL] = mail
     app.bot_data[_CHATS] = chats
     app.bot_data[_RECENT] = recent
+    app.bot_data[_INSTAGRAM] = instagram
 
     # Private chats of allowed users, and the groups listed in data/chats.json (app/chats.py).
     gate = chat_filter(settings, chats, names, recent)
@@ -124,11 +129,20 @@ def register(
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & new & gate, _on_text))
     app.add_handler(MessageHandler(
         (filters.VOICE | filters.AUDIO | filters.VIDEO_NOTE) & new & gate, _on_voice))
+    if instagram is not None:
+        # A group of its own: a link nobody addressed to the bot is not the conversation's,
+        # and the post is fetched in the background — a download must not hold up the chat.
+        app.add_handler(MessageHandler(filters.TEXT & new & media_filter(chats, names),
+                                       _on_instagram, block=False), group=1)
     # Before the general one: a mail button is answered here and never reaches it.
     app.add_handler(CallbackQueryHandler(_on_mail_callback,
                                          pattern=rf"^({MAIL_READ}|{MAIL_UNREAD}):"))
     app.add_handler(CallbackQueryHandler(_on_callback))
     app.add_error_handler(error_handler)
+
+
+async def _on_instagram(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await reply_with_posts(update.effective_message, context.bot_data[_INSTAGRAM])
 
 
 # ---- sending -------------------------------------------------------------------------------

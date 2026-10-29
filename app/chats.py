@@ -32,7 +32,8 @@ log = logging.getLogger(__name__)
 # change: properties and rewrites of notes in scope
 # move:   moving lines between notes in scope
 # remind: set, list and cancel reminders (app/reminders/)
-RIGHTS = ("ask", "add", "tasks", "tick", "change", "move", "remind")
+# media:  an Instagram link gets the post's video or photos in reply (app/media/instagram.py)
+RIGHTS = ("ask", "add", "tasks", "tick", "change", "move", "remind", "media")
 MAX_SEEN = 20
 MAX_TEXT = 2000
 

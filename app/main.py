@@ -87,6 +87,7 @@ from app.mail.imap import GmailIMAP
 from app.mail.local import LocalClassifier
 from app.mail.marks import DigestMarks
 from app.mail.service import MailService, MailState, digest, shadow_digest
+from app.media.instagram import Instagram, mirrors
 from app.notion.descriptions import Descriptions, WorkspaceNote
 from app.notion.direct import DirectNotionProvider
 from app.notion.discovery import Discovery
@@ -676,7 +677,8 @@ def build(
     token = settings.telegram_bot_token.get_secret_value() or _PLACEHOLDER_TOKEN
     telegram_app = Application.builder().token(token).build()
     register(telegram_app, orchestrator, settings, speech, discovery, store, mail=mail,
-             chats=chats, names=lambda: address.names(tuning.bot_name), recent=recent)
+             chats=chats, names=lambda: address.names(tuning.bot_name), recent=recent,
+             instagram=Instagram(mirrors(settings.instagram_mirrors)))
 
     # `app` is assigned below, after these closures are defined but before either is ever called
     # (PTB only calls post_init/post_shutdown once run_polling() — or a test — invokes them), so

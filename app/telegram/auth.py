@@ -14,6 +14,7 @@ from telegram.ext import filters
 from app import address
 from app.chats import Chats
 from app.config import Settings
+from app.media import instagram
 from app.telegram.recent import RecentMessages
 
 log = logging.getLogger(__name__)
@@ -141,6 +142,35 @@ def chat_filter(settings: Settings, chats: Chats | None,
                 recent: RecentMessages | None = None) -> filters.BaseFilter:
     """allowed_filter, widened to the groups listed in data/chats.json."""
     return _ChatGate(settings.allowed_user_ids, chats, names, recent)
+
+
+class _MediaGate(filters.MessageFilter):
+    """An Instagram link in a listed group with the "media" right, from a member, not meant
+    for the bot: the post goes back as a reply (app/telegram/media.py). A message addressed to
+    the bot is a request, and its link is the request's business."""
+
+    def __init__(self, chats: Chats | None, names: Callable[[], tuple[str, ...]]) -> None:
+        super().__init__()
+        self._chats = chats
+        self._names = names
+
+    def filter(self, message) -> bool:
+        chat = message.chat
+        if chat is None or chat.type not in GROUPS or self._chats is None:
+            return False
+        if message.from_user is None or message.sender_chat is not None:
+            return False
+        if not instagram.codes(message.text or ""):
+            return False
+        scope = self._chats.get(chat.id)
+        if scope is None or not scope.may("media"):
+            return False
+        return not addressed(message, self._names())
+
+
+def media_filter(chats: Chats | None,
+                 names: Callable[[], tuple[str, ...]] = lambda: ()) -> filters.BaseFilter:
+    return _MediaGate(chats, names)
 
 
 def strip_mention(message) -> str:

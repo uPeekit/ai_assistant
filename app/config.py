@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     research_deadline_s: float = Field(180.0, ge=30.0, le=1800.0)
     # Optional: Jina Reader works without a key at ~20 pages a minute; a key raises that.
     jina_api_key: SecretStr = SecretStr("")
+    # Where an Instagram post is fetched when Instagram refuses (app/media/instagram.py): URL
+    # templates, comma-separated, "{id}" the post's code, "{n}" an item of a carousel from 0.
+    instagram_mirrors: str = ("https://vxinstagram.com/offload/{id}/{n},"
+                              "https://kkinstagram.com/p/{id}/")
     # Multi-step goals: the model that splits a goal into steps and checks after each one. Its
     # own knowledge fills the steps ("all of Pelevin's novels"): Haiku listed 8, one of them
     # wrong; Sonnet listed 15, all right.
