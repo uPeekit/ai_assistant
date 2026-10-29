@@ -65,6 +65,7 @@ from app.telegram.auth import (
     deny,
     is_allowed,
     media_filter,
+    private_links,
     strip_mention,
 )
 from app.telegram.keyboards import to_markup
@@ -126,14 +127,18 @@ def register(
     # New messages only: an edit arrives without a message of its own, and the text handler
     # fell over on it (the edited words were handled once already).
     new = filters.UpdateType.MESSAGE
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & new & gate, _on_text))
+    # A private message of bare Instagram links is the post handler's, not a request.
+    links = private_links(settings) if instagram is not None else None
+    text = filters.TEXT & ~filters.COMMAND & new
+    app.add_handler(MessageHandler((text & ~links if links else text) & gate, _on_text))
     app.add_handler(MessageHandler(
         (filters.VOICE | filters.AUDIO | filters.VIDEO_NOTE) & new & gate, _on_voice))
     if instagram is not None:
         # A group of its own: a link nobody addressed to the bot is not the conversation's,
         # and the post is fetched in the background — a download must not hold up the chat.
-        app.add_handler(MessageHandler(filters.TEXT & new & media_filter(chats, names),
-                                       _on_instagram, block=False), group=1)
+        app.add_handler(MessageHandler(
+            filters.TEXT & new & (media_filter(chats, names) | links), _on_instagram,
+            block=False), group=1)
     # Before the general one: a mail button is answered here and never reaches it.
     app.add_handler(CallbackQueryHandler(_on_mail_callback,
                                          pattern=rf"^({MAIL_READ}|{MAIL_UNREAD}):"))
@@ -142,7 +147,10 @@ def register(
 
 
 async def _on_instagram(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await reply_with_posts(update.effective_message, context.bot_data[_INSTAGRAM])
+    message = update.effective_message
+    # The owner asked for it in their own chat: a post not fetched is said there, never in a group.
+    await reply_with_posts(message, context.bot_data[_INSTAGRAM],
+                           say_failure=message.chat.type not in GROUPS)
 
 
 # ---- sending -------------------------------------------------------------------------------

@@ -30,6 +30,8 @@ log = logging.getLogger(__name__)
 # A post, a reel or a video, with or without the author's name before it in the path.
 LINK = re.compile(r"(?<![\w.])(?:https?://)?(?:www\.|m\.)?instagram\.com/(?:[\w.]+/)?"
                   r"(?:p|reels?|tv)/([\w-]{5,})", re.I)
+# A link with the rest of its address: the share parameters after the post's code.
+_WHOLE = re.compile(LINK.pattern + r"\S*", re.I)
 MAX_LINKS = 3
 # What one Telegram album holds.
 MAX_ITEMS = 10
@@ -65,6 +67,11 @@ def codes(text: str) -> list[str]:
         if m.group(1) not in out:
             out.append(m.group(1))
     return out[:MAX_LINKS]
+
+
+def bare(text: str) -> bool:
+    """Nothing but links to posts: no words around them that would make it a request."""
+    return bool(codes(text)) and not _WHOLE.sub("", text).strip()
 
 
 def mirrors(setting: str) -> list[str]:

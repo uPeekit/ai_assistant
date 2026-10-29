@@ -9,17 +9,21 @@ import pytest
 from telegram import InputMediaPhoto, InputMediaVideo
 from telegram.error import TimedOut
 
+from app import texts
 from app.chats import Chats
 from app.media.instagram import Item, Post
 from app.telegram import handlers as h
 from app.telegram import media
 from tests.test_handlers import (
+    ALLOWED_USER,
     FakeDiscovery,
     FakeOrchestrator,
     FakeSpeech,
     FakeStore,
     build_app,
+    dispatch,
     make_settings,
+    text_update,
 )
 from tests.test_telegram_groups import GROUP, MEMBER, OTHER_GROUP, GroupBot, _msg, mention
 
@@ -68,11 +72,12 @@ def harness(tmp_path):
                 {"chat_id": PLAIN_GROUP, "title": "plain", "rights": ["ask"], "tag": "x"}])
     app = build_app()
     instagram = FakeInstagram({"CrUJOHFNEQC": REEL})
-    h.register(app, FakeOrchestrator(), make_settings(), FakeSpeech(), FakeDiscovery(),
+    orch = FakeOrchestrator()
+    h.register(app, orch, make_settings(), FakeSpeech(), FakeDiscovery(),
                FakeStore(), chats=chats, names=lambda: ("Робо",), instagram=instagram)
     bot = MediaBot()
     context = SimpleNamespace(bot_data=app.bot_data, bot=bot, error=None, args=[])
-    return SimpleNamespace(app=app, bot=bot, context=context, instagram=instagram)
+    return SimpleNamespace(app=app, bot=bot, context=context, instagram=instagram, orch=orch)
 
 
 def media_handler(app):
@@ -171,3 +176,33 @@ def test_a_long_caption_is_cut_to_what_telegram_takes():
     cut = media.caption("слово " * 400)
     assert len(cut) <= media.MAX_CAPTION and cut.endswith("…")
     assert media.caption(" коротко ") == "коротко"
+
+
+# ---- the owner's private chat ----------------------------------------------------------------
+
+async def test_a_bare_link_in_the_private_chat_gets_the_post_and_is_not_a_request(harness):
+    update = text_update(ALLOWED_USER, LINK, harness.bot)
+    assert not await dispatch(harness.app, update, harness.context)  # not the conversation's
+    assert await run(harness, update)
+    [(kind, _)] = harness.bot.media
+    assert kind == "video" and harness.orch.calls == []
+
+
+async def test_a_link_with_words_in_the_private_chat_is_a_request(harness):
+    update = text_update(ALLOWED_USER, f"сохрани {LINK}", harness.bot)
+    assert not await run(harness, update)
+    assert await dispatch(harness.app, update, harness.context)
+    assert harness.orch.calls
+
+
+async def test_a_stranger_in_a_private_chat_gets_no_post(harness):
+    update = text_update(77, LINK, harness.bot)
+    assert not await run(harness, update)
+    assert not await dispatch(harness.app, update, harness.context)  # the gate denies it
+    assert harness.instagram.asked == []
+
+
+async def test_in_the_private_chat_a_post_not_fetched_is_said(harness):
+    harness.instagram.posts = {}
+    assert await run(harness, text_update(ALLOWED_USER, LINK, harness.bot))
+    assert [m["text"] for m in harness.bot.sent] == [texts.INSTAGRAM_NOT_FETCHED]

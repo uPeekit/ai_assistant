@@ -173,6 +173,27 @@ def media_filter(chats: Chats | None,
     return _MediaGate(chats, names)
 
 
+class _BareLinks(filters.MessageFilter):
+    """An allowed user's private message of nothing but Instagram links: "show me", not a
+    request — the post goes back and the conversation never sees it. A stranger's falls
+    through to the gate, which denies it as it denies anything else."""
+
+    def __init__(self, allowed: frozenset[int]) -> None:
+        super().__init__()
+        self._allowed = allowed
+
+    def filter(self, message) -> bool:
+        chat = message.chat
+        if chat is None or chat.type != "private" or message.from_user is None:
+            return False
+        return is_allowed(message.from_user.id, self._allowed) and \
+            instagram.bare(message.text or "")
+
+
+def private_links(settings: Settings) -> filters.BaseFilter:
+    return _BareLinks(settings.allowed_user_ids)
+
+
 def strip_mention(message) -> str:
     """The message's text without the bot's @mention, so the reader sees only the request."""
     text = message.text or ""

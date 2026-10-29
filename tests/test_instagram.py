@@ -7,7 +7,7 @@ import httpx
 import pytest
 
 from app.media import instagram as ig
-from app.media.instagram import Instagram, codes, mirrors
+from app.media.instagram import Instagram, bare, codes, mirrors
 
 VX = "https://vx.example/offload/{id}/{n}"
 KK = "https://kk.example/p/{id}/"
@@ -24,6 +24,15 @@ def test_links_are_found_in_any_shape_each_once():
     assert codes("https://www.instagram.com/nasa/") == []
     assert codes("https://notinstagram.com/p/DeXghYBkRlW/") == []
     assert codes("") == []
+
+
+def test_a_message_of_links_only_is_bare():
+    assert bare("https://www.instagram.com/p/DeXghYBkRlW/?mdxt=aGhvN294dWRwcmsz")
+    assert bare("  instagram.com/reel/CrUJOHFNEQC/\nhttps://instagram.com/p/AbCdE12345 ")
+    assert not bare("сохрани https://www.instagram.com/p/DeXghYBkRlW/")
+    assert not bare("https://www.instagram.com/p/DeXghYBkRlW/ в заметки")
+    assert not bare("https://example.com/p/DeXghYBkRlW/")
+    assert not bare("")
 
 
 def test_at_most_a_few_posts_per_message():

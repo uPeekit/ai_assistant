@@ -800,7 +800,10 @@ the first item. Its own handler group and `block=False`, so a download never hol
 conversation. yt-dlp asks Instagram first (no login, no ffmpeg: a progressive format); when
 Instagram refuses, `INSTAGRAM_MIRRORS` are tried in order — URL templates, `{n}` for a numbered
 carousel item (a repeated file ends it). Nothing fetched, or Telegram refusing the upload
-(50 MB a video, 10 MB a photo): nothing is said in the chat, one INFO line in the log.
+(50 MB a video, 10 MB a photo): nothing is said in the chat, one INFO line in the log. In an
+owner's private chat a message of *nothing but* post links is the same "show me" — the text
+handler never sees it (`private_links` is excluded from its filter), and a post not fetched is
+said there (`INSTAGRAM_NOT_FETCHED`); a link with words around it is a request as before.
 
 **Reminders** (`app/reminders/`).
 «напомни …» is the staged reader's `remind` intent: `REMIND_PROMPT` returns add/list/cancel, and

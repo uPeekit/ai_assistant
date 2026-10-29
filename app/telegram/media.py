@@ -11,6 +11,7 @@ import logging
 from telegram import InputMediaPhoto, InputMediaVideo
 from telegram.error import TelegramError
 
+from app import texts
 from app.media.instagram import Instagram, Post, codes
 from app.telegram.sending import pieces
 
@@ -27,20 +28,32 @@ def caption(text: str) -> str:
     return parts[0] + "…" if len(parts) > 1 else parts[0]
 
 
-async def reply_with_posts(message, instagram: Instagram) -> None:
-    """Every post linked in `message`, each as a reply to it."""
+async def reply_with_posts(message, instagram: Instagram, *, say_failure: bool = False) -> None:
+    """Every post linked in `message`, each as a reply to it. With `say_failure`, a post that
+    could not be fetched or sent is said in a line of text."""
     for code in codes(message.text or ""):
         post = await instagram.fetch(code)
         if post is None:
             log.info("instagram: a post could not be fetched (chat %s)", message.chat_id)
+            await _failed(message, say_failure)
             continue
         try:
             await _send(message, post)
         except TelegramError as e:
             log.warning("instagram: sending a post failed (%s)", e)
+            await _failed(message, say_failure)
             continue
         log.info("instagram: %d item(s) via %s (chat %s)", len(post.items), post.source,
                  message.chat_id)
+
+
+async def _failed(message, say: bool) -> None:
+    if not say:
+        return
+    try:
+        await message.reply_text(texts.INSTAGRAM_NOT_FETCHED, do_quote=True)
+    except TelegramError as e:
+        log.warning("instagram: saying so failed too (%s)", e)
 
 
 async def _send(message, post: Post) -> None:

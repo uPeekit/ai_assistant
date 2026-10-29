@@ -677,3 +677,6 @@ FOLDER_NOT_YET = "ещё не проверялась"
 
 # A plan with a write part that failed: the message is kept whole in the inbox note.
 PLAN_KEPT = f"Сообщение целиком сохранено в «{VAULT_INBOX_NOTE}»."
+
+# A bare Instagram link in a private chat whose post could not be fetched (app/telegram/media.py).
+INSTAGRAM_NOT_FETCHED = "🤷 Не получилось достать пост из Instagram."
