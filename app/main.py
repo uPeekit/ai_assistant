@@ -689,7 +689,7 @@ async def _register_commands(bot: Bot) -> None:
 
     Private chats only: in a group the commands are the owner's business, not the members', so
     a group shows no menu. The default scope (every chat) is cleared, which takes down the menu
-    versions before 0.6.49 published there.
+    versions before 0.7.0 published there.
 
     Never fatal: an unreachable Telegram here means the same thing it means anywhere else in this
     function — try again later — and the bot is perfectly usable with commands typed by hand. The
