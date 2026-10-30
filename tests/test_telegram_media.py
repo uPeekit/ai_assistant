@@ -72,7 +72,8 @@ def harness(tmp_path):
     app = build_app()
     instagram = FakeInstagram({"CrUJOHFNEQC": REEL})
     orch = FakeOrchestrator()
-    h.register(app, orch, make_settings(), FakeSpeech(), FakeStore(), chats=chats, names=lambda: ("Робо",), instagram=instagram)
+    h.register(app, orch, make_settings(), FakeSpeech(), FakeStore(), chats=chats,
+               names=lambda: ("Робо",), instagram=instagram)
     bot = MediaBot()
     context = SimpleNamespace(bot_data=app.bot_data, bot=bot, error=None, args=[])
     return SimpleNamespace(app=app, bot=bot, context=context, instagram=instagram, orch=orch)

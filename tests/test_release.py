@@ -46,7 +46,6 @@ def fake_repo(tmp_path):
         "tools/__init__.py": "",
         "migrations/0001_initial.sql": "CREATE TABLE x (id INTEGER);",
         "deploy/run.ps1": "echo run",
-        "documentation/NOTION_SETUP.md": "n",
         "tests/test_a.py": "def test(): pass",
         ".env": "SECRET=1",
         "data/bot.sqlite": "db",

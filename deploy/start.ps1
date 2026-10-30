@@ -30,7 +30,7 @@ if (-not (Test-Path $py)) {
 }
 if (-not (Test-Path $envFile)) {
   Copy-Item (Join-Path $root ".env.example") $envFile
-  Write-Host "Created .env - fill in TELEGRAM_BOT_TOKEN, TELEGRAM_ALLOWED_USER_IDS and NOTION_TOKEN." -ForegroundColor Yellow
+  Write-Host "Created .env - fill in TELEGRAM_BOT_TOKEN, TELEGRAM_ALLOWED_USER_IDS, ANTHROPIC_API_KEY and OBSIDIAN_VAULT." -ForegroundColor Yellow
   Open-Env
   exit 2
 }
@@ -54,10 +54,6 @@ switch ($code) {
   0 { Write-Host "Bot stopped." }
   2 {
     Write-Host "Configuration problem - the message above says what to fix in .env." -ForegroundColor Red
-    Open-Env
-  }
-  3 {
-    Write-Host "Notion rejected NOTION_TOKEN. Check it in .env (see documentation\NOTION_SETUP.md)." -ForegroundColor Red
     Open-Env
   }
   4 {

@@ -26,7 +26,7 @@ function Find-NewestZip {
   }
   $dirs += (Join-Path $env:USERPROFILE "Downloads")
   $dirs += $root
-  $found = foreach ($d in $dirs) { if (Test-Path $d) { Get-ChildItem -Path $d -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -like "ai_assistant-*.zip" -or $_.Name -like "notion_ai_bot-*.zip" } } }
+  $found = foreach ($d in $dirs) { if (Test-Path $d) { Get-ChildItem -Path $d -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -like "ai_assistant-*.zip" } } }
   $found | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 }
 

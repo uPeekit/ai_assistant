@@ -233,7 +233,7 @@ async def test_sweeper_ticks_repeatedly_and_survives_a_failed_run(caplog):
             await asyncio.sleep(0.01)
         await sweeper.stop()
     assert flusher.calls >= 2
-    assert any("repeating" in r.getMessage().lower() for r in caplog.records if r.name == "app.main")
+    assert any("repeating" in m for m in _messages(caplog))
 
 
 async def test_sweeper_stop_is_idempotent_and_cancels_the_task():

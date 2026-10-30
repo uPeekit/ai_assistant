@@ -63,7 +63,7 @@ def named(bot):  # noqa: F811
     return bot
 
 
-def sent(bot) -> str:
+def sent(bot) -> str:  # noqa: F811
     return bot.claude.seen[0]["messages"][0]["content"]
 
 

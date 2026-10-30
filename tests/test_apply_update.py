@@ -15,7 +15,7 @@ def make_repo(root: Path, version: str, extra: dict[str, str] | None = None) -> 
         "uv.lock": "lock-v1", ".env.example": "X=", "README.md": "r", "RELEASE.md": "rel",
         "apply_update.py": "print(1)", "app/__init__.py": "", "app/a.py": f"V='{version}'",
         "tools/__init__.py": "", "migrations/0001_initial.sql": "CREATE TABLE x (id INTEGER);",
-        "deploy/run.ps1": "echo run", "documentation/NOTION_SETUP.md": "n",
+        "deploy/run.ps1": "echo run",
     }
     files.update(extra or {})
     for rel, text in files.items():

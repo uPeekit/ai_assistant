@@ -159,8 +159,10 @@ async def test_with_nothing_to_point_at_nothing_is_taken(index):
 # ---- memory through the orchestrator --------------------------------------------------------
 
 from app.conversation.memory import ChatMemory  # noqa: E402
-from tests.test_orchestrator import CHAT, USER  # noqa: E402
-from tests.test_orchestrator import bot, staged_bot  # noqa: E402,F401 (fixtures)
+from tests.test_orchestrator import (  # noqa: E402  # noqa: E402,F401 (fixtures)
+    CHAT,
+    USER,
+)
 
 
 async def test_the_next_message_is_read_with_the_last_exchange(staged_bot):  # noqa: F811

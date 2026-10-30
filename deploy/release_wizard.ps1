@@ -114,7 +114,7 @@ if (AskYN "Update the production install now" $state.update_prod) {
       & (Join-Path $root "deploy\install.ps1") -Zip $zip -Dest $prod
       if ($LASTEXITCODE -ne 0) { Write-Host "install failed (exit $LASTEXITCODE)" -ForegroundColor Red; exit 1 }
       Write-Host ""
-      Write-Host "First install: .env needs TELEGRAM_BOT_TOKEN, TELEGRAM_ALLOWED_USER_IDS and NOTION_TOKEN." -ForegroundColor Yellow
+      Write-Host "First install: .env needs TELEGRAM_BOT_TOKEN, TELEGRAM_ALLOWED_USER_IDS, ANTHROPIC_API_KEY and OBSIDIAN_VAULT." -ForegroundColor Yellow
       if (AskYN "Open $prod\.env in Notepad now" $true) { Start-Process notepad.exe (Join-Path $prod ".env") }
     }
   }
