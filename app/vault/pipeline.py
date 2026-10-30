@@ -528,10 +528,9 @@ class VaultPipeline:
         if self._scope is not None and not actions:
             # A group chat never falls back to the owner's inbox: it is told what it may not
             # do here, or that the bot did not understand, and nothing is written.
-            if (self._scope.may("banter")
-                    and any(isinstance(r, dict) and r.get("unclear") for r in raw)):
-                # The reader's own verdict that nothing was asked: a request that merely
-                # could not be placed still says so.
+            if self._scope.may("banter") and all(k == "inbox" for k in refused):
+                # Where it would have said it did not understand. A kind the group may not
+                # ask for is refused below all the same.
                 return await self.banter(message, chat=chat, history=history)
             return VaultTurn(answer=_not_here(refused), model=model,
                              prompt_tokens=prompt_tokens, output_tokens=output_tokens)

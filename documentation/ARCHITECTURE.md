@@ -765,11 +765,11 @@ linker, no inbox fallback, no `obsidian://` links in replies. Undo and «Поп�
 belong to the member who asked (`events.telegram_user_id`) or an owner; after Fix is pressed,
 only the presser's next message is the correction.
 
-**Jokes** (`app/llm/banter.py`). In a group with the `banter` right, a mention with nothing to ask
-(a bare mention, the name alone, or what the reader calls `unclear`) gets a joke instead of «не
-понял»: the message and the recent exchanges, no notes, in the tone of the admin page's
-`banter_note`, written nowhere. Only the reader's own verdict counts, so a request that could not
-be placed still says so; when Claude cannot be asked it is a stock line (`texts.BANTER_LINES`).
+**Jokes** (`app/llm/banter.py`). In a group with the `banter` right, a bare mention, the name
+alone, and anything the bot would have answered «не понял» gets a joke instead: the message and
+the recent exchanges, no notes, in the tone of the admin page's `banter_note`, written nowhere. A
+kind of request the group may not make is still refused; when Claude cannot be asked the joke is a
+stock line (`texts.BANTER_LINES`).
 
 **Instagram links** (`app/media/instagram.py`, `app/telegram/media.py`). In a group with the
 `media` right, a message with an Instagram post link that is *not* addressed to the bot gets

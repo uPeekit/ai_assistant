@@ -120,12 +120,13 @@ async def test_a_request_the_group_may_not_make_is_refused_not_joked_at(index): 
     assert banter.asked == []
 
 
-async def test_a_message_the_reader_could_not_place_is_not_taken_for_noise(index):  # noqa: F811
-    """A request the stages lost still says so: joking there would hide that it failed."""
+async def test_a_message_the_reader_could_not_place_gets_a_joke_too(index):  # noqa: F811
+    """«санёк найди что записал и запиши что нашёл», from the group: read as an add with
+    nowhere to go. Anywhere the bot would have said it did not understand, it jokes."""
     banter = FakeBanter()
-    script = Script(INTENT_PROMPT={"intent": "add"}, TARGET_PROMPT={"target": "inbox"})
-    turn = await pipe(index, script, banter).handle("запиши что-то")
-    assert banter.asked == [] and turn.reply_line() == texts.SCOPE_NOTHING
+    script = Script(INTENT_PROMPT={"intent": "add"}, TARGET_PROMPT={"target": "x"})
+    turn = await pipe(index, script, banter).handle("найди что записал и запиши что нашёл")
+    assert turn.reply_line() == "Хули надо?" and turn.writes == []
 
 
 async def test_the_owners_private_chat_keeps_the_words_and_never_jokes(index):  # noqa: F811

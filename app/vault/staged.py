@@ -551,7 +551,7 @@ class _Run:
         with suppress(asyncio.CancelledError, Exception):
             await target_task
         if intent == "unclear":
-            return [{**self._inbox(self.message), "unclear": True}]
+            return [self._inbox(self.message)]
         handler = {"done": self._done, "change": self._change, "move": self._move,
                    "ask": self._question, "remind": self._remind}[intent]
         actions = await handler(self.message)
