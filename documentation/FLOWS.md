@@ -63,7 +63,7 @@ All bot replies in Russian. Buttons in `[brackets]`.
    ```
    `[Отменить] [Поправить]` — it is a write like any other, so «это в задачи» moves it (F7).
 4. The model could not be asked at all: the words are kept the same way, and the reply says why (F22).
-5. In a group there is no inbox: `🤷 Не понял, что записать или найти.`, and nothing is written (F10).
+5. In a group there is no inbox: `🤷 Не понял, что записать или найти.`, and nothing is written (F10). With the `banter` right, a message the reader calls `unclear` gets a joke instead.
 
 ## F6. A value with no source
 

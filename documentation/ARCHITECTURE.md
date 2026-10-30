@@ -616,6 +616,7 @@ to a cheaper or a stronger model without touching the others:
 | The second opinion | `ESCALATE_MODEL` | `claude-sonnet-5` | Read again when the answerer cannot tell who asks, or finds nothing on a question tied to the owner's own folder or tag; also checks a watched folder's summary before it is sent. Empty: never. |
 | A question about a linked page | `CLAUDE_MODEL` | `claude-haiku-4-5` | Also reads watched folders when `VAULT_ANSWER_MODEL` is empty. |
 | Changing a note | `REWRITE_MODEL` | `claude-sonnet-5` | It is the user's own writing, and Haiku loses facts while shortening. |
+| A joke for a group that calls the bot for nothing | `BANTER_MODEL` | `claude-sonnet-5` | One short line; thinking off. Empty: stock lines only. |
 | Web research | `RESEARCH_MODEL` | `claude-sonnet-5` | A search already costs far more than a message, and this is the call whose quality you read. |
 | Sorting mail | `MAIL_MODEL` | `claude-haiku-4-5` | A `claude-...` name goes through the API; any other name is a local Ollama model, which needs no key. |
 
@@ -752,7 +753,7 @@ access. A group is answered only when listed in `data/chats.json` (the admin pag
 which also offers the groups the bot has seen) and only when addressed — @mention, reply to the
 bot, its name, a command; anything else in the group costs nothing. A listed group's scope is
 one tag plus a home folder, and its rights (`ask`, `add`, `tasks`, `tick`, `change`, `move`,
-`remind`, `media`).
+`remind`, `media`, `banter`).
 Its message goes through `VaultPipeline.scoped(scope)`, which rebuilds three
 layers per turn: `ScopedIndex` (every reader — staged reader, `check()`, search, answerer,
 agenda, Omnisearch — sees only notes whose *frontmatter* carries the tag or that lie in the
@@ -763,6 +764,12 @@ title; diary, groceries and inbox never); and a guarded writer that refuses any 
 linker, no inbox fallback, no `obsidian://` links in replies. Undo and «Поправить» in a group
 belong to the member who asked (`events.telegram_user_id`) or an owner; after Fix is pressed,
 only the presser's next message is the correction.
+
+**Jokes** (`app/llm/banter.py`). In a group with the `banter` right, a mention with nothing to ask
+(a bare mention, the name alone, or what the reader calls `unclear`) gets a joke instead of «не
+понял»: the message and the recent exchanges, no notes, in the tone of the admin page's
+`banter_note`, written nowhere. Only the reader's own verdict counts, so a request that could not
+be placed still says so; when Claude cannot be asked it is a stock line (`texts.BANTER_LINES`).
 
 **Instagram links** (`app/media/instagram.py`, `app/telegram/media.py`). In a group with the
 `media` right, a message with an Instagram post link that is *not* addressed to the bot gets

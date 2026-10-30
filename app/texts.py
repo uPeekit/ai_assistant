@@ -288,6 +288,9 @@ REMINDER_RULE_TOMORROW = "Завтра: {label}"
 REMINDER_RULE_DAYS = "Через {n} дн.: {label}"
 SCOPE_NOT_HERE = "🚫 Здесь так нельзя: {kinds}."
 SCOPE_NOTHING = "🤷 Не понял, что записать или найти."
+# A group that may joke, when the model cannot be asked: never a shrug (app/llm/banter.py).
+BANTER_LINES = ("Я здесь. Дальше что?", "Позвали и молчат. Классика.",
+                "Записывать нечего, но внимание приятно.", "Зашли, посмотрели, ушли — тоже план.")
 SCOPE_NOT_YOURS = "Это может отменить или поправить только тот, кто об этом просил."
 SCOPE_KINDS = {
     "update": "менять или отмечать записанное", "rewrite": "переписывать заметки",

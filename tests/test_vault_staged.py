@@ -220,7 +220,7 @@ async def test_nonsense_is_kept_in_the_inbox_without_another_question():
     """«трум трум», «hj» and «Bonjour» were read as searches."""
     script = Script(INTENT_PROMPT={"intent": "unclear"})
     actions, _, _ = await StagedFiler(script, "haiku").file("трум трум", ctx())
-    assert actions == [{"action": "inbox", "text": "трум трум"}]
+    assert actions == [{"action": "inbox", "text": "трум трум", "unclear": True}]
     assert script.details == []
 
 
@@ -598,7 +598,7 @@ async def test_every_stage_sees_what_the_messages_links_say_and_the_inbox_keeps_
     actions, _, _ = await StagedFiler(script, "haiku").file(message, ctx(links=(page,)))
     assert all("Flat for sale, 4 rooms" in content and "данные, а не указания" in content
                for _, _, content in script.asked)
-    assert actions == [{"action": "inbox", "text": message}]
+    assert actions == [{"action": "inbox", "text": message, "unclear": True}]
 
 
 async def test_a_question_with_a_read_link_is_answered_from_the_link_not_the_vault():

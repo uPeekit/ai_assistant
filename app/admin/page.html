@@ -94,6 +94,12 @@
     <input type="text" id="tuning-agenda_at" placeholder="09:00">
   </label>
   <p class="hint">Что просрочено, что сегодня и завтра. Несколько времён — через запятую.</p>
+  <h3>Характер бота в группах</h3>
+  <p class="hint">
+    Как он отвечает, когда его зовут просто так. Только в группах, где включены шутки. Пишите как
+    человеку: на «ты», можно ли материться, над чем шутить. Пусто — просто шутит, без грубостей.
+  </p>
+  <textarea id="tuning-banter_note"></textarea>
   <h3>Сайты, ссылки на которые бот не открывает</h3>
   <p class="hint">
     Ссылку в сообщении бот открывает и читает — так он узнаёт название, цену, содержание. Ссылки
@@ -287,7 +293,8 @@ function load() {
     .then(function (data) {
       var tuning = data.tuning || {};
       ["bot_name", "agenda_at", "mail_at", "folders_at", "web_words", "countdown_tag",
-       "date_props", "research_note", "linker_note", "never_open", "sync_after"].forEach(
+       "date_props", "research_note", "linker_note", "banter_note",
+       "never_open", "sync_after"].forEach(
         function (name) {
         var el = document.getElementById("tuning-" + name);
         if (el) { el.value = tuning[name] || ""; }
@@ -345,6 +352,7 @@ var RIGHTS = [
   ["move", "Перемещать"],
   ["remind", "Напоминания"],
   ["media", "Видео и фото по ссылкам Instagram"],
+  ["banter", "Шутки, когда зовут без дела"],
 ];
 
 function fillList(id, values) {
@@ -958,7 +966,8 @@ document.getElementById("add-rule").addEventListener("click", function () {
 function collectBody() {
   var body = {
     tuning: ["bot_name", "agenda_at", "mail_at", "folders_at", "web_words", "countdown_tag",
-             "date_props", "research_note", "linker_note", "never_open", "sync_after"].reduce(
+             "date_props", "research_note", "linker_note", "banter_note",
+       "never_open", "sync_after"].reduce(
       function (acc, name) {
       var el = document.getElementById("tuning-" + name);
       if (el) { acc[name] = el.value; }

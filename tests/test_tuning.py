@@ -64,7 +64,7 @@ def test_the_prompts_themselves_are_not_editable(tuning):
     """Deliberate: the extra-instruction fields add to a prompt, they never replace it."""
     assert set(tuning.all()) == {"bot_name", "agenda_at", "mail_at", "folders_at", "web_words",
                                  "countdown_tag", "date_props", "research_note", "linker_note",
-                                 "never_open", "sync_after"}
+                                 "banter_note", "never_open", "sync_after"}
 
 
 async def test_the_schedule_re_reads_its_times(tuning):

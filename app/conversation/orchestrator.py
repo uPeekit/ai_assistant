@@ -311,6 +311,12 @@ class Orchestrator:
         rights (app/vault/scope.py)."""
         assert self._vault is not None
         called = address.strip(text, self._names)
+        if (called.only_name or not text.strip()) and scope.may("banter"):
+            # Called with not a word more: no reading can find a request in that.
+            turn.audit(decision=_kind("BANTER"))
+            turn.vault = asyncio.create_task(self._vault.scoped(scope).banter(
+                "", chat=self._chat_ref(turn), history=turn.history))
+            return Reply("")
         if called.only_name:
             turn.audit(decision=_kind("ABOUT"))
             return Reply(texts.CALLED)

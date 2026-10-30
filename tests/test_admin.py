@@ -179,6 +179,22 @@ def test_tuning_is_served_and_saved(settings, tmp_path):
         s.stop()
 
 
+def test_the_bots_character_is_served_and_saved(settings, tmp_path):
+    from app.tuning import Defaults, Tuning
+
+    tuning = Tuning(tmp_path / "tuning.json", Defaults(
+        bot_name="", agenda_at="09:00", mail_at="12:00,19:00",
+        web_words=("найди",), countdown_tag="отсчёт", date_props=("date",)))
+    s = AdminServer(settings, None, None, tuning)
+    s.start()
+    try:
+        assert json.loads(_get(s, "/api/settings")[1])["tuning"]["banter_note"] == ""
+        status, _ = _post(s, "/api/settings", {"tuning": {"banter_note": "хамоватый, но свой"}})
+        assert status == 200 and tuning.banter_note == "хамоватый, но свой"
+    finally:
+        s.stop()
+
+
 def test_the_never_open_list_is_on_the_page(settings, tmp_path):
     """Sites whose links the bot never reads: served, editable, and shown in both lists the
     page loads and saves from."""

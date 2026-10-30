@@ -101,6 +101,7 @@ class Tuning:
             "date_props": ", ".join(self.date_props),
             "research_note": self.research_note,
             "linker_note": self.linker_note,
+            "banter_note": self.banter_note,
             "never_open": ", ".join(self.never_open),
             "sync_after": str(self.sync_after),
         }
@@ -171,6 +172,11 @@ class Tuning:
     def linker_note(self) -> str:
         """Extra instructions appended to the linker's prompt. Empty by default."""
         return self._text("linker_note", "")
+
+    @property
+    def banter_note(self) -> str:
+        """How the bot talks when a group calls it for nothing (app/llm/banter.py)."""
+        return self._text("banter_note", "")
 
 
 def _site(entry: str) -> str:

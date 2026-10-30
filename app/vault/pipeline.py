@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import logging
+import random
 import re
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
@@ -22,6 +23,7 @@ from app import texts
 from app.chats import ChatRef, ChatScope
 from app.google.sources import GoogleSources
 from app.llm import staged_prompts as P
+from app.llm.banter import Banter, BanterError
 from app.llm.edits import EditError, Editor, NothingToChange
 from app.llm.edits import TooLong as EditTooLong
 from app.llm.prompts import MOVE_INSTRUCTION
@@ -255,7 +257,7 @@ class VaultPipeline:
                  web_words: Callable[[], tuple[str, ...]] | None = None,
                  date_props: Callable[[], tuple[str, ...]] | None = None,
                  askers: Askers | None = None,
-                 planner: VaultPlanner | None = None) -> None:
+                 planner: VaultPlanner | None = None, banter: Banter | None = None) -> None:
         self._index = index
         self._writer = writer
         # The whole vault and its writer. A group chat's turn (`scoped`) swaps `_index` and
@@ -273,6 +275,8 @@ class VaultPipeline:
         # Reads the notes a question's search found and answers from them. None: the reply
         # is the list of what was found.
         self._answerer = answerer
+        # Jokes for a group that may have them (the "banter" right); None: its stock lines.
+        self._banter = banter
         # Obsidian's own search, while the app runs: what it finds that ours did not is read
         # by the answerer too (app/vault/omnisearch.py).
         self._omni = omni
@@ -422,6 +426,8 @@ class VaultPipeline:
             await self._editor.aclose()
         if self._answerer is not None:
             await self._answerer.aclose()
+        if self._banter is not None:
+            await self._banter.aclose()
 
     async def handle(self, message: str, *, content: str = "",
                      research: Research | None = None, links: tuple = (),
@@ -522,6 +528,11 @@ class VaultPipeline:
         if self._scope is not None and not actions:
             # A group chat never falls back to the owner's inbox: it is told what it may not
             # do here, or that the bot did not understand, and nothing is written.
+            if (self._scope.may("banter")
+                    and any(isinstance(r, dict) and r.get("unclear") for r in raw)):
+                # The reader's own verdict that nothing was asked: a request that merely
+                # could not be placed still says so.
+                return await self.banter(message, chat=chat, history=history)
             return VaultTurn(answer=_not_here(refused), model=model,
                              prompt_tokens=prompt_tokens, output_tokens=output_tokens)
         if not actions and any(isinstance(r, dict) and r.get("looked_up") for r in raw):
@@ -895,6 +906,23 @@ class VaultPipeline:
                 with suppress(OSError):
                     out.append(f"### {note.name}\n{self._index.read(note.path)}")
         return out
+
+    async def banter(self, message: str, *, chat: ChatRef | None = None,
+                     history: str = "") -> VaultTurn:
+        """Called with nothing to ask: a joke, written nowhere, never a shrug. Not an answer to
+        remember either: "save this" means what was said before it."""
+        if self._banter is not None:
+            try:
+                line, used_in, used_out = await self._banter.line(
+                    message, chat.name if chat is not None else "", history)
+            except BanterError as e:
+                log.warning("banter failed: %s", e)
+            else:
+                log.info("banter %s: %d chars | %d+%d tok", self._banter.model, len(line),
+                         used_in, used_out)
+                return VaultTurn(answer=line, model=self._banter.model, prompt_tokens=used_in,
+                                 output_tokens=used_out)
+        return VaultTurn(answer=random.choice(texts.BANTER_LINES))
 
     async def _kept(self, message: str, error: FilerError) -> VaultTurn:
         """The model could not be asked — Claude is down, out of credit, or answered rubbish.

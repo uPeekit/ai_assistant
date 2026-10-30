@@ -61,6 +61,7 @@ from app.google.client import GoogleClient
 from app.google.sources import GoogleSources, Sources
 from app.instance_lock import AlreadyRunning, InstanceLock
 from app.llm.answer import LinkAnswerer
+from app.llm.banter import Banter
 from app.llm.edits import Editor
 from app.llm.health import Health
 from app.llm.image_search import ImageSearch
@@ -249,6 +250,9 @@ def _vault_pipeline(settings: Settings, switches: Switches, tuning: Tuning,
                          web_words=lambda: tuning.web_words,
                          date_props=lambda: tuning.date_props,
                          askers=Askers(settings.db_path.with_name("askers.json")),
+                         banter=(Banter(key, settings.banter_model,
+                                        note=lambda: tuning.banter_note, health=health)
+                                 if settings.banter_model.strip() else None),
                          # A message of several steps is planned by the stronger model, after
                          # one cheap question to the light one (app/vault/planner.py).
                          planner=(VaultPlanner.claude(key, settings.filer_model,

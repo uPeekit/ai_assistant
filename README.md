@@ -151,6 +151,7 @@ API key, which is billed separately, per use.
 | `VAULT_ANSWER_MODEL` | `claude-haiku-4-5` | Answers a question from the notes the search found. Empty: the reply is the list of notes found. |
 | `ESCALATE_MODEL` | `claude-sonnet-5` | A second opinion on an answer the first model could not settle, and on a watched folder's summary. Empty: never. |
 | `REWRITE_MODEL` | `claude-sonnet-5` | Changes a note. Sonnet, because this is your own writing and Haiku loses facts while shortening. |
+| `BANTER_MODEL` | `claude-sonnet-5` | Jokes in a group with the «Шутки» right, when someone calls the bot for nothing. How it talks is set on the admin page, under «Характер бота в группах». Empty: a few stock lines. |
 | `LINKER_MODEL` | `claude-haiku-4-5` | Adds links between notes after the reply. |
 | `CLAUDE_MODEL` | `claude-haiku-4-5` | Answers a question about a linked page. |
 | `RESEARCH_MODEL` | `claude-sonnet-5` | Web research, below. |

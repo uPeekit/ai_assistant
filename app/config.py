@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     # trimmed). Sonnet: this is their own writing, and Haiku loses facts while shortening.
     rewrite_model: str = "claude-sonnet-5"
 
+    # A joke for a group with the "banter" right that calls the bot for nothing. Empty: only the
+    # stock lines of app/texts.py.
+    banter_model: str = "claude-sonnet-5"
+
     # What to call the bot. Several spellings separated by commas ("Robo,Robbie"): the
     # name is taken off the front or the back of a message before anything reads it, so
     # "Robo, buy milk" is a shopping item and not a note about someone called Robo.

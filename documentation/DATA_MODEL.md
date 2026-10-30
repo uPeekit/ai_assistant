@@ -238,6 +238,7 @@ Lines left in an existing `.env` for settings that no longer exist are ignored.
 | `VAULT_ANSWER_MODEL` | `claude-haiku-4-5` | empty: the reply is the list of notes found |
 | `ESCALATE_MODEL` | `claude-sonnet-5` | the second opinion; empty: never asked |
 | `REWRITE_MODEL` | `claude-sonnet-5` | changing a note |
+| `BANTER_MODEL` | `claude-sonnet-5` | a joke in a group with the `banter` right; empty: stock lines |
 | `RESEARCH_MODEL` | `claude-sonnet-5` | |
 | `RESEARCH_MAX_SEARCHES` | `4` | 1 to 20 |
 | `RESEARCH_MAX_READS` | `8` | site searches and page reads together, 1 to 40 |
