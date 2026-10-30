@@ -155,9 +155,11 @@ async def test_a_group_without_the_right_cannot_set_one(setup):
 
 # ---- through the orchestrator ------------------------------------------------------------------
 
-from tests.test_orchestrator import (  # noqa: E402  # noqa: E402,F401 (fixtures)
+from tests.test_orchestrator import (  # noqa: E402
     CHAT,
     USER,
+    bot,  # noqa: F401 (a fixture)
+    staged_bot,  # noqa: F401 (a fixture)
 )
 
 
