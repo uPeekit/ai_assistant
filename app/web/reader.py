@@ -10,8 +10,11 @@ the home network.
 
 from __future__ import annotations
 
+import asyncio
+import ipaddress
 import logging
 import re
+import socket
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from html.parser import HTMLParser
@@ -19,9 +22,10 @@ from urllib.parse import urljoin, urlsplit
 
 import httpx
 
-from app.notion.images import is_public_url
-
 log = logging.getLogger(__name__)
+
+# Wikimedia rate-limits (429) generic browser-like agents; it asks bots to say what they are.
+USER_AGENT = "ai-assistant/1.0 (personal notes assistant; python-httpx)"
 
 JINA = "https://r.jina.ai/"
 JINA_TIMEOUT_S = 20.0
@@ -34,6 +38,26 @@ CHALLENGE = re.compile(r"just a moment|security verification|verify you are huma
                        r"attention required|checking your browser|"
                        r"target url returned error (?:401|403|429|503)", re.I)
 SITE_ERROR = re.compile(r"target url returned error ([45]\d\d)", re.I)
+
+async def is_public_url(url: str) -> bool:
+    """Plain http(s) to a public address only: a URL from an arbitrary page must not point the
+    bot at http://127.0.0.1:8787 (the admin page) or at the router on the local network."""
+    parts = urlsplit(url)
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        return False
+    try:
+        infos = await asyncio.get_running_loop().getaddrinfo(
+            parts.hostname, parts.port or (443 if parts.scheme == "https" else 80),
+            type=socket.SOCK_STREAM,
+        )
+    except OSError:
+        return False
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if not ip.is_global or ip.is_multicast:
+            return False
+    return bool(infos)
+
 
 
 @dataclass(frozen=True)

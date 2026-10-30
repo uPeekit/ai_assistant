@@ -19,7 +19,13 @@ from pydantic import ValidationError
 
 from app import texts
 from app.llm.health import Health, describe
-from app.llm.prompts import FILER_PROMPT, filer_message, filer_vault, links_section
+from app.llm.prompts import (
+    FILER_PROMPT,
+    RU_WEEKDAYS,
+    filer_message,
+    filer_vault,
+    links_section,
+)
 from app.vault import groceries as groceries_mod
 from app.vault import mdedit
 from app.vault.index import GUIDE_NOTE, VaultIndex
@@ -166,8 +172,6 @@ class VaultContext:
 
 
 def context(index: VaultIndex, message: str, now: datetime) -> VaultContext:
-    from app.llm.context import RU_WEEKDAYS  # weekday names live with the other prompts
-
     known = index.candidates(message, MAX_CANDIDATES)
     guide = index.guide()[:MAX_GUIDE]
     # The pages the guide links to are the user's hubs ("films go in a list on the media

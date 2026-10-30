@@ -16,12 +16,16 @@ import logging
 
 import httpx
 
-from app.llm.ollama import CTX_MARGIN, wants_think_flag
 from app.llm.prompts import MAIL_PROMPT, mail_message
 from app.mail.classify import MAX_SUMMARY, OTHER, ClassifyError, Sorted, _schema, gate
 from app.mail.imap import Message
 
 log = logging.getLogger(__name__)
+
+# Models that think before they answer unless told not to: the classifier wants the answer only.
+THINKING_FAMILIES = ("qwen3", "deepseek-r1", "gpt-oss", "magistral")
+# A prompt this close to num_ctx may have lost its head: Ollama drops it without saying so.
+CTX_MARGIN = 256
 
 # How many emails to try in one request. Measured: more at once sorts *better* — the model
 # tells buckets apart by contrast (qwen3:4b went 7/16 -> 14/16 from one email a request to
@@ -34,6 +38,11 @@ BATCH = 20
 TOKENS_PER_EMAIL = 160
 TOKENS_OVERHEAD = 200
 MAX_ID = 40
+
+
+def wants_think_flag(model: str) -> bool:
+    family = model.split(":", 1)[0].lower()
+    return family in THINKING_FAMILIES
 
 
 def capped_schema(buckets: list[str]) -> dict:

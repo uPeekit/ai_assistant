@@ -18,7 +18,7 @@ from urllib.parse import unquote, urljoin
 
 import httpx
 
-from app.notion.images import USER_AGENT, is_public_url
+from app.web.reader import USER_AGENT, is_public_url
 
 log = logging.getLogger(__name__)
 

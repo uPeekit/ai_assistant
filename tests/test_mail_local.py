@@ -8,7 +8,7 @@ import httpx
 import pytest
 
 from app.mail.classify import OTHER, Classifier
-from app.mail.local import LocalClassifier
+from app.mail.local import LocalClassifier, wants_think_flag
 from app.mail.service import MailService, MailState, ShadowRun, shadow_digest
 from tests.test_mail import BUCKETS, FakeMailbox, message
 from tests.test_vault_filer import FakeAnthropic
@@ -415,3 +415,9 @@ async def test_an_answer_that_is_json_but_not_an_object_is_a_classifier_error_no
                                  transport=httpx.MockTransport(handler))
     with pytest.raises(ClassifyError):
         await classifier._ask([message("1")])
+
+
+def test_thinking_models_are_told_not_to_think():
+    assert wants_think_flag("qwen3:8b") and wants_think_flag("deepseek-r1:7b")
+    assert not wants_think_flag("qwen2.5:7b-instruct") and not wants_think_flag("gemma3:4b")
+    assert not wants_think_flag("qwen3-coder:30b")

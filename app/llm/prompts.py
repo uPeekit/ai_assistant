@@ -11,6 +11,8 @@ from app.notion.snapshot import Target
 
 # The context's `pending` key under which a plan step carries its plan (goal, done steps).
 PLAN_KEY = "plan"
+RU_WEEKDAYS = ("понедельник", "вторник", "среда", "четверг", "пятница", "суббота",
+               "воскресенье")
 # How many of a database's rows the planner is shown, so it can tell what is already there.
 MAX_KNOWN_ITEMS = 30
 
