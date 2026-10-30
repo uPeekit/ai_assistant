@@ -182,15 +182,6 @@ async def test_an_account_out_of_credit_is_named_in_the_reply(bot):
     assert texts.LLM_DOWN_NOTE["credit"] not in second.text  # but does not repeat the lecture
 
 
-# ---- multi-step plans reach both stores -------------------------------------------------------
-
-
-def notion_calls_create(bot) -> list:
-    return [c for c in bot.notion.calls if c[0] == "create_page"]
-
-
-# ---- a single message that searches the web reaches the vault too -----------------------------
-
 async def test_nothing_to_change_is_not_reported_as_a_failure(tmp_path):
     """It reached the user as «Obsidian — не записано: no changes»: English, and wrong. Nothing
     failed; the instruction simply did not apply to anything in the note."""

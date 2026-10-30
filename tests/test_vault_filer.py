@@ -176,8 +176,8 @@ async def test_pipeline_keeps_the_words_when_the_model_answers_nothing(index):
 
 
 async def test_a_model_that_is_down_costs_the_filing_not_the_words(index):
-    """With Notion off nothing else would have kept the message: it goes to the inbox note as
-    it is, and the reply says both that it is saved and why it was not filed."""
+    """Nothing else would have kept the message: it goes to the inbox note as it is, and the
+    reply says both that it is saved and why it was not filed."""
     error = anthropic.APIError("down", request=None, body=None)  # type: ignore[arg-type]
     turn = await pipeline(index, error).handle("записаться к зубному")
     assert [w.kind for w in turn.writes] == ["kept"] and turn.error

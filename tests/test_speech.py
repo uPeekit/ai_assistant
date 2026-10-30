@@ -20,7 +20,6 @@ from app.speech.whisper_local import WhisperLocal
 def settings(device: str = "cpu") -> Settings:
     return Settings(
         _env_file=None,
-        notion_token="ntn-test-token",
         whisper_model="tiny",
         whisper_device=device,
         whisper_compute_type="int8",

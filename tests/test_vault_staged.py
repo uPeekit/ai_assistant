@@ -440,9 +440,8 @@ async def test_a_task_that_is_already_open_is_not_filed_a_second_time():
 # ---- the vault plans for itself: lookups and web searches ---------------------------------
 
 async def test_a_set_the_user_did_not_list_is_looked_up_and_each_item_becomes_a_note():
-    """«я прочитал все романы Пелевина, добавь в список прочитанных» gave one note: the list of
-    novels only ever existed in the Notion planner's steps. The vault now asks for it itself —
-    of the lookup model — and writes one note per book."""
+    """«я прочитал все романы Пелевина, добавь в список прочитанных»: the vault asks the lookup
+    model for the list and writes one note per book."""
     light = Script(
         INTENT_PROMPT={"intent": "add"}, TARGET_PROMPT={"target": "f2"},
         FOLDER_PROMPT={"items": [], "lookup": "романы Пелевина, все прочитаны", "web": "",

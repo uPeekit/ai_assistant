@@ -160,9 +160,7 @@ def test_the_scope_the_model_fills_in_by_default_means_nothing(index):
     assert action.scope == "now"
 
 
-async def test_a_question_the_vault_answered_is_not_buried_under_notions_empty_search(index):
-    """The other half of what the user saw: Notion cannot express "overdue" at all, so its title
-    search found nothing and said so — above the real answer."""
+async def test_a_question_the_vault_answered_is_the_whole_reply(index):
     turn = await pipeline(index, {"actions": [{"action": "agenda", "scope": "overdue"}]}
                           ).handle("какие задачи я не сделал?")
     assert turn.answer and turn.reply_line() == turn.answer

@@ -190,6 +190,6 @@ def test_switches_notice_a_change_made_while_the_bot_runs(tmp_path):
 def test_a_broken_switches_file_leaves_everything_as_env_had_it(tmp_path, caplog):
     path = tmp_path / "switches.json"
     path.write_text("{not json", encoding="utf-8")
-    switches = Switches(path, {"notion": True, "obsidian": True, "linker": False})
-    assert switches.all() == {"notion": True, "obsidian": True, "linker": False, "mail": True,
+    switches = Switches(path, {"obsidian": True, "linker": False})
+    assert switches.all() == {"obsidian": True, "linker": False, "mail": True,
                               "syncthing": True, "folders": True}

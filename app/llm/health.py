@@ -1,9 +1,8 @@
 """Why Claude could not be used, said once in plain words.
 
 Every Claude call in the bot fails the same way when the API refuses: a short technical string
-in the log, and an answer that is quietly worse — the interpreter falls back to the local
-model, the Obsidian side writes nothing at all. Nothing told the user that the account simply
-needed topping up.
+in the log, and a vault that writes nothing at all. Nothing told the user that the account
+simply needed topping up.
 
 This module names the reason (no credit, a rejected key, a rate limit, an outage), keeps it
 until a call succeeds again, and hands out one sentence about it at most once an hour. One

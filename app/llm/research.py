@@ -1,9 +1,8 @@
 """Web research: Claude with three tools — Anthropic's web search, a known shop's or
 real-estate site's own search (app/web/sites.py), and reading a page (app/web/reader.py,
 trimmed by app/web/trim.py) — in a loop this module drives, with a budget it enforces. The
-interpreter only decides *that* something is to be looked up (Candidate.web_query); this turns
-the query into Markdown with sources, which then goes through the normal write path as the
-candidate's content."""
+vault's reader only decides *that* something is to be looked up; this turns the query into
+Markdown with sources, which the vault then writes."""
 
 from __future__ import annotations
 
@@ -254,9 +253,9 @@ class WebResearcher:
         await self._reader.aclose()
 
     async def research(self, request: str, query: str, media: str = "text") -> str:
-        """Markdown ready to write: text, pictures, or both, per `media` (the interpreter's
-        web_media). The text is Claude's web research; pictures come from Wikimedia Commons
-        (Claude only proposes the search phrases) and from the pages the text cites, because
+        """Markdown ready to write: text, pictures, or both, per `media`. The text is Claude's
+        web research; pictures come from Wikimedia Commons (Claude only proposes the search
+        phrases) and from the pages the text cites, because
         image links a model writes itself are mostly invented. Raises ResearchQuestion when the
         request needs the user first, ResearchError when nothing usable came back."""
         try:

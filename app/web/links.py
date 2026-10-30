@@ -1,8 +1,8 @@
 """The links in a message, read and trimmed before the message is interpreted.
 
 A link is data the user sent: a flat to put in a comparison table, a book whose real title
-belongs in a list, an article to summarise, a page to answer a question about. Both interpreters
-get what is on the page, and each uses it for the action it chose. A link on the never-open list
+belongs in a list, an article to summarise, a page to answer a question about. The vault's
+reader gets what is on the page, and uses it for the action it chose. A link on the never-open list
 (a document, a bank) is not read at all: it would not open anyway, and the reader is a third
 party. A link that cannot be read stays a plain link; nothing about it is an error.
 """

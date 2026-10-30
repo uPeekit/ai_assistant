@@ -209,8 +209,8 @@ def test_the_setting_lists_models_separated_by_commas(env):
 
 @pytest.mark.asyncio
 async def test_the_model_is_unloaded_as_soon_as_the_digest_is_sorted():
-    """A digest runs twice a day. A model kept resident in between holds the card the Notion
-    fallback and the transcriber need, so it is let go the moment its answer is in."""
+    """A digest runs twice a day. A model kept resident in between holds the card the
+    transcriber needs, so it is let go the moment its answer is in."""
     requests: list[tuple[str, dict]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:

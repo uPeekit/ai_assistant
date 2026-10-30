@@ -1,4 +1,4 @@
-"""The Obsidian side's interpreter, in stages: intent, then one target, then that target's details.
+"""The vault's interpreter, in stages: intent, then one target, then that target's details.
 
 `Filer` asks one question about everything at once — what is this, where does it go, what does
 it say — and the light model answers that unreliably: given a dictated message that names a
