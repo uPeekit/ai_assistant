@@ -9,7 +9,8 @@ Principle: a message is never lost and a turn never fails outright. What the vau
 | `AUTH_DENIED` | telegram/auth | user id not allowlisted | none | log WARNING, ignore |
 | `STT_EMPTY` | telegram/handlers | no speech detected | Не разобрал голосовое сообщение. Повторите или напишите текстом. | none; no `events` row, the handler answers before the orchestrator |
 | `STT_FAILED` | telegram/handlers | model load / decode exception | Ошибка распознавания речи. | no `events` row; if CUDA error → auto-switch to CPU for process lifetime |
-| `NOTHING_ENABLED` | conversation/orchestrator | the `obsidian` switch is off, or no vault was built: `OBSIDIAN_VAULT` empty or not a folder, `OBSIDIAN_ENABLED=false`, no `ANTHROPIC_API_KEY` | Obsidian выключен — включите его на странице настроек. | fix the setting; a restart is needed for anything but the switch |
+| `NOTHING_ENABLED` | conversation/orchestrator | the `obsidian` switch is off | Obsidian выключен — включите его на странице настроек. | turn the switch on; no restart |
+| `VAULT_NOT_SET` | conversation/orchestrator | no vault was built: `OBSIDIAN_VAULT` empty or not a folder, `OBSIDIAN_ENABLED=false`, no `ANTHROPIC_API_KEY` | Хранилище не подключено: нужны OBSIDIAN_VAULT и ANTHROPIC_API_KEY в .env. | fix `.env` and restart |
 | `UNDO_EXPIRED` | conversation/orchestrator | undo window passed, already undone, another chat's write, or an older version's record with nothing to take back | Отменить уже нельзя (прошло больше N минут). | none |
 | `UNDO_FAILED` | conversation/orchestrator | the vault undo raised | Не удалось отменить: <exception class>. | audit; the row stays, so Undo can be tried again |
 | `FIX_EXPIRED` | conversation/orchestrator | Fix pressed or a correction sent after the undo window, or on a write that cannot be fixed | Поправить уже нельзя (прошло больше N минут). | none; lives in `texts.FIX_EXPIRED`, not in `ERRORS` |

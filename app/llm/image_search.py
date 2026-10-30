@@ -7,7 +7,7 @@ two places that return real files:
 - Wikimedia Commons' search API — free, keyless, and the files are downloadable;
 - the pages the text research cited: a page names its own main picture in `og:image`.
 
-Every link still goes through ImageHost.is_image before it is kept."""
+Every link still goes through ImageCheck.is_image before it is kept."""
 
 from __future__ import annotations
 

@@ -199,6 +199,25 @@ async def test_each_research_step_is_its_own_search(index):
     assert "находки: детективы" in inputs and "находки: триллеры" in inputs
 
 
+async def test_the_same_search_twice_in_one_plan_runs_once_and_counts_once(index):
+    asked = []
+
+    async def research(request, query, media="text"):
+        asked.append(query)
+        await asyncio.sleep(0)
+        return f"находки: {query}"
+
+    plan = Plan((Step(1, "research", "детективы"), Step(2, "research", "Детективы "),
+                 Step(3, "research", "триллеры"), Step(4, "derive", "сравни", (1, 2, 3),
+                                                       reply=True)))
+    planner = FakePlanner(plan)
+    await pipe(index, note_script(), planner).handle("найди и сравни", research=research)
+
+    assert sorted(a.casefold().strip() for a in asked) == ["детективы", "триллеры"]
+    inputs = planner.derived[0][1]
+    assert inputs.count("находки: детективы") == 2 and "находки: триллеры" in inputs
+
+
 async def test_a_write_is_handed_search_and_derived_text_as_its_content(index):
     """Found and derived text is written as it stands, as on the one-step path; a model
     retelling a search into note lines loses most of it."""

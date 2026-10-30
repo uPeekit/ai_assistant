@@ -1,6 +1,6 @@
 """Renders a transport-neutral Reply's button rows into a telegram.InlineKeyboardMarkup.
 Callback data is passed through byte-for-byte from Button.id: the orchestrator parses these ids
-(a:<token>:<option_id>, u:<execution_id>, i:<event_id>), so this must never re-encode, truncate
+(u:<execution_id>, f:<execution_id>), so this must never re-encode, truncate
 or prefix them."""
 
 from __future__ import annotations

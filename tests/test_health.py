@@ -114,7 +114,10 @@ def test_a_vault_failure_that_is_not_claude_still_shows_what_it_was():
 
 def test_the_note_says_what_broke_what_it_costs_and_what_to_do():
     note = texts.LLM_DOWN_NOTE["credit"]
-    assert "Anthropic" in note and "Obsidian" in note and "console.anthropic.com" in note
+    assert "Anthropic" in note and "console.anthropic.com" in note
+    # What a failed reading really costs: the words are kept, they are just not filed.
+    for reason in ("credit", "key", "down"):
+        assert texts.VAULT_INBOX_NOTE in texts.LLM_DOWN_NOTE[reason]
 
 
 # ---- a warning is checked before it is given --------------------------------------------------

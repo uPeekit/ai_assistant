@@ -441,7 +441,7 @@ class VaultPipeline:
         try:
             # The answer to the bot's «who are you in the records»: their name is kept, and
             # the question they asked first is the one to answer now.
-            # A plan's step never: the plan asks, with the whole message (_plan_turn).
+            # A plan's step never: the plan asks, with the whole message (_run_plan).
             first = self._askers.reply(chat.chat_id, chat.user_id, message) \
                 if chat is not None and not plain else None
             message = first or message
@@ -710,17 +710,20 @@ class VaultPipeline:
         if research is not None:
             # One budget of searches for the whole message, steps' own lookups included.
             left = [MAX_RESEARCH]
-            asked: set[tuple[str, str]] = set()
+            asked: dict[tuple[str, str], asyncio.Task] = {}
             outer = research
 
             async def research(request: str, query: str, media: str = "text") -> str:
-                # The same search again is shared, not run: it takes no second slot.
-                if (request, media) not in asked:
+                # The same search again is shared, not run: it takes no second slot. Steps of
+                # one round run side by side, so what is shared is the search in progress.
+                key = (" ".join(request.casefold().split()), media)
+                if key not in asked:
                     if left[0] <= 0:
                         raise ResearchError(texts.PLAN_SEARCHES_SPENT)
                     left[0] -= 1
-                    asked.add((request, media))
-                return await outer(request, query, media)
+                    asked[key] = asyncio.ensure_future(outer(request, query, media))
+                    asked[key].add_done_callback(_retrieved)
+                return await asyncio.shield(asked[key])
 
         results: dict[int, str] = {}
         facts: set[int] = set()  # the results a later write may take values from
@@ -1019,7 +1022,7 @@ class VaultPipeline:
                 return texts.ANSWER_WHO.format(lead="")
             if plain:
                 # A plan's step: the plan asks, with the whole message, so the name the user
-                # gives replays all of it (_plan_turn).
+                # gives replays all of it (_run_plan).
                 turn.who = (texts.ANSWER_WHO_OPTIONS.format(
                     lead="", options=", ".join(f"«{o}»" for o in found.options))
                     if found.options else texts.ANSWER_WHO.format(lead=""))

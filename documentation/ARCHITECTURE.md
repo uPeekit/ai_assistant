@@ -182,7 +182,7 @@ Telegram update
   → Orchestrator.handle_text(chat_id, user_id, text, …)      (or handle_callback/undo)
       → the chat's lock, then the `events` row opened (§7)
       → a reply to a write's message, or a pending Fix?      → VaultPipeline.fix (§7)
-      → vault off?                                           → NOTHING_ENABLED
+      → no vault built, or switched off?                     → VAULT_NOT_SET, NOTHING_ENABLED
       → the bot's name taken off the message; the name alone, or a question about the bot
                                                              → texts.py, no model
       → links read (not in a scoped group)                   (§14a)
@@ -744,7 +744,8 @@ structured text the prompt *reads* (`_bot.md`, the mail buckets).
 file exists; the file then wins, and each is read per message or per run, so a change needs no
 restart. With `obsidian` off a message is refused (`NOTHING_ENABLED`) rather than swallowed. A
 switch only turns off what was built: `OBSIDIAN_ENABLED=false` at startup, or no vault or no key,
-builds no pipeline at all, and the page cannot bring one up.
+builds no pipeline at all, the page cannot bring one up, and the refusal says so
+(`VAULT_NOT_SET`).
 
 **Per-chat scopes** (`app/chats.py`, `app/vault/scope.py`). An owner's private chat has full
 access. A group is answered only when listed in `data/chats.json` (the admin page's «Чаты»,

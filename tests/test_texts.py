@@ -13,7 +13,7 @@ from app import texts
 # What each error message may ask its caller for. A placeholder outside these sets makes that
 # code degrade — silently — to ERRORS["INTERNAL"] for every user who hits it.
 ERROR_PLACEHOLDERS: dict[str, set[str]] = {
-    "NOTHING_ENABLED": set(), "STT_EMPTY": set(), "STT_FAILED": set(),
+    "NOTHING_ENABLED": set(), "VAULT_NOT_SET": set(), "STT_EMPTY": set(), "STT_FAILED": set(),
     "UNDO_EXPIRED": {"minutes"}, "UNDO_FAILED": {"message"}, "BUTTON_EXPIRED": set(),
     "INTERNAL": set(), "LINK_ANSWER_FAILED": set(),
 }

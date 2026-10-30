@@ -298,6 +298,8 @@ class Orchestrator:
                 return await self._fix(turn, text, execution_id)
             if turn.now - pressed_at < timedelta(seconds=self._s.undo_window_s):
                 return self._fix_too_late(turn)
+        if self._vault is None:
+            return self._plain(turn, "VAULT_NOT_SET")
         if not self._vault_on():
             return self._plain(turn, "NOTHING_ENABLED")
         if scope is not None and not scope.full:

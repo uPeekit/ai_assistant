@@ -421,9 +421,9 @@ it (`WinError 10013`; `netsh interface ipv4 show excludedportrange protocol=tcp`
 reserved ranges). Pick another port with `ADMIN_UI_PORT` and restart. The bot itself keeps
 running either way — the page is optional.
 
-**The bot answers «Obsidian выключен» though the switch is on.** There is no vault to write to:
-look at the startup log for `no ANTHROPIC_API_KEY` or `OBSIDIAN_VAULT is not a folder`, and check
-that `OBSIDIAN_ENABLED` is not `false`. Fix `.env` and restart.
+**The bot answers «Хранилище не подключено».** There is no vault to write to: look at the startup
+log for `no ANTHROPIC_API_KEY` or `OBSIDIAN_VAULT is not a folder`, and check that
+`OBSIDIAN_ENABLED` is not `false`. Fix `.env` and restart.
 
 A failure that only **warns** (no Anthropic key, the admin port unavailable, the command menu not
 published) does not stop the bot — it keeps running and simply can't do

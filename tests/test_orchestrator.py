@@ -691,3 +691,12 @@ def test_the_orchestrator_holds_no_russian_literals():
     root = Path(__file__).resolve().parents[1]
     source = (root / "app" / "conversation" / "orchestrator.py").read_text(encoding="utf-8")
     assert not re.search(r"[Ѐ-ӿ]", source), "every user string belongs in app/texts.py"
+
+
+async def test_a_bot_with_no_vault_says_what_is_missing_not_to_flip_a_switch(bot):
+    """No key or no OBSIDIAN_VAULT in .env: the admin page's switch shows on and turning it on
+    would do nothing, so the reply must not send anyone there."""
+    bot.orch._vault = None
+    reply = await bot.orch.handle_text(CHAT, USER, "зубы")
+    assert reply.text == texts.ERRORS["VAULT_NOT_SET"]
+    assert "ANTHROPIC_API_KEY" in reply.text and "OBSIDIAN_VAULT" in reply.text

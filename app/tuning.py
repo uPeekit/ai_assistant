@@ -6,7 +6,7 @@ database, re-read whenever it changes, and falling back to what `.env` and the c
 
 What is deliberately *not* here: the system prompts themselves. They are long, interdependent
 and covered by tests, and a stray edit would degrade every message quietly. The pattern that
-works is a small structured text the prompt reads — the workspace note, `_bot.md`, the mail
+works is a small structured text the prompt reads — `_bot.md`, the mail
 buckets, and the two "extra instructions" fields below."""
 
 from __future__ import annotations

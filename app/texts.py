@@ -32,6 +32,8 @@ UNDONE = "↩️ Отменено."
 ERRORS: dict[str, str] = {
     # The vault is switched off on the admin page: there is nowhere to write.
     "NOTHING_ENABLED": "Obsidian выключен — включите его на странице настроек.",
+    # No pipeline was built at startup: the switch cannot help, .env can.
+    "VAULT_NOT_SET": "Хранилище не подключено: нужны OBSIDIAN_VAULT и ANTHROPIC_API_KEY в .env.",
     "STT_EMPTY": "Не разобрал голосовое сообщение. Повторите или напишите текстом.",
     "STT_FAILED": "Ошибка распознавания речи.",
     "UNDO_EXPIRED": "Отменить уже нельзя (прошло больше {minutes} минут).",
@@ -80,15 +82,15 @@ LLM_DOWN_SHORT: dict[str, str] = {
 # costs the user right now, and what to do about it — a warning that names none of the three
 # is the silence it replaces.
 LLM_DOWN_NOTE: dict[str, str] = {
-    "credit": ("⚠️ На счёте Anthropic закончились кредиты — пока Obsidian ничего не записывает "
-               "и на вопросы не отвечает. "
+    "credit": ("⚠️ На счёте Anthropic закончились кредиты — пока сообщения остаются как есть в "
+               "«Разное», а на вопросы бот не отвечает. "
                "Пополнить: https://console.anthropic.com/settings/billing"),
-    "key": ("⚠️ Claude не принимает ключ — проверьте ANTHROPIC_API_KEY. Пока Obsidian ничего не "
-            "записывает и на вопросы не отвечает."),
+    "key": ("⚠️ Claude не принимает ключ — проверьте ANTHROPIC_API_KEY. Пока сообщения остаются "
+            "как есть в «Разное», а на вопросы бот не отвечает."),
     "limit": ("⚠️ Слишком много запросов к Claude подряд — через несколько минут всё вернётся "
               "само."),
-    "down": ("⚠️ Claude сейчас не отвечает — пока Obsidian ничего не записывает и на вопросы не "
-             "отвечает."),
+    "down": ("⚠️ Claude сейчас не отвечает — пока сообщения остаются как есть в «Разное», а на "
+             "вопросы бот не отвечает."),
 }
 
 # ---- Obsidian vault ---------------------------------------------------------------------------

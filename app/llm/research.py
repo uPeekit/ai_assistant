@@ -243,7 +243,7 @@ class WebResearcher:
             # No retry: a search that ran long is slow, not broken, and trying again only
             # doubles the wait. DEADLINE_S is what actually bounds it.
             api_key=api_key, timeout=timeout_s, max_retries=0)
-        # Checks an image link before it is kept (ImageHost.is_image); without one, every
+        # Checks an image link before it is kept (ImageCheck.is_image); without one, every
         # link the model found is kept and the executor sorts them out at write time.
         self._is_image = is_image
         self._search = search  # where pictures come from; None: text only
