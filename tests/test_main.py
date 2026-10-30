@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
+from telegram import BotCommandScopeAllPrivateChats, BotCommandScopeDefault
 from telegram.error import InvalidToken
 
 from app import main, texts
@@ -46,9 +47,15 @@ class FakeTelegramBot:
 
     def __init__(self) -> None:
         self.commands = None
+        self.scope = None
+        self.deleted: list = []
 
-    async def set_my_commands(self, commands) -> None:
+    async def set_my_commands(self, commands, scope=None) -> None:
         self.commands = commands
+        self.scope = scope
+
+    async def delete_my_commands(self, scope=None) -> None:
+        self.deleted.append(scope)
 
 
 class FakeApplication:
@@ -585,12 +592,23 @@ async def test_register_commands_publishes_every_command():
     assert [c.description for c in bot.commands] == list(texts.COMMANDS.values())
 
 
+async def test_the_command_menu_is_for_private_chats_only():
+    """A group sees no "/" menu: the commands are the owner's, not the members'. The menu an
+    older version published for every chat is taken down."""
+    bot = FakeTelegramBot()
+
+    await _REAL_REGISTER_COMMANDS(bot)
+
+    assert isinstance(bot.scope, BotCommandScopeAllPrivateChats)
+    assert [type(s) for s in bot.deleted] == [BotCommandScopeDefault]
+
+
 async def test_register_commands_survives_an_unreachable_telegram(caplog):
     """Not fatal, and the log line carries the exception class only — an InvalidToken raised here
     would carry the bot token in its message."""
 
     class _Failing:
-        async def set_my_commands(self, commands):
+        async def set_my_commands(self, commands, scope=None):
             raise InvalidToken("The token `123:SECRET` was rejected by the server.")
 
     with caplog.at_level(logging.WARNING, logger="app.main"):

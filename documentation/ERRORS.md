@@ -81,7 +81,8 @@ connections bound to it, and the first real call on them once polling starts wou
 5. Initial discovery; write `targets.yaml`; log the target count and which target is flagged as
    the inbox, or warn that none is (the fallback is then inert) — not fatal on its own failure.
 6. Whisper not loaded at startup (lazy).
-7. `set_my_commands` publishes the "/" command menu; a failure only warns (and the warning names
+7. `set_my_commands` publishes the "/" command menu, for private chats only (groups get none);
+   a failure only warns (and the warning names
    the exception class only — an `InvalidToken` raised here carries the bot token in its text).
 8. Admin server start (if `ADMIN_UI_PORT > 0`); an `OSError` binding the port (already in use, or
    a Windows excluded port range — `WinError 10013` on 8787 is common) only warns and startup

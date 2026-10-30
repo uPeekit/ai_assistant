@@ -47,7 +47,7 @@ from pathlib import Path
 from typing import NoReturn
 
 import anthropic
-from telegram import Bot, BotCommand
+from telegram import Bot, BotCommand, BotCommandScopeAllPrivateChats, BotCommandScopeDefault
 from telegram.error import BadRequest, ChatMigrated, Forbidden, InvalidToken
 from telegram.ext import Application
 
@@ -802,13 +802,18 @@ async def _register_commands(bot: Bot) -> None:
     """Publishes the command menu Telegram shows behind the "/" button. Without this call the
     client offers no menu at all and the user has to remember every command unaided.
 
+    Private chats only: in a group the commands are the owner's business, not the members', so
+    a group shows no menu. The default scope (every chat) is cleared, which takes down the menu
+    versions before 0.6.49 published there.
+
     Never fatal: an unreachable Telegram here means the same thing it means anywhere else in this
     function — try again later — and the bot is perfectly usable with commands typed by hand. The
     log line carries the exception's *class* only, never its message: an `InvalidToken` raised
     here would carry the bot token in its text (see `_TELEGRAM_TOKEN_REJECTED`)."""
     commands = [BotCommand(name, description) for name, description in texts.COMMANDS.items()]
     try:
-        await bot.set_my_commands(commands)
+        await bot.set_my_commands(commands, scope=BotCommandScopeAllPrivateChats())
+        await bot.delete_my_commands(scope=BotCommandScopeDefault())
     except Exception as e:
         log.warning("could not publish the Telegram command menu (%s)", type(e).__name__)
 
