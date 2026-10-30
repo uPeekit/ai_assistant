@@ -17,7 +17,6 @@ from app.telegram import handlers as h
 from tests.test_handlers import (
     ALLOWED_USER,
     FakeBot,
-    FakeDiscovery,
     FakeOrchestrator,
     FakeSpeech,
     FakeStore,
@@ -40,7 +39,7 @@ def harness(tmp_path):
                  "tag": "клуб", "folder": "Клуб"}])
     app = build_app()
     orch = FakeOrchestrator()
-    h.register(app, orch, make_settings(), FakeSpeech(), FakeDiscovery(), FakeStore(),
+    h.register(app, orch, make_settings(), FakeSpeech(), FakeStore(),
                chats=chats, names=lambda: ("Робо",))
     bot = GroupBot()
     context = SimpleNamespace(bot_data=app.bot_data, bot=bot, error=None, args=[])
@@ -113,13 +112,12 @@ async def test_an_unlisted_group_is_remembered_and_gets_nothing_even_from_an_own
     assert [s["chat_id"] for s in harness.chats.all()["seen"]] == [OTHER_GROUP]
 
 
-async def test_notion_commands_are_private_and_undo_carries_the_sender(harness):
+async def test_undo_in_a_group_carries_the_sender(harness):
     def command(name: str, mid: int) -> Update:
         text = f"/{name}"
         return _msg(harness.bot, GROUP, MEMBER, text=text, mid=mid, entities=[
             MessageEntity(type=MessageEntity.BOT_COMMAND, offset=0, length=len(text))])
 
-    assert not await dispatch(harness.app, command("targets", 1), harness.context)
     assert await dispatch(harness.app, command("undo", 2), harness.context)
     assert harness.orch.calls[-1][0] == "undo"
 
@@ -191,7 +189,7 @@ def with_ring(tmp_path):
     app = build_app()
     orch = FakeOrchestrator()
     ring = RecentMessages()
-    h.register(app, orch, make_settings(), FakeSpeech(), FakeDiscovery(), FakeStore(),
+    h.register(app, orch, make_settings(), FakeSpeech(), FakeStore(),
                chats=chats, names=lambda: ("Робо",), recent=ring)
     bot = GroupBot()
     context = SimpleNamespace(bot_data=app.bot_data, bot=bot, error=None, args=[])
@@ -207,12 +205,12 @@ async def test_unaddressed_group_talk_is_kept_and_handed_over_only_when_pointed_
     assert w.ring.recent(GROUP) == [("m", "встречаемся в кафе Кофейня")]
     assert not any("Кофейня" in r.getMessage() for r in caplog.records)  # never logged
 
-    plain = "@notionbot когда встреча?"
+    plain = "@assistantbot когда встреча?"
     await dispatch(w.app, _msg(w.bot, GROUP, MEMBER, text=plain, entities=mention(plain),
                                mid=2), w.context)
     assert w.orch.pointed == ()  # nothing points back: the ring stays out of it
 
-    back = "@notionbot запиши это"
+    back = "@assistantbot запиши это"
     await dispatch(w.app, _msg(w.bot, GROUP, MEMBER, text=back, entities=mention(back),
                                mid=3), w.context)
     assert w.orch.pointed == (("m1", "m: встречаемся в кафе Кофейня"),)
@@ -224,7 +222,7 @@ async def test_a_reply_hands_over_the_quoted_message(with_ring):
                      chat=Chat(id=GROUP, type="supergroup"),
                      from_user=User(id=777, is_bot=False, first_name="Аня"),
                      text="предлагаю Солярис")
-    text = "@notionbot запиши это"
+    text = "@assistantbot запиши это"
     await dispatch(w.app, _msg(w.bot, GROUP, MEMBER, text=text, entities=mention(text),
                                reply_to=quoted), w.context)
     assert w.orch.pointed[0] == ("q", "Аня: предлагаю Солярис")
@@ -242,7 +240,7 @@ async def test_replying_to_the_bots_answer_quotes_its_words_not_its_marks(with_r
     quoted = Message(message_id=41, date=datetime.datetime.now(UTC),
                      chat=Chat(id=GROUP, type="supergroup"),
                      from_user=User(id=BOT_ID, is_bot=True, first_name="bot"), text=answer)
-    text = "@notionbot запиши это"
+    text = "@assistantbot запиши это"
     await dispatch(w.app, _msg(w.bot, GROUP, MEMBER, text=text, entities=mention(text),
                                reply_to=quoted), w.context)
     assert w.orch.pointed[0] == ("q", "Плитка серая.")

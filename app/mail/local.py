@@ -86,7 +86,7 @@ class LocalClassifier:
 
     async def _unload(self) -> None:
         """Let go of the card. The digest runs a couple of times a day; a model left resident in
-        between holds the VRAM the Notion fallback and the transcriber need."""
+        between holds the VRAM the transcriber needs."""
         try:
             await self._client.post("/api/generate", json={
                 "model": self.model, "keep_alive": 0})

@@ -1,20 +1,17 @@
-"""Changing one place on a page instead of rewriting the whole of it.
+"""Changing one place in a note instead of rewriting the whole of it.
 
-The page is read and shown to the model as numbered lines (`app/notion/to_markdown.py:
-outline`, `numbered`); the model answers with a short list of operations against those numbers,
-or — when the instruction really is "rewrite all of this" — with the whole new text in `full`.
-Both come back from one call, and the model picks.
+The note is shown to the model as numbered lines (`app/vault/mdedit.py: numbered`); the model
+answers with a short list of operations against those numbers, or — when the instruction really
+is "rewrite all of this" — with the whole new text in `full`. Both come back from one call, and
+the model picks.
 
-Why an edit script rather than a rewritten page:
+Why an edit script rather than a rewritten note:
 
-* it keeps block ids, so comments, links and anything pointing at a block survive;
-* it costs a couple of hundred output tokens instead of the whole page again;
+* it costs a couple of hundred output tokens instead of the whole note again;
 * a picture is just a line, so removing one needs no special case;
-* the reply can say exactly what changed, not only that the page got shorter.
+* the reply can say exactly what changed, not only that the note got shorter.
 
-Nothing here reads or writes anything. Line numbers are the model's only way to name a block,
-and `check` is what turns them back into blocks the caller actually read — a model can never
-name a block that was not on the page in front of it.
+Nothing here reads or writes anything: `app/vault/mdedit.py: apply_edits` carries a plan out.
 """
 
 from __future__ import annotations
@@ -28,7 +25,6 @@ import anthropic
 from app.llm.health import Health, describe
 from app.llm.prompts import EDIT_PROMPT, edit_message
 from app.llm.rewrite import unfence
-from app.notion.to_markdown import Line
 
 log = logging.getLogger(__name__)
 
@@ -36,12 +32,6 @@ OPS = ("replace", "insert", "delete", "image")
 MAX_TOKENS = 8_000
 # What one page may show the model. Past this the caller narrows to a section first.
 MAX_INPUT = 20_000
-# One message may change this many places. More than that is not an edit.
-MAX_OPS = 40
-# A script that throws away more than this share of a page is not an edit either — it is a
-# rewrite the model should have answered with `full`, and acting on it could empty a page on a
-# misread instruction.
-MAX_DELETE_SHARE = 0.5
 _STRING = {"type": "string"}
 _INT = {"type": "integer"}
 
@@ -127,75 +117,6 @@ def parse(data: dict) -> EditPlan:
         except (TypeError, ValueError):
             continue
     return EditPlan(edits=edits, full=unfence(str(data.get("full", ""))))
-
-
-def _anchor(at: int, by_n: dict, last: int) -> int:
-    """Which line a new one goes after.
-
-    Notion can only insert *after* an existing block, so "put it at the top" comes back as
-    line 0 and has to become line 1 — the top is far closer to what was asked than the
-    bottom, which is where an out-of-range number would otherwise land."""
-    if at in by_n:
-        return at
-    return 1 if at < 1 and last else last
-
-
-def check(plan: EditPlan, lines: list[Line]) -> tuple[EditPlan, list[str]]:
-    """The edits that may actually be carried out, and what was refused and why (for the log).
-
-    This is the gate the whole feature rests on. Every rule here is about what the *code* read,
-    never about what the instruction said: a line the model invented, a sub-page it tried to
-    delete, or a script that would empty the page cannot get through, however the request was
-    phrased."""
-    if plan.full.strip():
-        return EditPlan(full=plan.full), []
-    by_n = {line.n: line for line in lines}
-    last = max(by_n, default=0)
-    out: list[Edit] = []
-    refused: list[str] = []
-    for edit in plan.edits[:MAX_OPS]:
-        if edit.op not in OPS:
-            refused.append(f"unknown op {edit.op!r}")
-            continue
-        if edit.op == "replace":
-            line = by_n.get(edit.at)
-            if line is None:
-                refused.append(f"replace {edit.at}: no such line")
-            elif not line.editable:
-                refused.append(f"replace {edit.at}: {line.kind} is not editable text")
-            elif not edit.text.strip():
-                refused.append(f"replace {edit.at}: nothing to put there")
-            else:
-                out.append(edit)
-        elif edit.op == "delete":
-            keep = [n for n in edit.span if n in by_n and by_n[n].removable]
-            blocked = [n for n in edit.span if n in by_n and not by_n[n].removable]
-            if blocked:
-                refused.append(f"delete {edit.at}-{edit.to}: "
-                               f"{', '.join(by_n[n].kind for n in blocked)} stays")
-            for n in keep:  # one op per line, so a range cannot half-apply
-                out.append(Edit(op="delete", at=n))
-            if not keep:
-                refused.append(f"delete {edit.at}: nothing there may be removed")
-        elif edit.op == "insert":
-            if not edit.text.strip():
-                refused.append("insert: nothing to insert")
-                continue
-            out.append(Edit(op="insert", at=_anchor(edit.at, by_n, last),
-                            text=edit.text))
-        else:  # image
-            if not edit.url.lower().startswith(("http://", "https://")):
-                refused.append(f"image: {edit.url[:60]!r} is not a web address")
-                continue
-            out.append(Edit(op="image", at=_anchor(edit.at, by_n, last),
-                            url=edit.url, caption=edit.caption))
-    deletes = sum(1 for e in out if e.op == "delete")
-    if lines and deletes > max(1, int(len(lines) * MAX_DELETE_SHARE)):
-        # More than half the page. If that is really what was asked for, the model was supposed
-        # to answer with `full`, which goes through the rewrite path and its own safeguards.
-        refused.append(f"{deletes} of {len(lines)} lines deleted: that is a rewrite, not an edit")
-        return EditPlan(), refused
-    return EditPlan(edits=out), refused
 
 
 class Editor:

@@ -133,7 +133,7 @@ def configure(
     and `Logger.setLevel` would raise a bare `ValueError` on it); an unknown name raises a
     `ValueError` naming every valid one, which `app.main` turns into a config exit.
 
-    `redact` is a sequence of secret *values* — `app.main` passes the Telegram, Notion and
+    `redact` is a sequence of secret *values* — `app.main` passes the Telegram and
     Anthropic token values, nothing else. It is keyword-only and deliberately not a `Settings`:
     this module must stay unable to discover a secret it was not explicitly handed.
 

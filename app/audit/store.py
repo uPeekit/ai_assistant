@@ -45,23 +45,6 @@ class AuditStore:
             self._conn.close()
 
     # events
-    def last_page(self, chat_id: int, *, within: int = 20) -> str | None:
-        """The Notion page this chat last wrote to, or None.
-
-        Read from the audit rows rather than kept in memory, so a restart does not lose
-        it: an edit of "the page we were just talking about" has to work in the evening
-        too. Only the chat's last `within` events are considered - a page from last week
-        is not what "that page" means, and offering it would resolve a vague message to
-        somewhere the user has long stopped thinking about."""
-        row = self._conn.execute(
-            "SELECT notion_page_id FROM "
-            "(SELECT id, notion_page_id FROM events WHERE chat_id = ? "
-            " ORDER BY id DESC LIMIT ?) "
-            "WHERE notion_page_id IS NOT NULL ORDER BY id DESC LIMIT 1",
-            (chat_id, within),
-        ).fetchone()
-        return row[0] if row else None
-
     def new_event(self, *, telegram_user_id: int, chat_id: int, kind: str, **cols) -> int:
         with self._lock:
             cols.update(telegram_user_id=telegram_user_id, chat_id=chat_id, kind=kind)
@@ -90,71 +73,6 @@ class AuditStore:
                                      (event_id,)).fetchone()
             return dict(row) if row else None
 
-    # sessions
-    def save_session(self, chat_id: int, payload: str, expires_at: datetime) -> None:
-        with self._lock:
-            self._conn.execute(
-                "INSERT INTO sessions (chat_id, payload, expires_at) VALUES (?, ?, ?) "
-                "ON CONFLICT(chat_id) DO UPDATE SET payload = excluded.payload, "
-                "expires_at = excluded.expires_at",
-                (chat_id, payload, _iso(expires_at)),
-            )
-            self._conn.commit()
-
-    def get_session(self, chat_id: int, now: datetime) -> str | None:
-        with self._lock:
-            row = self._conn.execute(
-                "SELECT payload, expires_at FROM sessions WHERE chat_id = ?", (chat_id,)
-            ).fetchone()
-            if row is None:
-                return None
-            if row["expires_at"] <= _iso(now):
-                self.delete_session(chat_id)
-                return None
-            return row["payload"]
-
-    def delete_session(self, chat_id: int) -> None:
-        with self._lock:
-            self._conn.execute("DELETE FROM sessions WHERE chat_id = ?", (chat_id,))
-            self._conn.commit()
-
-    def expired_sessions(self, now: datetime) -> list[tuple[int, str]]:
-        """Rows at or past expiry, without deleting them (used to discover sweep candidates)."""
-        with self._lock:
-            rows = self._conn.execute(
-                "SELECT chat_id, payload FROM sessions WHERE expires_at <= ?", (_iso(now),)
-            ).fetchall()
-            return [(int(row["chat_id"]), row["payload"]) for row in rows]
-
-    def pop_session(self, chat_id: int) -> str | None:
-        """Read and delete one session's payload under a single lock acquisition."""
-        with self._lock:
-            row = self._conn.execute(
-                "SELECT payload FROM sessions WHERE chat_id = ?", (chat_id,)
-            ).fetchone()
-            if row is None:
-                return None
-            self._conn.execute("DELETE FROM sessions WHERE chat_id = ?", (chat_id,))
-            self._conn.commit()
-            return row["payload"]
-
-    def pop_expired_session(self, chat_id: int, now: datetime) -> str | None:
-        """Delete and return one session's payload only if it is still expired at `now`, with
-        the expiry re-check and the delete under one lock acquisition. Guards a sweeper that
-        scanned candidates earlier (via expired_sessions) against a concurrent save_session that
-        renewed the row in the meantime: if the row is missing, or was renewed to an expires_at
-        past `now` since it was last observed, this returns None and leaves the row untouched."""
-        with self._lock:
-            row = self._conn.execute(
-                "SELECT payload FROM sessions WHERE chat_id = ? AND expires_at <= ?",
-                (chat_id, _iso(now)),
-            ).fetchone()
-            if row is None:
-                return None
-            self._conn.execute("DELETE FROM sessions WHERE chat_id = ?", (chat_id,))
-            self._conn.commit()
-            return row["payload"]
-
     # executions
     def add_execution(
         self, event_id: int, chat_id: int, reply_message_id: int | None, undo: str,
@@ -168,14 +86,6 @@ class AuditStore:
             )
             self._conn.commit()
             return int(cur.lastrowid)
-
-    def update_execution_undo(self, execution_id: int, undo: str) -> None:
-        """Replace an execution's undo record — used when the Obsidian side finishes after the
-        Notion write, so one Undo button reverts both."""
-        with self._lock:
-            self._conn.execute("UPDATE executions SET undo = ? WHERE id = ?",
-                               (undo, execution_id))
-            self._conn.commit()
 
     def get_execution(self, execution_id: int, now: datetime) -> dict | None:
         with self._lock:

@@ -158,16 +158,25 @@ def test_the_filer_is_told_which_notes_and_tasks_could_answer(index):
 
 def test_switches_default_to_env_and_are_overridden_by_the_file(tmp_path):
     path = tmp_path / "switches.json"
-    switches = Switches(path, {"notion": False})
-    assert switches.all() == {"notion": False, "obsidian": True, "linker": True, "mail": True,
+    switches = Switches(path, {"linker": False})
+    assert switches.all() == {"obsidian": True, "linker": False, "mail": True,
                               "syncthing": True, "folders": True}
 
-    assert switches.save({"notion": True, "obsidian": False, "linker": True, "mail": True}) == 2
-    assert switches.save({"notion": True, "obsidian": False, "linker": True, "mail": True}) == 0
+    assert switches.save({"obsidian": False, "linker": True, "mail": True}) == 2
+    assert switches.save({"obsidian": False, "linker": True, "mail": True}) == 0
     assert json.loads(path.read_text(encoding="utf-8"))["obsidian"] is False
 
-    fresh = Switches(path, {"notion": False})  # the file wins over .env once it exists
-    assert fresh.get("notion") is True and fresh.get("obsidian") is False
+    fresh = Switches(path, {"linker": False})  # the file wins over .env once it exists
+    assert fresh.get("linker") is True and fresh.get("obsidian") is False
+
+
+def test_a_switches_file_that_still_names_notion_keeps_working(tmp_path):
+    """Prod's file holds "notion": false from when there was such a switch."""
+    path = tmp_path / "switches.json"
+    path.write_text(json.dumps({"notion": False, "obsidian": True, "linker": False}),
+                    encoding="utf-8")
+    switches = Switches(path)
+    assert switches.get("linker") is False and "notion" not in switches.all()
 
 
 def test_switches_notice_a_change_made_while_the_bot_runs(tmp_path):

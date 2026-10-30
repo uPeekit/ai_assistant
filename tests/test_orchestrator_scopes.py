@@ -7,7 +7,7 @@ import pytest
 
 from app import texts
 from app.chats import ChatScope
-from tests.test_vault_orchestrator import bot, staged_bot  # noqa: F401 (fixtures)
+from tests.test_orchestrator import bot, staged_bot  # noqa: F401 (fixtures)
 
 GROUP = -100777
 ALICE, BOB, OWNER = 501, 502, 1  # OWNER is in TELEGRAM_ALLOWED_USER_IDS (tests/conftest.py)
@@ -42,7 +42,7 @@ async def test_a_group_message_reaches_only_the_vault_and_only_as_the_clubs(grou
     task(group.script, "купить чай")
     reply = await group.orch.handle_text(GROUP, ALICE, "купить чай")
     assert "- [ ] купить чай #клуб" in tasks(group)
-    assert group.notion.calls == [] and reply.undo_id
+    assert reply.undo_id
 
 
 async def test_only_the_member_who_asked_or_an_owner_may_undo(group):
@@ -139,4 +139,3 @@ async def test_a_group_no_longer_listed_is_never_treated_as_a_private_chat(group
     task(group.script, "купить чай")
     reply = await group.orch.handle_text(GROUP, ALICE, "купить чай")
     assert reply.text == "" and "купить чай" not in tasks(group)
-    assert group.notion.calls == []

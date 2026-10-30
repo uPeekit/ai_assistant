@@ -43,8 +43,8 @@ import yaml
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from app.llm.ollama import wants_think_flag
 from app.llm.prompts import FILER_PROMPT, filer_message
+from app.mail.local import wants_think_flag
 from app.vault.filer import FILER_SCHEMA, Filer, FilerError, VaultContext
 from app.vault.staged import StagedFiler
 

@@ -1,10 +1,9 @@
-"""The Obsidian side's interpreter: one light model call that turns a message into vault
-actions, and a deterministic check of what came back.
+"""The vault's interpreter: one light model call that turns a message into vault actions, and a
+deterministic check of what came back.
 
-It knows nothing about Notion. Its context is the user's own guide note, the folders and tags
-the vault already uses, and the notes whose names share a word with the message — about a tenth
-of what the Notion interpreter is shown. It never asks a question: anything that does not check
-out becomes a line in the inbox note, which is always a safe place to put words."""
+Its context is the user's own guide note, the folders and tags the vault already uses, and the
+notes whose names share a word with the message. It never asks a question: anything that does
+not check out becomes a line in the inbox note, which is always a safe place to put words."""
 
 from __future__ import annotations
 

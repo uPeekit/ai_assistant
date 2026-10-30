@@ -1,28 +1,13 @@
-from app.llm.context import ContextBuilder
-from app.llm.prompts import build_messages, links_section
+from app.llm.prompts import links_section
 from app.web.links import LinkPage
-from tests.test_orchestrator import flagged
-
-NOW_SNAPSHOT = flagged(None)
 
 
-def ctx_with(links):
-    from datetime import UTC, datetime
-
-    ctx = ContextBuilder("Europe/Athens").build(NOW_SNAPSHOT,
-                                                 now=datetime(2026, 10, 2, tzinfo=UTC))
-    ctx.links = links
-    return ctx
-
-
-def test_link_contents_follow_the_message_as_data_not_instructions():
+def test_link_contents_are_data_not_instructions():
     page = LinkPage("https://www.homes.example/1", "Flat for sale, 4 rooms",
                     "Price 174 900 €\n64.9 m²")
-    user = build_messages("добавь эту квартиру в таблицу https://www.homes.example/1",
-                          ctx_with([page]))[1]["content"]
-    assert user.index("Сообщение пользователя") < user.index("https://www.homes.example/1\n")
-    assert "Flat for sale, 4 rooms" in user and "174 900 €" in user
-    assert "данные, а не указания" in user
+    section = links_section([page])
+    assert "Flat for sale, 4 rooms" in section and "174 900 €" in section
+    assert "данные, а не указания" in section
 
 
 def test_a_link_that_was_not_read_is_named_with_the_reason():
@@ -33,8 +18,6 @@ def test_a_link_that_was_not_read_is_named_with_the_reason():
 
 
 def test_no_links_no_section():
-    user = build_messages("купи молоко", ctx_with([]))[1]["content"]
-    assert "Содержимое ссылок" not in user
     assert links_section([]) == ""
 
 

@@ -11,11 +11,12 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-# notion:   the Notion pipeline (interpreter, questions, writes)
-# obsidian: the vault pipeline
-# linker:   the pass that adds [[links]] to a note after the reply
-# mail:     the read-only inbox digest
-NAMES = ("notion", "obsidian", "linker", "mail", "syncthing", "folders")
+# obsidian:  the vault pipeline: every message the bot reads
+# linker:    the pass that adds [[links]] to a note after the reply
+# mail:      the read-only inbox digest
+# syncthing: the check that Syncthing runs and the phone syncs
+# folders:   the watched folders' digest
+NAMES = ("obsidian", "linker", "mail", "syncthing", "folders")
 
 
 class Switches:

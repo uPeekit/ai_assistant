@@ -1,12 +1,7 @@
-"""The two branches plan on their own; the only thing they share is a web search.
-
-Before this, the vault got what the Notion side had found or composed, handed over at the end
-of the turn — prose only. A plan that added eight books was eight Notion rows with no prose,
-so the vault got nothing and wrote one note."""
+"""The vault's reader looks things up and searches the web on its own; the orchestrator only
+hands it the search to run."""
 
 from __future__ import annotations
-
-import json
 
 from app import texts
 from app.llm.research import ResearchError, ResearchQuestion
@@ -15,9 +10,12 @@ from app.vault.index import VaultIndex
 from app.vault.pipeline import VaultPipeline
 from app.vault.staged import StagedFiler
 from app.vault.writer import VaultWriter
-from tests.helpers import cand, make_interp
-from tests.test_orchestrator import CHAT, USER, FakeResearcher
-from tests.test_vault_orchestrator import bot  # noqa: F401  (the fixture)
+from tests.test_orchestrator import (
+    CHAT,
+    USER,
+    FakeResearcher,
+    bot,  # noqa: F401  (the fixture)
+)
 from tests.test_vault_staged import Script
 
 RECIPE = "## Борщ\n- свёкла\n- капуста"
@@ -88,38 +86,15 @@ def test_a_book_that_is_already_there_is_updated_rather_than_copied(tmp_path):
     assert action.action == "note"
 
 
-async def test_both_branches_asking_for_the_same_search_run_it_once(bot):  # noqa: F811
+async def test_the_orchestrator_hands_the_vault_the_search_it_asks_for(bot):  # noqa: F811
     bot.orch._researcher = researcher = FakeResearcher(RECIPE)
     bot.orch._vault._filer = StagedFiler(_searching(), "haiku")
-    bot.llm.queue(make_interp("append", cand(bot.ctx, "t5", 0.95, web_query="борщ рецепт")))
 
     await bot.orch.handle_text(CHAT, USER, "найди рецепт борща и запиши")
 
-    assert len(researcher.asked) == 1  # one search, both stores written from it
+    assert len(researcher.asked) == 1
     notes = list((bot.dir / "Области").glob("рецепт*.md"))
     assert len(notes) == 1 and "- свёкла" in notes[0].read_text(encoding="utf-8")
-    assert any(c[0] == "append_blocks" for c in bot.notion.calls)
-
-
-async def test_a_vault_that_plans_for_itself_is_handed_nothing_by_the_notion_side(bot):  # noqa: F811
-    """The staged reader decides on its own whether to search. Were the Notion side's text
-    still handed over, the note would be written twice: once from the vault's reading, once
-    from Notion's."""
-    bot.orch._researcher = FakeResearcher(RECIPE)
-    script = Script(INTENT_PROMPT={"intent": "add"}, TARGET_PROMPT={"target": "f1"},
-                    FOLDER_PROMPT={"items": [{"title": "борщ", "props": [], "body": ["свой"],
-                                              "tags": []}], "lookup": "", "web": "",
-                                   "media": "text"})
-    bot.orch._vault._filer = StagedFiler(script, "haiku")
-    bot.llm.queue(make_interp("append", cand(bot.ctx, "t5", 0.95, web_query="борщ")))
-
-    await bot.orch.handle_text(CHAT, USER, "найди рецепт борща")
-
-    notes = list((bot.dir / "Области").glob("*борщ*.md"))
-    assert [n.name for n in notes] == ["борщ.md"]
-    assert RECIPE not in notes[0].read_text(encoding="utf-8")
-    assert script.stages.count("INTENT_PROMPT") == 1
-    assert json.loads(json.dumps(True))  # the turn completed without a second vault call
 
 
 def test_a_looked_up_item_that_is_already_there_is_left_alone(tmp_path):

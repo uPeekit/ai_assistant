@@ -1,10 +1,8 @@
 """Rewriting text the user already has: one model call, and nothing else.
 
-Both stores use it. The Notion side hands over a page's blocks turned into markdown, the
-Obsidian side hands over a note or one of its sections; what comes back is markdown, and each
-store writes it back its own way. Nothing here reads or writes anything — deciding what may be
-replaced is the caller's job, and in the Notion case a deterministic one (see
-app/notion/to_markdown.py: an image is never part of the text being rewritten).
+The vault hands over a note or one of its sections; what comes back is markdown, which the
+vault writes back its own way. Nothing here reads or writes anything — deciding what may be
+replaced is the caller's job.
 
 Sonnet rather than Haiku on purpose: this is the user's own writing being consolidated, which
 is the one job in the bot where a cheaper model is obviously worse."""

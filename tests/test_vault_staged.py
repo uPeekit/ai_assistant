@@ -512,10 +512,6 @@ async def test_looked_up_chores_take_the_date_the_user_gave_the_whole_list():
         ("взять спальник", "2026-10-01", ["home"])]
 
 
-def test_the_staged_reader_says_it_plans_for_itself():
-    assert StagedFiler(Script(), "haiku").plans_itself is True
-
-
 async def test_a_single_chore_is_never_expanded_into_a_made_up_checklist():
     """«надо внести траты» came back as five chores the user never mentioned: the tasks stage
     asked for a lookup, and a lookup on the task file invents work. It takes a word that asks

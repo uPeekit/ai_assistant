@@ -1,8 +1,7 @@
 """Editing a note's markdown: where a new line goes, and how an existing line changes.
 
-The same intent as the Notion executor's list matching, on text instead of blocks — a line
-added to a note joins the list that is already under its heading, in that list's own style,
-rather than landing at the end of the file as a stray paragraph."""
+A line added to a note joins the list that is already under its heading, in that list's own
+style, rather than landing at the end of the file as a stray paragraph."""
 
 from __future__ import annotations
 

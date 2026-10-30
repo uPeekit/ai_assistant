@@ -310,10 +310,6 @@ class StagedFiler:
     `lookup` answers the one question the light model is not good at — "list all of X" — when
     a message asks for a set it does not spell out. It is asked only then."""
 
-    # It looks sets up and asks for web searches itself (app/vault/pipeline.py runs them),
-    # so the orchestrator hands it nothing the Notion side produced.
-    plans_itself = True
-
     def __init__(self, ask: Ask, model: str,
                  close: Callable[[], Awaitable[None]] | None = None, *,
                  lookup: Ask | None = None) -> None:
@@ -720,7 +716,7 @@ class _Run:
 
     def _web(self, answer: dict) -> tuple[str, str] | None:
         """The search a details stage asked for, if the user asked for one: it takes a word of
-        theirs, as on the Notion side, because a search is minutes of waiting."""
+        theirs, because a search is minutes of waiting."""
         query = str(answer.get("web", "")).strip()
         low = self.message.casefold()
         cues = (*(self.ctx.web_words or WEB_WORDS), *texts.VAULT_COMPOSE_CUES)

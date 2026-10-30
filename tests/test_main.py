@@ -1,11 +1,10 @@
-"""app.main: build()'s wiring, the two-phase startup check split, and the Sweeper's periodic-
-flush loop. All fakes, no network, no Telegram, no Ollama, no real Whisper, no polling —
-build() takes fake provider/llm factories exactly so this suite never needs any of those.
+"""app.main: build()'s wiring, the two-phase startup check split, and the Sweeper's periodic
+loop. No network, no Telegram, no real Whisper, no polling.
 
 `startup_checks` (settings + schema, exit 2/4) is synchronous and tested directly.
-`post_init_checks` (Ollama, Notion, discovery, admin — everything that needs a running event
-loop) is what `Application.post_init` calls; it is tested by awaiting it directly, exactly as
-`build()` wires it, never through `run_polling()`."""
+`post_init_checks` (the command menu, admin — everything that needs a running event loop) is
+what `Application.post_init` calls; it is tested by awaiting it directly, exactly as `build()`
+wires it, never through `run_polling()`."""
 
 from __future__ import annotations
 
@@ -22,21 +21,14 @@ from telegram.error import InvalidToken
 
 from app import main, texts
 from app.config import Settings
-from app.llm.claude import ClaudeClient
-from app.llm.fallback import FallbackLLM
-from app.llm.health import Health
-from app.llm.ollama import OllamaClient
-from app.notion.errors import NotionError
-from tests.fakes import FakeLLM, FakeNotionProvider
 
 # Captured at import, before stub_command_menu monkeypatches the name: the two tests that
 # exercise the real command registration call this instead of the stubbed attribute.
 _REAL_REGISTER_COMMANDS = main._register_commands
 
-# The two secret values tests.conftest's `env` fixture puts in the environment, and the one a
-# test adds when it needs Claude configured.
+# The secret value tests.conftest's `env` fixture puts in the environment, and the one a test
+# adds when it needs Claude configured.
 TELEGRAM_TOKEN = "tg-test-token"
-NOTION_TOKEN = "ntn-test-token"
 ANTHROPIC_KEY = "sk-ant-test-key"
 GMAIL_PASSWORD = "abcdefghijklmnop"  # the shape of a Gmail app password
 
@@ -63,10 +55,6 @@ class FakeApplication:
 
     def __init__(self) -> None:
         self.bot = FakeTelegramBot()
-        self.stopped = False
-
-    def stop_running(self) -> None:
-        self.stopped = True
 
 
 @pytest.fixture(autouse=True)
@@ -91,26 +79,9 @@ def clean_logging():
         logging.getLogger().removeHandler(h)
 
 
-def _page_provider(*, page_id: str = "pg-1", title: str = "Заметки") -> FakeNotionProvider:
-    """A Notion workspace with exactly one page target — enough for Discovery to succeed without
-    a single database/data-source in play."""
-    provider = FakeNotionProvider()
-    provider.search_results = [{
-        "object": "page", "id": page_id, "url": f"https://notion.so/{page_id}",
-        "last_edited_time": "2026-01-01T00:00:00.000Z",
-        "parent": {"type": "workspace", "workspace": True},
-        "properties": {"title": {"id": "title", "type": "title",
-                                  "title": [{"plain_text": title}]}},
-    }]
-    return provider
-
-
-def _build(env, *, provider=None, llm=None, admin_port: int = 0) -> main.App:
+def _build(env, *, admin_port: int = 0) -> main.App:
     env.setenv("ADMIN_UI_PORT", str(admin_port))
-    settings = Settings()
-    provider = provider if provider is not None else _page_provider()
-    llm = llm if llm is not None else FakeLLM()
-    return main.build(settings, provider_factory=lambda s: provider, llm_factory=lambda s, h: llm)
+    return main.build(Settings())
 
 
 def _messages(caplog, logger_name: str = "app.main") -> list[str]:
@@ -148,91 +119,18 @@ def test_startup_checks_passes_through_when_settings_and_schema_are_fine(env):
 
 
 def test_config_error_message_never_leaks_validation_error_text(env):
-    env.delenv("NOTION_TOKEN", raising=False)  # required, no default -> Settings() fails to build
+    env.setenv("TELEGRAM_ALLOWED_USER_IDS", "not-a-number")
     with pytest.raises(ValidationError) as exc:
         Settings()
     message = main._config_error_message(exc.value)
-    assert "input_value" not in message
-    assert "notion_token" in message.lower()
+    assert "input_value" not in message and "not-a-number" not in message
+    assert "telegram_allowed_user_ids" in message.lower()
 
 
 # ---- post_init_checks: exit-3-equivalent (records app.fatal, does not sys.exit) -----------------
 
 
-async def test_notion_401_records_fatal_and_stops_before_discovery(env):
-    provider = _page_provider()
-
-    async def _unauthorized() -> dict:
-        raise NotionError(401, "unauthorized", "API token is invalid.")
-
-    provider.me = _unauthorized
-    app = _build(env, provider=provider, admin_port=18794)
-    app.store.migrate()
-
-    await main.post_init_checks(app, app.telegram_app)  # must not raise
-
-    assert app.fatal == (
-        main.EXIT_NOTION_AUTH,
-        "Notion authentication failed (401 unauthorized: API token is invalid.). "
-        "Check NOTION_TOKEN in .env.",
-    )
-    assert app.discovery.last is None  # discovery never ran: the check returned early
-    with pytest.raises(RuntimeError):
-        _ = app.admin.port  # admin never started either
-
-
-async def test_notion_5xx_only_warns_and_continues(env, caplog):
-    provider = _page_provider()
-
-    async def _server_error() -> dict:
-        raise NotionError(500, "internal_server_error", "boom")
-
-    provider.me = _server_error
-    app = _build(env, provider=provider)
-    app.store.migrate()
-
-    with caplog.at_level(logging.WARNING, logger="app.main"):
-        await main.post_init_checks(app, app.telegram_app)  # must not raise, must not set fatal
-
-    assert app.fatal is None
-    assert any("notion check failed" in m for m in _messages(caplog))
-    assert app.discovery.last is not None  # startup continued past the warning into discovery
-
-
 # ---- which interpreter ------------------------------------------------------------------------
-
-
-def test_default_llm_is_local_without_an_anthropic_key(env):
-    assert isinstance(main._default_llm(Settings(), Health()), OllamaClient)
-
-
-def test_default_llm_is_claude_with_local_fallback_when_a_key_is_set(env):
-    env.setenv("ANTHROPIC_API_KEY", ANTHROPIC_KEY)
-    llm = main._default_llm(Settings(), Health())
-    assert isinstance(llm, FallbackLLM)
-    assert isinstance(llm.primary, ClaudeClient) and llm.primary.model == "claude-haiku-4-5"
-    assert isinstance(llm.fallback, OllamaClient)
-
-
-def test_llm_cloud_false_keeps_everything_local_even_with_a_key(env):
-    env.setenv("ANTHROPIC_API_KEY", ANTHROPIC_KEY)
-    env.setenv("LLM_CLOUD", "false")
-    assert isinstance(main._default_llm(Settings(), Health()), OllamaClient)
-
-
-def test_a_message_not_understood_is_read_again_by_sonnet(env):
-    env.setenv("ANTHROPIC_API_KEY", ANTHROPIC_KEY)
-    escalation = _build(env).orchestrator._escalation
-    assert isinstance(escalation, ClaudeClient) and escalation.model == "claude-sonnet-5"
-
-
-def test_escalation_is_off_without_claude_or_when_switched_off(env):
-    assert _build(env).orchestrator._escalation is None  # no key
-    env.setenv("ANTHROPIC_API_KEY", ANTHROPIC_KEY)
-    env.setenv("ESCALATE_MODEL", "")
-    assert _build(env).orchestrator._escalation is None
-    env.setenv("ESCALATE_MODEL", "claude-haiku-4-5")  # the interpreter itself: nothing to gain
-    assert _build(env).orchestrator._escalation is None
 
 
 def test_links_are_read_and_answered_about_with_claude(env):
@@ -256,36 +154,6 @@ def test_links_are_still_read_without_claude_but_nothing_answers_about_them(env)
 
 
 # ---- post_init_checks: warnings, not fatal ------------------------------------------------------
-
-
-async def test_missing_ollama_model_warns_but_continues(env, caplog):
-    env.setenv("LLM_MODEL", "definitely-not-pulled:7b")
-    app = _build(env)
-    app.store.migrate()
-    with caplog.at_level(logging.WARNING, logger="app.main"):
-        await main.post_init_checks(app, app.telegram_app)  # must not raise
-    assert any("definitely-not-pulled:7b" in m for m in _messages(caplog))
-
-
-async def test_successful_run_logs_target_count_and_inbox_target(env, caplog):
-    provider = _page_provider(page_id="pg-inbox", title="Входящие")
-    env.setenv("INBOX_TARGET_ID", "pg-inbox")
-    app = _build(env, provider=provider)
-    app.store.migrate()
-    with caplog.at_level(logging.INFO, logger="app.main"):
-        await main.post_init_checks(app, app.telegram_app)
-    messages = _messages(caplog)
-    # the page, plus the workspace root main() always offers for new top-level pages
-    assert any("discovery: 2 targets" in m for m in messages)
-    assert any("Входящие" in m for m in messages)
-
-
-async def test_no_inbox_flagged_warns_the_fallback_is_inert(env, caplog):
-    app = _build(env)  # no INBOX_TARGET_ID, and nothing flagged in targets.yaml
-    app.store.migrate()
-    with caplog.at_level(logging.WARNING, logger="app.main"):
-        await main.post_init_checks(app, app.telegram_app)
-    assert any("inbox" in m.lower() and "inert" in m.lower() for m in _messages(caplog))
 
 
 # ---- admin server ------------------------------------------------------------------------------
@@ -320,40 +188,14 @@ def test_build_attaches_post_init_and_post_shutdown_hooks(env):
     assert app.telegram_app.post_shutdown is not None
 
 
-async def test_post_init_starts_the_sweeper(env):
-    app = _build(env, admin_port=0)
-    app.store.migrate()
-    assert not app.sweeper.running
-    await app.telegram_app.post_init(app.telegram_app)
-    try:
-        assert app.sweeper.running
-    finally:
-        await app.sweeper.stop()
-
-
-async def test_post_init_does_not_start_the_sweeper_on_a_fatal_notion_failure(env):
-    provider = _page_provider()
-
-    async def _unauthorized() -> dict:
-        raise NotionError(401, "unauthorized", "nope")
-
-    provider.me = _unauthorized
-    app = _build(env, provider=provider)
-    app.store.migrate()
-    await app.telegram_app.post_init(app.telegram_app)
-    assert not app.sweeper.running
-
-
-async def test_post_shutdown_stops_sweeper_stops_admin_and_closes_store(env):
+async def test_post_shutdown_stops_admin_and_closes_store(env):
     app = _build(env, admin_port=18795)
     app.store.migrate()
     await app.telegram_app.post_init(app.telegram_app)
-    assert app.sweeper.running
     assert app.admin.port == 18795
 
     await app.telegram_app.post_shutdown(app.telegram_app)
 
-    assert not app.sweeper.running
     with pytest.raises(RuntimeError):
         _ = app.admin.port
     with pytest.raises(sqlite3.ProgrammingError):
@@ -391,7 +233,7 @@ async def test_sweeper_ticks_repeatedly_and_survives_a_failed_run(caplog):
             await asyncio.sleep(0.01)
         await sweeper.stop()
     assert flusher.calls >= 2
-    assert any("sweep" in r.getMessage().lower() for r in caplog.records if r.name == "app.main")
+    assert any("repeating" in r.getMessage().lower() for r in caplog.records if r.name == "app.main")
 
 
 async def test_sweeper_stop_is_idempotent_and_cancels_the_task():
@@ -456,7 +298,7 @@ def test_main_passes_every_token_value_to_the_log_redactor(env, monkeypatch, cle
 
     main.main()
 
-    assert recorded["redact"] == (TELEGRAM_TOKEN, NOTION_TOKEN, ANTHROPIC_KEY, GMAIL_PASSWORD)
+    assert recorded["redact"] == (TELEGRAM_TOKEN, ANTHROPIC_KEY, GMAIL_PASSWORD)
     assert recorded["log_file"] == "logs/bot.log"  # the default reaches the file handler
 
 
@@ -564,7 +406,6 @@ async def test_admin_bind_failure_only_warns_and_startup_continues(env, caplog):
     with caplog.at_level(logging.WARNING, logger="app.main"):
         await main.post_init_checks(app, FakeApplication())  # must not raise
 
-    assert app.fatal is None
     assert any("admin" in m.lower() and "18796" in m for m in _messages(caplog))
 
 

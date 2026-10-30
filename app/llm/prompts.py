@@ -1,233 +1,23 @@
-"""Russian system prompt and message assembly. The JSON schema enforces the shape; the prompt
-explains the semantics."""
+"""Russian prompts and message assembly for the models the bot asks: the vault's reader and
+linker, web research, link answers, the editor, mail and watched folders. A JSON schema, where
+there is one, enforces the shape; the prompt explains the semantics."""
 
 from __future__ import annotations
 
 import json
 
-from app.conversation.plan import PlanState
-from app.llm.context import Context
-from app.notion.snapshot import Target
-
-# The context's `pending` key under which a plan step carries its plan (goal, done steps).
-PLAN_KEY = "plan"
 RU_WEEKDAYS = ("понедельник", "вторник", "среда", "четверг", "пятница", "суббота",
                "воскресенье")
-# How many of a database's rows the planner is shown, so it can tell what is already there.
-MAX_KNOWN_ITEMS = 30
-
-# Asking for a page: a "make" verb followed by the word for a page. The rule below tells the
-# model the same thing, but it answers "create" for «надо посмотреть фильм X» all the same, so
-# app.commands.builder decides it again on the user's own words. The verb has to come first:
-# «добавь на страницу» names where the line goes, «создай страницу» names what to make.
+# Asking for a page: a "make" verb followed by the word for a page (app/vault/staged.py). The
+# verb has to come first: «добавь на страницу» names where the line goes, «создай страницу»
+# names what to make.
 MAKE_WORDS = ("созда", "завед", "сдела", "нов", "отдельн")
-PAGE_WORDS = ("страниц", "страничк", "раздел")
 
-# Asking to look something up. The model offers a web search for «хочу посмотреть фильм X»
-# too, which costs minutes of waiting and turns a line in a list into a whole page, so the
-# orchestrator checks the user's own words before it searches (see Orchestrator._research).
+# Asking to look something up. A model offers a web search for «хочу посмотреть фильм X» too,
+# which costs minutes of waiting and turns a line in a list into a whole note, so the vault
+# checks the user's own words before it searches. Editable on the admin page.
 WEB_WORDS = ("найд", "найт", "ищ", "поиск", "интернет", "гугл", "google", "узна", "разузна",
              "референс", "картинк", "изображен", "иллюстра", "фотк", "фото", "погугли")
-
-SYSTEM_PROMPT = """Ты — модуль интерпретации команд личного ассистента для Notion. Ты ничего не \
-выполняешь: \
-ты разбираешь сообщение пользователя и возвращаешь JSON строго по заданной схеме.
-
-В сообщении пользователя есть контекст (JSON): текущее время now, часовой пояс tz, день недели \
-weekday и \
-список целей targets. Цель — база (kind=database) или страница (kind=page). У цели есть key, \
-название, \
-путь, описание, поля fields (key, название, тип, обязательность, допустимые варианты options) и \
-существующие элементы items (для базы) или children (для страницы): ключ → название. У поля \
-может быть option_descriptions — что означает вариант, словами пользователя. Может быть и \
-workspace_note — заметка пользователя о том, как устроено его пространство: следуй ей при \
-выборе цели и значений.
-
-Порядок разбора:
-1. intent: create — добавить запись в базу или подстраницу; update — изменить существующий \
-элемент; \
-append — дописать текст на страницу; rewrite — переписать то, что уже есть на \
-странице; search — найти; unknown — сообщение не про Notion.
-2. target: только key из targets. Если правдоподобно несколько целей — верни до трёх кандидатов, \
-лучший первым, у каждого своя confidence от 0 до 1. Выбор цели меняет смысл: «купи хлеб» для \
-списка \
-покупок — запись «Хлеб», для задач — задача «Купить хлеб».
-3. Для каждого кандидата заполни ВСЕ его поля. status поля:
-   value — значение названо или однозначно следует из текста; укажи confidence и source_text \
-(фрагмент \
-исходного сообщения);
-   ambiguous — поле упомянуто, но подходят несколько вариантов; перечисли candidates;
-   explicit_null — пользователь явно просит очистить/убрать значение;
-   not_mentioned — в сообщении об этом ничего нет.
-4. Для update и append выбери item из items/children выбранной цели. Подходит несколько — \
-item=null и \
-перечисли item_candidates. Не подходит ничего — item=null и пустой item_candidates. Если ни один \
-элемент не подходит, верни item=null, пустой item_candidates и item_text — фрагмент сообщения, \
-которым пользователь назвал элемент.
-5. Текст для append или тело новой подстраницы — в content. Для rewrite в content — \
-указание пользователя своими словами («оставь один подход и одни размеры»), а не готовый \
-текст: саму страницу перепишет другая модель, которая видит её текст. Поисковая фраза — \
-в search_query.
-
-Правила:
-- Используй только ключи из контекста. Не придумывай поля, варианты и элементы.
-- select/status/relation/multi_select: значение — только ключ из options. Если названный вариант \
-не \
-совпадает ни с одним — ambiguous (если похожи несколько) или not_mentioned.
-- Вариант с описанием в option_descriptions выбирай и без названия, когда сообщение подходит под \
-описание: status=value, confidence по степени уверенности. Варианты без описания не угадывай.
-- Не подбирай «похожий» вариант: если названо «Селвер», а в options его нет — not_mentioned; \
-если названо «Лидл» и есть только Lidl — это value (транслитерация допустима).
-- Даты: поле даты всегда status=value с конкретным start (YYYY-MM-DD или YYYY-MM-DDTHH:MM), \
-вычисленным от now и weekday. Неуверенность выражай только через confidence (например 0.6 для \
-«в понедельник» без уточнения недели), никогда через ambiguous. end указывай только для явного \
-интервала.
-- Для дат используй блок calendar из контекста: бери готовую дату, не считай сам. «На следующей \
-неделе» без дня — start = понедельник следующей недели, confidence ≤ 0.7.
-- unknown — только если сообщение вообще не про Notion («расскажи анекдот»). Если похожее уже \
-есть в items/children — всё равно выбери действие: бот сам не добавит второй раз, а unknown \
-означает, что сообщение просто пропадёт.
-- Если просят убрать, заменить или поправить отдельное место на странице \
-(«убери второй вариант», «поменяй высоту на 240», «убери картинку», \
-«добавь картинку вот по этой ссылке») — это тоже rewrite. \
-Само изменение сделает другая модель, которая видит страницу \
-построчно; в content передай указание целиком, словами пользователя.
-- Если в сообщении не названа страница, а в контексте есть \
-«последняя_страница» — речь про неё («убери оттуда второй вариант», \
-«а теперь сократи»). Если её нет, а страница не названа \
-— не угадывай: возьми confidence низким, бот спросит.
-- rewrite — когда просят изменить то, что уже написано на странице: «перепиши», \
-«сократи», «приведи в порядок», «убери лишнее», «оставь один вариант», «сделай один план \
-из этого». Если пользователь даёт новый текст в добавок к старому — это append, а не \
-rewrite.
-- Цель-страница: добавить что-то в её содержимое — это append (строка в её список или \
-абзац), а не create. create для страницы — только когда просят именно новую страницу \
-(«создай страницу», «заведи раздел»). Содержимого страницы ты не видишь (в контексте только \
-её подстраницы) — коротко добавляемое бот сам подгонит под список, который там уже есть.
-- Заголовок (title): коротко, по-русски, без командного глагола для списков предметов; для задач — \
-инфинитив («Купить билеты»).
-- Поле, о котором в сообщении ничего нет — not_mentioned, независимо от того, обязательное оно \
-или нет. required означает лишь, что бот потом переспросит; не заполняй обязательные поля \
-догадками.
-- notes — короткая заметка о сомнениях, может быть пустой строкой.
-
-Примеры (ключи t1, t2, t1.i2, t1.i4 ниже — иллюстрация формата ключей, не бери их буквально):
-1. «добавь хлеб» при наличии в контексте и списка покупок, и списка задач — цель неоднозначна: \
-верни двух кандидатов, лучший {"target":"t1","confidence":0.55,...} (покупки), второй \
-{"target":"t2","confidence":0.45,...} (задачи); поля заполни для каждого отдельно; item у обоих \
-null.
-2. «отметь молоко купленным» при items «Молоко» (t1.i2) и «Молоко овсяное» (t1.i4) — товар \
-неоднозначен: item=null, item_candidates=["t1.i2","t1.i4"]; действие при этом однозначно: поле \
-"Куплено" status=value, value=true.
-Отвечай только JSON."""
-
-
-NOTES_LAST = "- notes — короткая заметка о сомнениях, может быть пустой строкой.\n"
-NOTES_FIRST = (
-    "- notes пиши ПЕРВЫМ, до intent: одно-два коротких предложения — что это за запрос и в "
-    "какую цель он относится по её описанию (например: «покупка — это дело, значит база задач "
-    "с тегом personal»). Затем выбирай intent и кандидатов согласно этому рассуждению.\n"
-)
-TARGET_NAME_RULE = (
-    "- target_name кандидата — имя цели из контекста; выбирай его по смыслу и по описанию цели, "
-    "ключ target идёт следом и должен ему соответствовать.\n"
-)
-
-
-MARKDOWN_RULE = (
-    "- content можно оформлять Markdown: # и ## заголовки, - список, 1. нумерованный список, "
-    "- [ ] задача-чекбокс, > цитата, **жирный**, *курсив*, [текст](url), ``` блок кода ```, "
-    "--- разделитель, ![подпись](url картинки). Оформляй, когда пользователь просит или текст "
-    "по смыслу — список, план, структура; обычную фразу пиши как есть.\n"
-)
-CLARIFY_RULE = (
-    "- clarify — вопрос пользователю, только если сообщение противоречиво или бессмысленно так, "
-    "что любое действие было бы угадыванием (например, голос распознан как «не найди картинки… "
-    "к каждому шагу» — просьба с отрицанием, которое не вяжется с остальным). Коротко, на «ты», "
-    "с вариантами, если они есть. Кандидатов при этом всё равно заполни как лучшую догадку. "
-    "Обычная неуверенность в цели или поле — не повод: для неё есть confidence. Иначе null.\n"
-)
-# Part of every prompt (the baseline too): content is always written as Markdown now, and the
-# model may always ask back.
-SYSTEM_PROMPT = SYSTEM_PROMPT.replace(NOTES_LAST, MARKDOWN_RULE + CLARIFY_RULE + NOTES_LAST)
-
-WEB_RULE = (
-    "- web_query — если пользователь просит найти что-то в интернете (информацию, рецепт, "
-    "обзор, ссылки, картинки, визуальные референсы) и записать: intent create (новая "
-    "подстраница или запись) или append (дописать на страницу), цель — куда записать, "
-    "web_query — что искать, коротко. Найденное бот запишет сам, content оставь пустым. "
-    "intent search — только поиск по записям в Notion, не в интернете. Если в сообщении нет "
-    "просьбы искать в интернете — web_query null.\n"
-    "- web_query только по явной просьбе искать («найди», «поищи», «загугли», «узнай», «с "
-    "картинками», «референсы»). «Хочу посмотреть фильм X», «добавь книгу Y» — это просто "
-    "запись в список, web_query null: поиск стоит пользователю нескольких минут ожидания, и "
-    "строчка в списке превращается в целую страницу. Сомневаешься — null.\n"
-    "- web_media — что искать: text — только текст; text_and_images — текст и картинки "
-    "(просят «с изображениями», «с референсами», «с фото»); images — только картинки "
-    "(«добавь картинок», «найди референсы», «покажи, как выглядит»).\n"
-)
-
-ANSWER_RULE = (
-    "- intent answer — пользователь спрашивает о содержимом присланной ссылки («какой залог?», "
-    "«сколько стоит?», «что тут пишут про парковку?») и ничего не просит записать: бот ответит "
-    "по странице. Если просят записать или добавить — это create или append, не answer, даже "
-    "когда есть вопрос. Для answer кандидата укажи как лучшую догадку, поля не заполняй.\n"
-)
-PLAN_RULE = (
-    "- intent plan — сообщение требует нескольких действий в Notion: создать страницу и "
-    "наполнить её, завести несколько задач, или несколько предметов, каждый из которых — "
-    "отдельная запись в базе: «добавь книги: Солярис, Дюна, Пикник на обочине» при базе книг — "
-    "plan. Дописать текст (хоть списком) на страницу — одно действие append, не plan. Одно "
-    "действие — даже с поиском в интернете и картинками — не plan. Для plan кандидата укажи "
-    "как лучшую догадку, поля не заполняй.\n"
-)
-STEP_RULE = (
-    "- В контексте есть plan: это сообщение — один шаг большего плана. Выполни ровно этот шаг; "
-    "plan.цель и plan.сделано — чтобы понимать ссылки вроде «на эту страницу»: страница, "
-    "созданная предыдущим шагом, уже есть среди целей.\n"
-)
-
-# Appended for Claude, which answers in the flat shape of app.llm.claude.flat_schema.
-FLAT_FORMAT_NOTE = """
-
-Формат ответа (упрощённый):
-- item, item_text, content, search_query, web_query, clarify: пустая строка "" вместо null. \
-Именно пустая строка: не "null", не "-", не "Clarify null" — всё это будет показано \
-пользователю как вопрос.
-- fields — список, а не объект: {"key": ключ поля, "status": ..., "value_json": ..., \
-"confidence": ..., "source_text": ...}. Поля со статусом not_mentioned можно не перечислять.
-- value_json — значение в виде JSON-строки: "\\"Купить хлеб\\"", "42", "true", \
-"[\\"t1.f2.o1\\"]", "{\\"start\\":\\"2026-09-12\\",\\"end\\":null}". Для ambiguous — JSON-массив \
-вариантов. Для explicit_null и not_mentioned — "null"; confidence тогда 0.
-- Для multi_select и relation value_json — всегда JSON-массив, даже из одного варианта."""
-
-
-def system_prompt(ctx: Context) -> str:
-    """SYSTEM_PROMPT adjusted to the answer shape ctx asks for (output_schema reads the same two
-    switches). With both off it is SYSTEM_PROMPT exactly — the baseline the benchmark compares
-    against."""
-    assert NOTES_LAST in SYSTEM_PROMPT
-    extra = TARGET_NAME_RULE if ctx.name_targets else ""
-    if ctx.web_research:
-        extra += WEB_RULE
-    if ctx.planning:
-        extra += PLAN_RULE
-    if ctx.answering:
-        extra += ANSWER_RULE
-    if ctx.pending and PLAN_KEY in ctx.pending:
-        extra += STEP_RULE
-    notes = NOTES_FIRST if ctx.reasoning_first else NOTES_LAST
-    return SYSTEM_PROMPT.replace(NOTES_LAST, notes + extra)
-
-
-def build_messages(text: str, ctx: Context, *, cloud: bool = False) -> list[dict]:
-    """`cloud`: the context as a cloud model may see it (`Context.cloud_payload`)."""
-    user = f"Контекст:\n{ctx.json(cloud=cloud)}\n\nСообщение пользователя:\n«{text.strip()}»"
-    links = links_section(ctx.links)
-    if links:
-        user = f"{user}\n\n{links}"
-    return [{"role": "system", "content": system_prompt(ctx)}, {"role": "user", "content": user}]
-
 
 LINK_ANSWER_PROMPT = """Ты отвечаешь на вопрос пользователя о странице по ссылке, которую он \
 прислал. Отвечай только по содержимому страниц ниже; если там этого нет — так и скажи одной \
@@ -273,7 +63,7 @@ def research_loop_prompt(searches: int, reads: int, sites=()) -> str:
                  if any(s.template for s in sites) else "")
     guide = f"\n{site_guide(sites)}\n" if sites else ""
     return f"""Ты — исследовательский модуль личного ассистента. Пользователь попросил найти \
-что-то в интернете; твой ответ целиком запишется в его Notion или Obsidian. Куда и как \
+что-то в интернете; твой ответ целиком запишется в его Obsidian. Куда и как \
 записать (создать страницу, дописать, в какой раздел) — решает и делает бот, не ты: такие \
 слова в сообщении пропускай, твоё дело — только содержание.
 
@@ -360,17 +150,12 @@ IMAGE_QUERIES_PROMPT = """Пользователь просит картинки
 ideas, October: с ними ничего не находится. Слова о том, куда записать, пропускай. Ответ — \
 только запросы, по одному на строку, без нумерации и пояснений."""
 
-IMAGE_FILTER_PROMPT = """Ты отбираешь картинки для страницы Notion пользователя. Дан его запрос и \
+IMAGE_FILTER_PROMPT = """Ты отбираешь картинки для заметки пользователя. Дан его запрос и \
 пронумерованный список найденных картинок (подписи с Wikimedia Commons и со страниц-источников). \
 Верни в keep номера тех, что действительно подходят к теме как визуальные референсы: фото мест, \
 предметов, людей, о которых запрос. Отбрось сканы писем и документов, карты, схемы, гербы, \
 логотипы и всё не по теме — если их не просили. Лучше меньше, но по делу; если не подходит \
 ничего — пустой список."""
-
-SECTION_PROMPT = """На странице Notion несколько разделов со списками, и надо решить, в какой из \
-них дописать строку. Дан запрос пользователя, сама строка и пронумерованные заголовки разделов. \
-Верни в section номер подходящего раздела: смотри по смыслу (фильм — в раздел про просмотр, \
-книга — в раздел про чтение). Если ни один явно не подходит — 0."""
 
 EDIT_PROMPT = """Ты правишь страницу, которую пользователь написал сам. Страница дана \
 построчно: перед каждой строкой её номер в квадратных скобках. Указание пользователя — \
@@ -447,141 +232,12 @@ IMAGES_HEADING = "## Изображения"
 SOURCES_HEADING = "## Источники"
 
 
-PLAN_PROMPT = """Ты — планировщик личного ассистента для Notion. Пользователь поставил цель, для \
-которой нужно несколько действий. Разбей её на шаги.
-
-Каждый шаг — одна самостоятельная команда боту на русском, как если бы пользователь сказал её \
-сам. Бот умеет: создать запись в базе или страницу (внутри другой страницы или в корне), \
-дописать текст на страницу, изменить запись, найти в интернете и записать результат (текстом, \
-с картинками или только картинки), искать по Notion. В каждом шаге называй место явно: «в \
-Проекты», «на страницу Поездка в Японию» — страницу, созданную предыдущим шагом, называй её \
-заголовком. Список предметов — по шагу на каждый («добавь в Books книгу Солярис»). Не больше \
-25 шагов, без лишних; не проси подтверждений и ничего не спрашивай.
-
-Время из сообщения («на сегодня», «завтра», «к пятнице») относится к каждому шагу, о котором \
-оно сказано: повтори его в text каждого такого шага («Добавь в TODO задачу «покушать» на \
-сегодня») и, если у места есть поле даты, заполни его датой из «Даты» (YYYY-MM-DD). Шаг \
-выполняется отдельно и исходного сообщения не видит: время, которого нет в самом шаге, потеряно.
-
-У каждой базы показано, что в ней уже есть («уже есть»): список неполный (только недавно \
-изменённые записи), но то, что в нём видно, заново не добавляй — если у такой записи надо \
-поменять поле, это шаг update, а если менять нечего, шага вообще не нужно.
-
-Каждый шаг должен что-то записать в Notion: бот не умеет «просто найти и запомнить» — шаг \
-«найди в интернете список X» без места, куда записать, ничего не даст. Что знаешь сам (список \
-романов автора, города для маршрута) — сразу разложи по шагам. Интернет — только вместе с \
-записью: «найди достопримечательности Киото с фото и допиши на страницу Поездка в Японию».
-
-goal — одна фраза: каким будет результат, когда цель достигнута. steps — шаги по порядку.
-
-Каждый шаг заполняй так, чтобы бот выполнил его сам, без разбора текста:
-- text — человеческая формулировка шага (её видит пользователь): «Добавь в Books книгу Омон Ра».
-- action: create — новая запись в базе или новая подстраница; append — дописать на \
-страницу; update — изменить поля записи, которая уже есть; free — всё остальное (тогда бот \
-разберёт text моделью).
-- target — точное название места из списка выше («Books», «Проекты»).
-- item — только для update: заголовок изменяемой записи точно как в списке «уже есть».
-- title — заголовок новой записи или страницы (для append не нужен).
-- fields — значения полей: name — имя поля как в Notion («Tags», «Status»), value — \
-значение: название варианта точно как в списке поля, дата в виде YYYY-MM-DD, «да»/«нет» \
-для галочки, несколько вариантов через запятую. Поля, которых нет в этом месте, не \
-выдумывай. Поле с пометкой «обязательное» заполняй в каждом шаге, где знаешь ответ сам или \
-он следует из цели (автор книги, режиссёр фильма): иначе бот остановит шаг и спросит \
-пользователя — и так на каждом шаге. Чего не знаешь — оставь пустым, это нормально.
-- content — текст в Markdown: тело новой страницы или то, что дописать (если знаешь сам).
-- web_query — если содержимое надо найти в интернете: что искать, коротко (тогда content \
-оставь пустым); web_media — text, text_and_images или images (когда просят картинки).
-Заполняй только то, что нужно шагу; остальные поля оставь пустыми ("" или [])."""
-
-PLAN_NEXT_PROMPT = """Ты следишь за выполнением плана личного ассистента для Notion. Даны цель, \
-исходный план и уже выполненные шаги с ответами бота (в том числе неудачи).
-
-Реши, что дальше. Цель достигнута — done=true и summary: одна-две фразы, что получилось. \
-Иначе — done=false и next_step: следующая команда боту, в том же виде, что шаги плана. Обычно \
-это следующий шаг плана; но учитывай результаты: не повторяй сделанное, неудавшийся шаг \
-попробуй по-другому один раз, а если и это не вышло — переходи дальше. Не придумывай работу \
-сверх цели. Каждый шаг должен что-то записать в Notion: шаг, который только ищет, пропусти и \
-используй то, что знаешь сам."""
-
-
-def _dates(calendar: dict | None) -> str:
-    return ("\n\nДаты: " + json.dumps(calendar, ensure_ascii=False)) if calendar else ""
-
-
-def plan_message(request: str, workspace: str, hint: str = "",
-                 calendar: dict | None = None) -> str:
-    """The planner's whole request. `hint` is how the interpreting model read this same message
-    a moment ago: a starting point, and wrong often enough to be labelled a guess."""
-    note = (f"\n\nКак это понял разбирающий модуль (подсказка, не решение): {hint.strip()}"
-            if hint.strip() else "")
-    return f"{workspace}{_dates(calendar)}\n\nСообщение пользователя:\n«{request.strip()}»{note}"
-
-
-def progress_message(state: PlanState, workspace: str, calendar: dict | None = None) -> str:
-    progress = {
-        "цель": state.goal,
-        "план": [s.text for s in state.steps],
-        "сделано": [{"шаг": s.request, "итог": s.status, "ответ_бота": s.outcome}
-                    for s in state.history],
-        "ответы_пользователя": state.answers,
-    }
-    return f"{workspace}{_dates(calendar)}\n\n" + json.dumps(progress, ensure_ascii=False,
-                                                             indent=1)
-
-
-def plan_context(state: PlanState) -> dict:
-    """What a plan step's interpretation is told about the plan (the context's `pending`)."""
-    block = {"цель": state.goal, "сделано": [s.outcome for s in state.history]}
-    if state.answers:  # what the user told the plan's earlier questions: dates, ages, choices
-        block["ответы_пользователя"] = state.answers
-    return {PLAN_KEY: block}
-
-
-def workspace_summary(targets: list[Target], note: str) -> str:
-    """The workspace as the planner sees it: every place the bot can write, one line each."""
-    kinds = {"database": "база", "page": "страница"}
-    lines = ["Места в Notion:"]
-    for t in targets:
-        desc = f" — {t.description[:150]}" if t.description else ""
-        lines.append(f"- {t.path} [{kinds.get(t.kind, t.kind)}]{desc}")
-        # Every field a step can fill, not just the tags: a required field the planner does not
-        # know about is a question to the user on every single step of the plan.
-        for f in t.fields:
-            if not f.writable:
-                continue
-            marks = f.type + (", обязательное" if f.required else "")
-            options = (": " + ", ".join(o.name for o in f.options[:20])) if f.options else ""
-            note_ = f" — {f.description[:100]}" if f.description else ""
-            lines.append(f"    поле «{f.name}» ({marks}){options}{note_}")
-        # What the database already holds, so a plan adds what is missing instead of a second
-        # copy of what is there. Only the most recently edited rows: the list is not complete.
-        if t.kind == "database" and t.items:
-            known = ", ".join(f"«{i.title}»" for i in t.items[:MAX_KNOWN_ITEMS])
-            lines.append(f"    уже есть: {known}")
-    if note:
-        lines.append(f"\nЗаметка пользователя о воркспейсе: {note}")
-    return "\n".join(lines)
-
-
 def image_filter_message(request: str, query: str, listing: str) -> str:
     return f"{research_message(request, query)}\n\nНайденные картинки:\n{listing}"
 
 
-def section_message(request: str, line: str, headings: list[str]) -> str:
-    listing = "\n".join(f"{i}. {h}" for i, h in enumerate(headings, start=1))
-    return (f"Сообщение пользователя: «{request.strip()}»\nСтрока: «{line.strip()}»\n\n"
-            f"Разделы страницы:\n{listing}")
-
-
 def research_message(request: str, query: str) -> str:
     return f"Сообщение пользователя: «{request.strip()}»\nЧто найти: {query.strip()}"
-
-
-def retry_message(error: str) -> str:
-    return (
-        "Предыдущий ответ не прошёл проверку: "
-        f"{error}\nВерни исправленный JSON строго по схеме, без пояснений."
-    )
 
 
 # ---- Obsidian: the filer -----------------------------------------------------------------------

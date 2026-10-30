@@ -1,13 +1,8 @@
 from functools import cached_property
 from pathlib import Path
-from typing import Literal
 
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
-
-def Prob(default: float) -> float:
-    return Field(default, ge=0.0, le=1.0)
 
 
 class Settings(BaseSettings):
@@ -15,25 +10,18 @@ class Settings(BaseSettings):
 
     telegram_bot_token: SecretStr = SecretStr("")
     telegram_allowed_user_ids: str = ""
-    notion_token: SecretStr
-    notion_version: str = "2025-09-03"
 
+    # A local Ollama, for the mail models that are not Claude (MAIL_MODEL, MAIL_SHADOW_MODEL),
+    # and the context window they get.
     ollama_base_url: str = "http://127.0.0.1:11434"
-    llm_model: str = "mistral-nemo:12b"
-    llm_temperature: float = 0.0
     llm_num_ctx: int = 8192
-    llm_timeout_s: float = 120.0
-    # How long Ollama keeps the model loaded after a request. Its own default, 5m, means a
-    # message after any short pause reloads the model: measured 32 s instead of 16 s. "-1"
-    # keeps it loaded for good (always fast, but holds the GPU); "0" unloads right away.
-    llm_keep_alive: str = "30m"
 
-    # Claude answers first when a key is set; the local model above is the fallback (offline,
-    # rate-limited, out of credit). LLM_CLOUD=false keeps everything on this machine.
+    # Every model call but the local mail models goes to Claude: without a key the vault, web
+    # research and link answers stay off.
     anthropic_api_key: SecretStr = SecretStr("")
+    # Answers a question about a linked page, and reads watched folders when
+    # VAULT_ANSWER_MODEL is empty.
     claude_model: str = "claude-haiku-4-5"
-    claude_timeout_s: float = 30.0
-    llm_cloud: bool = True
     # "Find X on the web and write it to Y": Claude with web search. Sonnet digs deeper and
     # writes the better note, for about three times what Haiku costs — a search already costs
     # far more than an ordinary message, and this is the call whose quality you read.
@@ -51,12 +39,8 @@ class Settings(BaseSettings):
     # templates, comma-separated, "{id}" the post's code, "{n}" an item of a carousel from 0.
     instagram_mirrors: str = ("https://vxinstagram.com/offload/{id}/{n},"
                               "https://kkinstagram.com/p/{id}/")
-    # Multi-step goals: the model that splits a goal into steps and checks after each one. Its
-    # own knowledge fills the steps ("all of Pelevin's novels"): Haiku listed 8, one of them
-    # wrong; Sonnet listed 15, all right.
-    plan_model: str = "claude-sonnet-5"
-    # A message the interpreter did not understand (an unknown intent, or a question of its
-    # own) is read once more by this model before the user is asked. Empty: never.
+    # The second opinion: a vault answer it could not settle, and a watched folder's summary
+    # checked before it is sent. Empty: never asked.
     escalate_model: str = "claude-sonnet-5"
 
     # Rewriting text the user already wrote (a page consolidated into one plan, a note
@@ -68,9 +52,7 @@ class Settings(BaseSettings):
     # "Robo, buy milk" is a shopping item and not a note about someone called Robo.
     bot_name: str = ""
 
-    # The Obsidian vault written next to Notion: a folder on this machine. Empty = off.
-    # Nothing about this pipeline depends on Notion, so NOTION_ENABLED=false leaves a working
-    # Obsidian-only bot.
+    # The Obsidian vault the bot writes: a folder on this machine. Empty = off.
     obsidian_vault: Path | None = None
     # Syncthing's own config.xml, for its API address and key (app/watch/syncthing.py). Empty:
     # where Syncthing keeps it on Windows, %LOCALAPPDATA%\Syncthing\config.xml.
@@ -78,7 +60,6 @@ class Settings(BaseSettings):
     # When the bot sends the morning agenda from the vault (HH:MM, in TIMEZONE). Empty: never.
     daily_digest_at: str = "09:00"
     obsidian_enabled: bool = True
-    notion_enabled: bool = True
     # The vault's own interpreter ("which note is this?") and the linker. Both are small jobs
     # on a small context: Haiku.
     filer_model: str = "claude-haiku-4-5"
@@ -132,27 +113,11 @@ class Settings(BaseSettings):
     locale: str = "ru"
 
     db_path: Path = Path("data/bot.sqlite")
-    targets_file: Path = Path("data/targets.yaml")
-    schema_cache_ttl_s: int = 60
-    items_per_target: int = Field(15, ge=1, le=100)
     admin_ui_port: int = 8787
 
-    policy_intent_min: float = Prob(0.85)
-    policy_target_min: float = Prob(0.85)
-    policy_target_margin: float = Prob(0.10)
-    policy_field_min: float = Prob(0.75)
-    policy_date_min: float = Prob(0.80)
-
-    session_ttl_s: int = 900
     undo_window_s: int = 300
     log_level: str = "INFO"
     log_file: str = "logs/bot.log"  # rotating, redacted like stderr; empty disables it
-
-    # auto: save on every unresolvable path and offer the button; button: only on button press;
-    # off: no inbox, no button.
-    inbox_mode: Literal["auto", "button", "off"] = "auto"
-    # Notion page/data-source id that overrides the targets.yaml `inbox: true` flag.
-    inbox_target_id: str = ""
 
     @field_validator("telegram_allowed_user_ids")
     @classmethod

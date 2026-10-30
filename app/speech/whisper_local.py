@@ -44,7 +44,7 @@ class WhisperLocal:
         self._model: Any | None = None
         self._device = settings.whisper_device
         # Guards the whole of _transcribe_sync, not just the model load: a threading.Lock (not
-        # asyncio.Lock, see app/notion/discovery.py) because this section runs on a
+        # asyncio.Lock) because this section runs on a
         # to_thread worker thread, not the event loop. One GPU can't decode two clips at once
         # anyway, so serialising costs nothing real, and it also closes the device-flip race
         # (two calls disagreeing on self._device mid-fallback) and the "one call's fallback

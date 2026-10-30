@@ -188,19 +188,6 @@ async def test_a_model_that_is_down_costs_the_filing_not_the_words(index):
     assert len(turn.undos) == 1  # and it can be taken back like any other write
 
 
-async def test_a_held_back_turn_keeps_nothing_when_the_model_is_down(index):
-    """The gate still decides: a turn the orchestrator held back writes nothing at all."""
-    error = anthropic.APIError("down", request=None, body=None)  # type: ignore[arg-type]
-
-    async def no() -> bool:
-        return False
-
-    turn = await pipeline(index, error).handle("зубы", go=no)
-    assert turn.writes == [] and turn.error
-    assert index.by_name(texts.VAULT_INBOX_NOTE) is None
-    assert texts.VAULT_FAILED.split("{")[0] in turn.reply_line()
-
-
 async def test_undo_puts_every_file_of_the_turn_back(index):
     before = index.read(f"{texts.VAULT_TASKS_NOTE}.md")
     pipe = pipeline(index, {"actions": [{"action": "task", "text": "зубы", "heading": "дом"}]})

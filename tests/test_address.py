@@ -5,9 +5,7 @@ from __future__ import annotations
 import pytest
 
 from app import address, texts
-from app.conversation.orchestrator import Orchestrator
-from tests.helpers import cand, make_interp, val
-from tests.test_orchestrator import CHAT, USER, make_bot  # noqa: F401  (make_bot is a fixture)
+from tests.test_orchestrator import CHAT, USER, bot, task  # noqa: F401  (bot is a fixture)
 
 NAMES = address.names("Робо,Робот,Robo")
 
@@ -58,38 +56,34 @@ def test_questions_about_the_bot():
 
 # ---- through the bot ----------------------------------------------------------------------
 
+
 @pytest.fixture
-def named(tmp_path, env, monkeypatch):
-    bot = make_bot(tmp_path)
+def named(bot):  # noqa: F811
     bot.orch._fallback_names = NAMES  # what .env said; the admin page can override it
     return bot
 
 
+def sent(bot) -> str:
+    return bot.claude.seen[0]["messages"][0]["content"]
+
+
 async def test_a_message_addressed_by_name_is_written_without_it(named):
-    named.llm.queue(make_interp("create", cand(named.ctx, "t2", 0.95,
-                                                fields={"t2.f1": val("Молоко", 1.0)})))
+    task(named, "купи молоко")
     await named.orch.handle_text(CHAT, USER, "Робо, купи молоко")
-    text, _payload, _schema = named.llm.seen[0]
-    assert text == "купи молоко"  # the interpreter never sees the name
+    assert "купи молоко" in sent(named) and "Робо" not in sent(named)
 
 
 async def test_calling_the_bot_by_name_alone_answers_without_a_model(named):
     reply = await named.orch.handle_text(CHAT, USER, "Робо?")
-    assert reply.text == texts.CALLED
-    assert named.llm.calls == 0 and named.notion.calls == []
+    assert reply.text == texts.CALLED and named.claude.seen == []
 
 
 async def test_asking_what_it_is_answers_from_texts(named):
     reply = await named.orch.handle_text(CHAT, USER, "Робо, кто ты?")
-    assert "Робо" in reply.text and named.llm.calls == 0
+    assert "Робо" in reply.text and named.claude.seen == []
 
 
-async def test_an_unnamed_bot_still_works_the_old_way(tmp_path, env):
-    bot = make_bot(tmp_path)
-    assert isinstance(bot.orch, Orchestrator) and bot.orch._names == ()
-    bot.llm.queue(make_interp("create", cand(bot.ctx, "t2", 0.95,
-                                              fields={"t2.f1": val("Молоко", 1.0)})))
+async def test_an_unnamed_bot_takes_the_words_as_they_are(bot):  # noqa: F811
+    task(bot, "купи молоко")
     await bot.orch.handle_text(CHAT, USER, "Робо, купи молоко")
-    text, _payload, _schema = bot.llm.seen[0]
-    assert text == "Робо, купи молоко"
-    bot.store.close()
+    assert "Робо, купи молоко" in sent(bot)

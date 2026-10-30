@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8">
-<title>Notion AI Bot — админка</title>
+<title>Ассистент — настройки</title>
 <style>
   :root { color-scheme: light dark; }
   * { box-sizing: border-box; }
@@ -21,14 +21,12 @@
     border-radius: 6px;
     margin: 12px 0;
   }
-  .empty { color: #666; }
   .target {
     border: 1px solid #999;
     border-radius: 8px;
     padding: 12px;
     margin-bottom: 12px;
   }
-  .target .path { font-size: 0.8rem; color: #666; }
   .target h2 { margin: 4px 0 8px; font-size: 1.05rem; }
   .target textarea {
     width: 100%;
@@ -36,19 +34,7 @@
     font: inherit;
     padding: 4px;
   }
-  table.fields { width: 100%; border-collapse: collapse; margin-top: 8px; }
-  table.fields th, table.fields td {
-    text-align: left;
-    padding: 4px 6px;
-    font-size: 0.9rem;
-    border-bottom: 1px solid #ddd;
-  }
-  table.fields input[type="text"] { width: 100%; font: inherit; padding: 2px 4px; }
-  table.fields tr.options td { border-bottom: 1px solid #ddd; padding-left: 24px; }
-  .option-row { display: flex; gap: 8px; align-items: center; margin: 2px 0; }
-  .option-row .option-name { min-width: 10em; font-size: 0.85rem; }
-  .option-row input { flex: 1; }
-  #workspace-note, #mail-buckets { width: 100%; min-height: 6em; font: inherit; padding: 4px; }
+  #mail-buckets { width: 100%; min-height: 6em; font: inherit; padding: 4px; }
   #switches { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; }
   details { border: 1px solid #ddd; border-radius: 6px; margin: 10px 0; padding: 6px 12px; }
   details[open] { padding-bottom: 14px; }
@@ -57,9 +43,6 @@
   label.field { display: block; margin: 8px 0 2px; font-weight: 600; }
   label.field input { display: block; width: 100%; font: inherit; padding: 4px;
                       font-weight: normal; margin-top: 2px; }
-  .target.is-hidden { opacity: 0.55; }
-  .inbox-row { margin: 8px 0; font-size: 0.9rem; }
-  .inbox-row label { margin-left: 4px; }
   #save-bar {
     position: sticky;
     bottom: 0;
@@ -81,17 +64,15 @@
   Всё на этой странице хранится локально и применяется со следующего сообщения — перезапускать
   бота не нужно. Пустое поле означает «как по умолчанию».
 </p>
-<p class="meta" id="fetched-at"></p>
 <div id="load-error" class="notice" hidden></div>
 
 <details open>
   <summary>Что включено</summary>
   <p class="hint">
-    Куда бот пишет ваши сообщения. Если выключить Notion, останется только Obsidian — бот
-    продолжит работать и вопросов задавать не будет.
+    Выключенный Obsidian — бот не пишет и не отвечает на сообщения; сводки и напоминания
+    управляются своими переключателями.
   </p>
   <div id="switches">
-    <label><input type="checkbox" id="switch-notion"> Notion</label>
     <label><input type="checkbox" id="switch-obsidian"> Obsidian (хранилище заметок)</label>
     <label><input type="checkbox" id="switch-linker"> Ссылки между заметками (Obsidian)</label>
     <label><input type="checkbox" id="switch-mail"> Сводка по почте</label>
@@ -121,20 +102,6 @@
     умолчанию.
   </p>
   <textarea id="tuning-never_open"></textarea>
-</details>
-
-<details>
-  <summary>Notion</summary>
-  <div id="notice-inbox-locked" class="notice" hidden>
-    Инбокс задан переменной окружения <code>INBOX_TARGET_ID</code> в <code>.env</code> — выбор
-    ниже недоступен, пока она установлена.
-  </div>
-  <h3>Заметка о воркспейсе</h3>
-  <p class="hint">
-    Как устроен ваш Notion — своими словами. Бот получает её с каждым сообщением. Например:
-    «Все задачи — в базе TODO. Страницы дом и работа — это виды TODO по тегам».
-  </p>
-  <textarea id="workspace-note"></textarea>
   <h3>Слова, по которым бот идёт искать в интернете</h3>
   <p class="hint">
     Поиск занимает минуты и стоит денег, поэтому он запускается только если в сообщении есть
@@ -147,12 +114,6 @@
     евро», «для рецептов сначала список покупок».
   </p>
   <textarea id="tuning-research_note"></textarea>
-  <h3>Цели</h3>
-  <div id="empty-state" class="empty" hidden>
-    Список целей пуст: бот ещё не выполнил обнаружение воркспейса Notion, либо оно недоступно.
-    Запустите бота и обновите эту страницу.
-  </div>
-  <div id="targets"></div>
 </details>
 
 <details>
@@ -287,7 +248,7 @@
 <script>
 "use strict";
 
-var state = { targets: [], inboxLocked: false, chats: [], seen: [], chatsOn: false,
+var state = { chats: [], seen: [], chatsOn: false,
               rules: [], reminders: [], chatChoices: [], remindersOn: false,
               sources: [], google: {}, sourcesOn: false,
               folders: [], folderStatus: [], foldersOn: false, syncthing: null };
@@ -306,192 +267,24 @@ function el(tag, attrs, children) {
   return node;
 }
 
-function fieldRow(target, field) {
-  var row = el("tr");
-  row.appendChild(el("td", { text: field.name + " (" + field.type + ")" }));
-
-  var reqCell = el("td");
-  var reqBox = el("input", { type: "checkbox" });
-  reqBox.checked = !!field.required;
-  reqBox.className = "field-required";
-  reqBox.dataset.targetId = target.id;
-  reqBox.dataset.fieldId = field.id;
-  if (field.type === "title") {
-    // Notion's title property is always required; unchecking here would have no effect
-    // once discovery re-applies the real property flags, so don't offer a control that lies.
-    reqBox.disabled = true;
-  }
-  reqCell.appendChild(reqBox);
-  if (field.type === "title") {
-    reqCell.appendChild(el("span", { text: " (заголовок обязателен всегда)" }));
-  }
-  row.appendChild(reqCell);
-
-  var descCell = el("td");
-  var descInput = el("input", { type: "text" });
-  descInput.value = field.description || "";
-  descInput.placeholder = "Описание поля для LLM";
-  descInput.className = "field-description";
-  descInput.dataset.targetId = target.id;
-  descInput.dataset.fieldId = field.id;
-  descCell.appendChild(descInput);
-  row.appendChild(descCell);
-
-  return row;
-}
-
-// Options of a select/multi-select/status field, each with its own description: an option
-// with one may be chosen by meaning ("home" for anything about the house), one without only
-// when the message names it.
-function optionsRow(target, field) {
-  var row = el("tr", { class: "options" });
-  var cell = el("td", { colspan: "3" });
-  cell.appendChild(el("div", {
-    class: "hint",
-    text: "Варианты «" + field.name + "»: с описанием бот выбирает по смыслу, без — только " +
-      "если вариант назван",
-  }));
-  field.options.forEach(function (o) {
-    var line = el("div", { class: "option-row" });
-    line.appendChild(el("span", { class: "option-name", text: o.name }));
-    var input = el("input", { type: "text" });
-    input.value = o.description || "";
-    input.placeholder = "когда выбирать «" + o.name + "»";
-    input.className = "option-description";
-    input.dataset.targetId = target.id;
-    input.dataset.fieldId = field.id;
-    input.dataset.optionId = o.id;
-    line.appendChild(input);
-    cell.appendChild(line);
-  });
-  row.appendChild(cell);
-  return row;
-}
-
-function targetBox(target) {
-  var box = el("div", { class: "target" });
-  box.appendChild(el("div", { class: "path", text: target.path }));
-  box.appendChild(el("h2", { text: target.name }));
-
-  var desc = el("textarea");
-  desc.value = target.description || "";
-  // Notion's own description is what the LLM sees until you write one here, so show it as the
-  // hint rather than as a value: saving an untouched box then keeps it untouched.
-  desc.placeholder = target.notion_description
-    ? "Из Notion: " + target.notion_description
-    : "Для чего эта база или страница — своими словами, для LLM";
-  desc.className = "target-description";
-  desc.dataset.targetId = target.id;
-  box.appendChild(desc);
-
-  if (target.fields.length) {
-    var table = el("table", { class: "fields" });
-    table.appendChild(el("tr", {}, [
-      el("th", { text: "Поле" }),
-      el("th", { text: "Обязательно" }),
-      el("th", { text: "Описание поля" }),
-    ]));
-    target.fields.forEach(function (f) {
-      table.appendChild(fieldRow(target, f));
-      if (f.options && f.options.length) { table.appendChild(optionsRow(target, f)); }
-    });
-    box.appendChild(table);
-  }
-
-  var inboxRow = el("div", { class: "inbox-row" });
-  var radioId = "inbox-" + target.id;
-  var radio = el("input", { type: "radio", name: "inbox", value: target.id, id: radioId });
-  radio.checked = !!target.is_inbox;
-  radio.disabled = state.inboxLocked;
-  inboxRow.appendChild(radio);
-  inboxRow.appendChild(el("label", {
-    for: radioId, text: " инбокс — сюда бот складывает всё, что не смог распознать",
-  }));
-  box.appendChild(inboxRow);
-
-  var localRow = el("div", { class: "inbox-row" });
-  var localId = "local-" + target.id;
-  var local = el("input", { type: "checkbox", id: localId });
-  local.className = "target-local-only";
-  local.dataset.targetId = target.id;
-  local.checked = !!target.local_only;
-  localRow.appendChild(local);
-  localRow.appendChild(el("label", {
-    for: localId,
-    text: " только локально — описание и содержимое не уходят в Claude; такие сообщения " +
-      "разбирает локальная модель (сам текст сообщения Claude всё равно видит)",
-  }));
-  box.appendChild(localRow);
-
-  var hiddenRow = el("div", { class: "inbox-row" });
-  var hiddenId = "hidden-" + target.id;
-  var hidden = el("input", { type: "checkbox", id: hiddenId });
-  hidden.className = "target-hidden";
-  hidden.dataset.targetId = target.id;
-  hidden.checked = !!target.hidden;
-  if (target.hidden) { box.classList.add("is-hidden"); }
-  hidden.addEventListener("change", function () {
-    box.classList.toggle("is-hidden", hidden.checked);
-  });
-  hiddenRow.appendChild(hidden);
-  hiddenRow.appendChild(el("label", {
-    for: hiddenId,
-    text: " скрыть от бота — например, страница, которая лишь показывает базу с фильтром " +
-      "(бот тогда пишет в саму базу)",
-  }));
-  box.appendChild(hiddenRow);
-
-  return box;
-}
-
-function render() {
-  var list = document.getElementById("targets");
-  list.innerHTML = "";
-  document.getElementById("empty-state").hidden = state.targets.length !== 0;
-  document.getElementById("notice-inbox-locked").hidden = !state.inboxLocked;
-
-  var noneRow = el("div", { class: "inbox-row" });
-  var noneRadio = el("input", { type: "radio", name: "inbox", value: "", id: "inbox-none" });
-  noneRadio.checked = !state.targets.some(function (t) { return t.is_inbox; });
-  noneRadio.disabled = state.inboxLocked;
-  noneRow.appendChild(noneRadio);
-  noneRow.appendChild(el("label", { for: "inbox-none", text: " инбокс не выбран" }));
-  list.appendChild(noneRow);
-
-  state.targets.forEach(function (t) { list.appendChild(targetBox(t)); });
-}
-
-function showFetchedAt(iso) {
-  var line = document.getElementById("fetched-at");
-  if (!iso) {
-    line.textContent = "Notion ещё не опрашивался — данных нет.";
-    return;
-  }
-  var d = new Date(iso);
-  line.textContent = "Данные из Notion получены: " + d.toLocaleString("ru-RU");
-}
-
 function showLoadError(message) {
   var box = document.getElementById("load-error");
   box.textContent = message
-    ? "Не удалось загрузить список целей (" + message + "). Проверьте, что бот запущен, " +
+    ? "Не удалось загрузить настройки (" + message + "). Проверьте, что бот запущен, " +
       "и обновите страницу."
     : "";
   box.hidden = !message;
 }
 
-// Always resolves: a failed /api/targets must say so on the page rather than leave a blank one
+// Always resolves: a failed /api/settings must say so on the page rather than leave a blank one
 // behind an unhandled promise rejection nobody sees without the browser console open.
 function load() {
-  return fetch("/api/targets")
+  return fetch("/api/settings")
     .then(function (r) {
       if (!r.ok) { throw new Error("HTTP " + r.status); }
       return r.json();
     })
     .then(function (data) {
-      state.targets = data.targets || [];
-      state.inboxLocked = !!data.inbox_locked;
-      document.getElementById("workspace-note").value = data.workspace_note || "";
       var tuning = data.tuning || {};
       ["bot_name", "agenda_at", "mail_at", "folders_at", "web_words", "countdown_tag",
        "date_props", "research_note", "linker_note", "never_open", "sync_after"].forEach(
@@ -508,7 +301,7 @@ function load() {
       document.getElementById("mail-buckets").value =
         (data.mail_buckets || "").split(/,\s*(?=[^\s,:]+\s*:)/).join("\n");
       var switches = data.switches || {};
-      ["notion", "obsidian", "linker", "mail", "syncthing", "folders"].forEach(function (name) {
+      ["obsidian", "linker", "mail", "syncthing", "folders"].forEach(function (name) {
         var el = document.getElementById("switch-" + name);
         el.checked = switches[name] !== false;
       });
@@ -535,8 +328,6 @@ function load() {
       state.syncthing = data.syncthing === undefined ? null : data.syncthing;
       renderSync();
       showLoadError("");
-      showFetchedAt(data.fetched_at || null);
-      render();
     })
     .catch(function (e) {
       showLoadError(e && e.message ? e.message : "ошибка сети");
@@ -1165,52 +956,7 @@ document.getElementById("add-rule").addEventListener("click", function () {
 });
 
 function collectBody() {
-  var checkedInbox = document.querySelector('input[name="inbox"]:checked');
-  var inboxId = checkedInbox ? checkedInbox.value : "";
-  var targets = {};
-  // Matched by dataset rather than a selector: Notion option ids are free-form strings.
-  var optionInputs = Array.prototype.slice.call(
-    document.querySelectorAll(".option-description")
-  );
-  state.targets.forEach(function (t) {
-    var descEl = document.querySelector(
-      '.target-description[data-target-id="' + t.id + '"]'
-    );
-    var fields = {};
-    t.fields.forEach(function (f) {
-      var reqEl = document.querySelector(
-        '.field-required[data-target-id="' + t.id + '"][data-field-id="' + f.id + '"]'
-      );
-      var fdescEl = document.querySelector(
-        '.field-description[data-target-id="' + t.id + '"][data-field-id="' + f.id + '"]'
-      );
-      var options = {};
-      optionInputs.forEach(function (input) {
-        if (input.dataset.targetId === t.id && input.dataset.fieldId === f.id) {
-          options[input.dataset.optionId] = input.value;
-        }
-      });
-      fields[f.id] = {
-        description: fdescEl ? fdescEl.value : "",
-        required: reqEl ? reqEl.checked : false,
-        options: options,
-      };
-    });
-    var localEl = document.querySelector(
-      '.target-local-only[data-target-id="' + t.id + '"]'
-    );
-    var hiddenEl = document.querySelector('.target-hidden[data-target-id="' + t.id + '"]');
-    targets[t.id] = {
-      description: descEl ? descEl.value : "",
-      inbox: t.id === inboxId,
-      local_only: localEl ? localEl.checked : false,
-      hidden: hiddenEl ? hiddenEl.checked : false,
-      fields: fields,
-    };
-  });
   var body = {
-    targets: targets,
-    workspace_note: document.getElementById("workspace-note").value,
     tuning: ["bot_name", "agenda_at", "mail_at", "folders_at", "web_words", "countdown_tag",
              "date_props", "research_note", "linker_note", "never_open", "sync_after"].reduce(
       function (acc, name) {
@@ -1222,7 +968,6 @@ function collectBody() {
       .split("\n").map(function (s) { return s.trim(); })
       .filter(function (s) { return s.length; }).join(","),
     switches: {
-      notion: document.getElementById("switch-notion").checked,
       obsidian: document.getElementById("switch-obsidian").checked,
       linker: document.getElementById("switch-linker").checked,
       mail: document.getElementById("switch-mail").checked,
@@ -1245,7 +990,7 @@ function collectBody() {
 document.getElementById("save-button").addEventListener("click", function () {
   var status = document.getElementById("save-status");
   status.textContent = "Сохранение…";
-  fetch("/api/descriptions", {
+  fetch("/api/settings", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(collectBody()),
@@ -1255,7 +1000,7 @@ document.getElementById("save-button").addEventListener("click", function () {
       return r.json();
     })
     .then(function (data) {
-      status.textContent = "Сохранено, изменено целей: " + data.saved;
+      status.textContent = "Сохранено, изменений: " + data.saved;
       return load();
     })
     .catch(function () {

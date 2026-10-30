@@ -163,16 +163,6 @@ async def test_a_refused_plan_falls_back_to_today(index):
     assert planner.calls == ["several", "plan"] and [w.kind for w in turn.writes] == ["note"]
 
 
-async def test_a_held_turn_never_plans(index):
-    planner = FakePlanner(DETECTIVES)
-
-    async def go():
-        return True
-
-    await pipe(index, note_script("Мысли"), planner).handle("запиши мысли", go=go)
-    assert planner.calls == []
-
-
 async def test_a_groups_plan_writes_only_in_its_scope(index):
     """A chat that may only ask: the plan's write step is refused like any write there."""
     scope = ChatScope(chat_id=-100, title="club", rights=frozenset({"ask"}), tag="club",
@@ -195,20 +185,15 @@ async def test_a_huge_result_is_cut_before_it_is_handed_on(index):
     assert len(planner.derived[0][1]) <= MAX_INPUT + 20
 
 
-async def test_each_research_step_is_its_own_search_through_the_shared_research(index):
-    """The shared research (one search per message for both sides) keys on the request: a
-    plan's searches, all asked with the same message, would have been one search."""
-    from app.conversation.shared_research import SharedResearch
-
-    class Researcher:
-        async def research(self, request, query, media="text"):
-            return f"находки: {query}"
+async def test_each_research_step_is_its_own_search(index):
+    async def research(request, query, media="text"):
+        return f"находки: {query}"
 
     plan = Plan((Step(1, "research", "детективы"), Step(2, "research", "триллеры"),
                  Step(3, "derive", "сравни", (1, 2), reply=True)))
     planner = FakePlanner(plan)
     await pipe(index, note_script(), planner).handle(
-        "найди детективы и триллеры и сравни", research=SharedResearch(Researcher()).research)
+        "найди детективы и триллеры и сравни", research=research)
 
     inputs = planner.derived[0][1]
     assert "находки: детективы" in inputs and "находки: триллеры" in inputs

@@ -6,23 +6,9 @@ from app.config import Settings, load_settings
 
 def test_defaults_load(env):
     s = load_settings()
-    assert s.notion_version == "2025-09-03"
-    assert s.llm_model == "mistral-nemo:12b"
-    assert s.policy_target_margin == 0.10
+    assert s.undo_window_s == 300
     assert s.allowed_user_ids == frozenset({1, 2})
     assert s.timezone == "UTC"
-
-
-def test_missing_token_fails(env):
-    env.delenv("NOTION_TOKEN")
-    with pytest.raises(ValidationError):
-        Settings(_env_file=None)
-
-
-def test_bad_threshold_fails(env):
-    env.setenv("POLICY_TARGET_MIN", "1.5")
-    with pytest.raises(ValidationError):
-        Settings(_env_file=None)
 
 
 def test_allowlist_parsing(env):
@@ -55,26 +41,16 @@ def test_tokens_are_not_exposed_in_repr_or_str(env):
     assert "tg-test-token" not in str(s)
 
 
-def test_items_per_target_out_of_range_fails(env):
-    env.setenv("ITEMS_PER_TARGET", "200")
-    with pytest.raises(ValidationError):
-        Settings(_env_file=None)
-
-
-def test_inbox_defaults(env):
-    s = load_settings()
-    assert s.inbox_mode == "auto"
-    assert s.inbox_target_id == ""
-
-
-def test_bad_inbox_mode_fails(env):
-    env.setenv("INBOX_MODE", "bogus")
-    with pytest.raises(ValidationError):
-        Settings(_env_file=None)
-
-
 def test_research_budget_defaults(env):
     s = Settings(_env_file=None)
     assert (s.research_max_searches, s.research_max_reads) == (4, 8)
     assert (s.research_soft_deadline_s, s.research_deadline_s) == (90.0, 180.0)
     assert s.jina_api_key.get_secret_value() == ""
+
+
+def test_a_settings_file_from_before_the_notion_removal_still_loads(env, tmp_path):
+    """Prod's .env keeps lines nothing reads any more; they must not stop the bot."""
+    (tmp_path / ".env").write_text(
+        "NOTION_TOKEN=ntn-old\nNOTION_VERSION=2025-09-03\nLLM_MODEL=mistral-nemo:12b\n"
+        "INBOX_MODE=auto\nPOLICY_TARGET_MIN=0.85\n", encoding="utf-8")
+    assert not hasattr(Settings(), "notion_token")

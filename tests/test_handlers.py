@@ -3,7 +3,7 @@ here the same way python-telegram-bot's own Application.process_update would —
 registered handlers and letting the real filters (allowed_filter included) decide whether the
 handler runs at all — but without ever calling Application.initialize()/process_update(), which
 would call Bot.get_me() and touch the network. No test here imports faster_whisper, a real
-Telegram Bot, or a real Orchestrator: FakeOrchestrator/FakeSpeech/FakeDiscovery/FakeStore stand
+Telegram Bot, or a real Orchestrator: FakeOrchestrator/FakeSpeech/FakeStore stand
 in, and every Update/Message/CallbackQuery is a real PTB object built offline."""
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from telegram import CallbackQuery, Chat, Message, MessageEntity, Update, User, Voice
 from telegram.ext import Application, ApplicationBuilder, CommandHandler
 
@@ -21,7 +22,6 @@ from app import texts
 from app.config import Settings
 from app.conversation.reply import Button, Reply
 from app.logging_setup import bind_event
-from app.notion.snapshot import Target, WorkspaceSnapshot
 from app.speech.base import SpeechEmpty, SpeechError
 from app.telegram import handlers as h
 
@@ -66,10 +66,6 @@ class FakeOrchestrator:
         self.calls.append(("undo", chat_id, execution_id))
         return self.reply
 
-    async def cancel(self, chat_id, user_id=0):
-        self.calls.append(("cancel", chat_id))
-        return self.reply
-
 
 class FakeSpeech:
     def __init__(self, result: str | Exception = "transcribed text"):
@@ -81,23 +77,6 @@ class FakeSpeech:
         if isinstance(self.result, Exception):
             raise self.result
         return self.result
-
-
-class FakeDiscovery:
-    def __init__(self, snapshot: WorkspaceSnapshot | None = None, fail: Exception | None = None):
-        self._snapshot = snapshot
-        self.fail = fail
-        self.invalidated = False
-        self.last = snapshot
-
-    def invalidate(self) -> None:
-        self.invalidated = True
-
-    async def get(self) -> WorkspaceSnapshot:
-        if self.fail is not None:
-            raise self.fail
-        self.last = self._snapshot
-        return self._snapshot
 
 
 class FakeStore:
@@ -132,7 +111,7 @@ class FakeBot:
     command's target (message.get_bot().username); `order`, when given, is the same shared list
     FakeOrchestrator appends to."""
 
-    username = "notionbot"
+    username = "assistantbot"
 
     def __init__(self, order: list[str] | None = None):
         self.sent: list[dict] = []
@@ -239,7 +218,7 @@ def callback_update(uid: int, data: str, bot: FakeBot, update_id: int = 1) -> Up
 
 def make_settings() -> Settings:
     return Settings(
-        _env_file=None, notion_token="ntn-test-token", telegram_bot_token="tg-test-token",
+        _env_file=None, telegram_bot_token="tg-test-token",
         telegram_allowed_user_ids=f"{ALLOWED_USER},2",
     )
 
@@ -260,26 +239,11 @@ async def dispatch(app: Application, update: Update, context) -> bool:
     return False
 
 
-def sample_snapshot() -> WorkspaceSnapshot:
-    shopping = Target(
-        id="ds-shop", kind="database", name="Покупки", path="Покупки", description="",
-        parent_page_id=None, database_id="db-shop", fields=[], items=[],
-        operations=frozenset({"create"}), url="https://notion.so/shop", is_inbox=False,
-    )
-    misc = Target(
-        id="pg-misc", kind="page", name="Разное", path="Разное", description="",
-        parent_page_id=None, database_id=None, fields=[], items=[],
-        operations=frozenset({"append"}), url="https://notion.so/misc", is_inbox=True,
-    )
-    return WorkspaceSnapshot(fetched_at=datetime.datetime.now(UTC), targets=[shopping, misc])
-
-
 @dataclass
 class Harness:
     app: Application
     orch: FakeOrchestrator
     speech: FakeSpeech
-    discovery: FakeDiscovery
     store: FakeStore
     bot: FakeBot
     context: SimpleNamespace
@@ -287,19 +251,17 @@ class Harness:
 
 def build(
     *, reply: Reply | None = None, speech_result: str | Exception = "transcribed text",
-    snapshot: WorkspaceSnapshot | None = None, discovery_fail: Exception | None = None,
     order: list[str] | None = None, store: FakeStore | None = None,
 ) -> Harness:
     settings = make_settings()
     app = build_app()
     orch = FakeOrchestrator(reply=reply, order=order)
     speech = FakeSpeech(result=speech_result)
-    discovery = FakeDiscovery(snapshot=snapshot, fail=discovery_fail)
     store = store if store is not None else FakeStore()
-    h.register(app, orch, settings, speech, discovery, store)
+    h.register(app, orch, settings, speech, store)
     bot = FakeBot(order=order)
     context = SimpleNamespace(bot_data=app.bot_data, bot=bot, error=None)
-    return Harness(app, orch, speech, discovery, store, bot, context)
+    return Harness(app, orch, speech, store, bot, context)
 
 
 # ---- text ----------------------------------------------------------------------------------
@@ -457,7 +419,7 @@ async def test_unauthorised_callback_produces_no_send_and_no_answer():
     assert hs.bot.sent == []
 
 
-# ---- /undo, /cancel, /start, /help --------------------------------------------------------
+# ---- /undo, /start, /help -------------------------------------------------------------------
 
 
 async def test_undo_command_hits_orchestrator_undo():
@@ -468,16 +430,6 @@ async def test_undo_command_hits_orchestrator_undo():
 
     assert hs.orch.calls == [("undo", CHAT_ID, None)]
     assert hs.bot.sent[0]["text"] == "undone"
-
-
-async def test_cancel_command_hits_orchestrator_cancel():
-    hs = build(reply=Reply("cancelled"))
-    update = command_update(ALLOWED_USER, "cancel", hs.bot)
-
-    assert await dispatch(hs.app, update, hs.context)
-
-    assert hs.orch.calls == [("cancel", CHAT_ID)]
-    assert hs.bot.sent[0]["text"] == "cancelled"
 
 
 async def test_start_command_replies_with_help_text_and_touches_no_orchestrator():
@@ -499,51 +451,13 @@ async def test_help_command_replies_with_help_text():
     assert hs.bot.sent[0]["text"] == texts.HELP_TEXT
 
 
-# ---- /refresh, /targets ----------------------------------------------------------------------
+@pytest.mark.parametrize("name", ["refresh", "targets", "cancel"])
+async def test_the_notion_commands_are_gone(name):
+    hs = build()
 
+    assert not await dispatch(hs.app, command_update(ALLOWED_USER, name, hs.bot), hs.context)
 
-async def test_refresh_command_invalidates_and_reports_target_count():
-    hs = build(snapshot=sample_snapshot())
-    update = command_update(ALLOWED_USER, "refresh", hs.bot)
-
-    assert await dispatch(hs.app, update, hs.context)
-
-    assert hs.discovery.invalidated is True
-    assert hs.bot.sent[0]["text"] == texts.REFRESH_DONE.format(count=2)
-
-
-async def test_refresh_command_reports_discovery_failure():
-    from app.notion.errors import NotionError
-
-    hs = build(discovery_fail=NotionError(500, "internal_server_error", "boom"))
-    update = command_update(ALLOWED_USER, "refresh", hs.bot)
-
-    assert await dispatch(hs.app, update, hs.context)
-
-    assert hs.bot.sent[0]["text"] == texts.ERRORS["DISCOVERY_FAILED"]
-
-
-async def test_targets_command_renders_tree_with_inbox_marker():
-    # FakeDiscovery(snapshot=...) seeds `.last` directly, as a prior discovery would have —
-    # /targets must render from it without calling `.get()` (no fetch on this path).
-    hs = build(snapshot=sample_snapshot())
-    update = command_update(ALLOWED_USER, "targets", hs.bot)
-
-    assert await dispatch(hs.app, update, hs.context)
-
-    text = hs.bot.sent[0]["text"]
-    assert "Покупки" in text
-    assert "Разное" in text
-    assert "(разное)" in text
-
-
-async def test_targets_command_with_no_snapshot_yet_says_so_without_fetching():
-    hs = build(snapshot=None)
-    update = command_update(ALLOWED_USER, "targets", hs.bot)
-
-    assert await dispatch(hs.app, update, hs.context)
-
-    assert hs.bot.sent[0]["text"] == texts.TARGETS_NONE_YET
+    assert hs.orch.calls == [] and hs.bot.sent == []
 
 
 # ---- undo_id -> set_reply_message_id --------------------------------------------------------
@@ -641,7 +555,7 @@ def test_every_registered_command_is_in_the_published_menu_and_the_help_text():
     """Telegram's "/" menu comes from texts.COMMANDS; a command registered here but missing from
     it is invisible to the user, and one missing from HELP_TEXT is undocumented."""
     app = build_app()
-    h.register(app, FakeOrchestrator(), make_settings(), FakeSpeech(), FakeDiscovery(), FakeStore())
+    h.register(app, FakeOrchestrator(), make_settings(), FakeSpeech(), FakeStore())
 
     registered = {
         name
@@ -655,12 +569,12 @@ def test_every_registered_command_is_in_the_published_menu_and_the_help_text():
         assert f"/{name}" in texts.HELP_TEXT
 
 
-async def test_answered_question_loses_its_keyboard_before_the_reply():
-    """A reply such as «Отменено.» under a question still showing its buttons reads as nothing
-    having happened — which is exactly how the first real cancel was reported."""
+async def test_a_pressed_button_loses_its_keyboard_before_the_reply():
+    """A reply such as «Отменено.» under a message still showing its buttons reads as nothing
+    having happened."""
     order: list[str] = []
     hs = build(reply=Reply("Отменено."), order=order)
-    update = callback_update(ALLOWED_USER, "a:tok:cancel", hs.bot, update_id=77)
+    update = callback_update(ALLOWED_USER, "u:7", hs.bot, update_id=77)
 
     assert await dispatch(hs.app, update, hs.context)
 
@@ -716,17 +630,6 @@ async def test_a_network_error_inside_a_turn_is_still_an_error(caplog):
     with caplog.at_level(logging.ERROR, logger="app.telegram.handlers"):
         await h.error_handler(update, context)
     assert any(r.levelno == logging.ERROR for r in caplog.records)
-
-
-async def test_targets_command_marks_hidden_targets():
-    from dataclasses import replace
-
-    snap = sample_snapshot()
-    snap = replace(snap, targets=[replace(t, hidden=t.id == "ds-shop") for t in snap.targets])
-    hs = build(snapshot=snap)
-    assert await dispatch(hs.app, command_update(ALLOWED_USER, "targets", hs.bot), hs.context)
-    buy = next(line for line in hs.bot.sent[0]["text"].splitlines() if "Покупки" in line)
-    assert texts.TARGETS_HIDDEN_MARKER in buy
 
 
 async def test_typing_is_shown_while_a_message_is_handled():

@@ -156,7 +156,7 @@ async def test_a_group_without_the_right_cannot_set_one(setup):
 # ---- through the orchestrator ------------------------------------------------------------------
 
 from tests.test_orchestrator import CHAT, USER  # noqa: E402
-from tests.test_vault_orchestrator import bot, staged_bot  # noqa: E402,F401 (fixtures)
+from tests.test_orchestrator import bot, staged_bot  # noqa: E402,F401 (fixtures)
 
 
 async def test_undo_cancels_the_reminder_and_takes_the_task_back(staged_bot, tmp_path):  # noqa: F811

@@ -2,28 +2,9 @@ import http.client
 import json
 
 import pytest
-import yaml
 
 from app.admin.server import MAX_BODY_BYTES, AdminServer
 from app.config import Settings
-from app.notion.descriptions import Descriptions, FieldMeta, TargetMeta, WorkspaceNote
-from tools.sample_workspace import sample_snapshot
-
-
-class FakeDiscovery:
-    """Stands in for app.notion.discovery.Discovery: `.last` is a plain attribute, never a
-    fetch, and `.invalidate()` just flips a flag so tests can assert it was called."""
-
-    def __init__(self, snapshot=None):
-        self._snapshot = snapshot
-        self.invalidated = False
-
-    @property
-    def last(self):
-        return self._snapshot
-
-    def invalidate(self):
-        self.invalidated = True
 
 
 @pytest.fixture
@@ -32,18 +13,8 @@ def settings(env):
 
 
 @pytest.fixture
-def descriptions(tmp_path):
-    return Descriptions(tmp_path / "targets.yaml")
-
-
-@pytest.fixture
-def discovery():
-    return FakeDiscovery(sample_snapshot())
-
-
-@pytest.fixture
-def server(settings, discovery, descriptions):
-    s = AdminServer(settings, discovery, descriptions)
+def server(settings):
+    s = AdminServer(settings)
     s.start()
     yield s
     s.stop()
@@ -78,122 +49,18 @@ def test_root_serves_page_with_title(server):
     assert status == 200
     html = body.decode("utf-8")
     assert "<title>" in html
-    assert "Notion" in html
-
-
-def test_targets_mirrors_snapshot(server):
-    status, body = _get(server, "/api/targets")
-    assert status == 200
-    data = json.loads(body)
-    assert "fetched_at" in data
-    by_id = {t["id"]: t for t in data["targets"]}
-    buy = by_id["ds-buy"]
-    assert buy["path"] == "Дом / Покупки"
-    assert buy["is_inbox"] is False
-    # Nothing in targets.yaml yet: the value is empty, Notion's own text is only the hint.
-    assert buy["description"] == ""
-    assert buy["notion_description"].startswith("Список покупок")
-    title_field = next(f for f in buy["fields"] if f["id"] == "title")
-    assert title_field["required"] is True
-    shop_field = next(f for f in buy["fields"] if f["id"] == "shop")
-    assert shop_field["required"] is False
-    assert shop_field["type"] == "select"
-
-
-def test_targets_empty_without_snapshot(settings, descriptions):
-    s = AdminServer(settings, FakeDiscovery(None), descriptions)
-    s.start()
-    try:
-        status, body = _get(s, "/api/targets")
-        assert status == 200
-        assert json.loads(body)["targets"] == []
-    finally:
-        s.stop()
-
-
-def test_post_writes_yaml_and_invalidates_cache(server, discovery, descriptions):
-    payload = {
-        "targets": {
-            "ds-buy": {
-                "description": "Мой список покупок",
-                "inbox": False,
-                "fields": {"shop": {"description": "Сеть магазинов", "required": True}},
-            },
-        },
-    }
-    status, body = _post(server, "/api/descriptions", payload)
-    assert status == 200
-    assert json.loads(body) == {"saved": 1}
-    assert discovery.invalidated is True
-
-    on_disk = yaml.safe_load(descriptions._path.read_text(encoding="utf-8"))
-    assert on_disk["ds-buy"]["description"] == "Мой список покупок"
-    assert on_disk["ds-buy"]["fields"]["shop"]["required"] is True
-    assert on_disk["ds-buy"]["fields"]["shop"]["description"] == "Сеть магазинов"
-
-
-def test_post_preserves_untouched_targets(server, descriptions):
-    descriptions.save({"ds-todo": TargetMeta(description="не трогать")})
-    payload = {"targets": {"ds-buy": {"description": "x", "inbox": False, "fields": {}}}}
-    status, _body = _post(server, "/api/descriptions", payload)
-    assert status == 200
-    on_disk = descriptions.load()
-    assert on_disk["ds-todo"].description == "не трогать"
-    assert on_disk["ds-buy"].description == "x"
-
-
-def test_save_with_no_changes_reports_zero(server, descriptions):
-    payload = {"targets": {"ds-buy": {"description": "", "inbox": False, "fields": {}}}}
-    status, body = _post(server, "/api/descriptions", payload)
-    assert status == 200
-    assert json.loads(body) == {"saved": 0}
-
-
-def test_two_inbox_flags_rejected_and_nothing_written(server, descriptions):
-    descriptions.save({"ds-buy": TargetMeta(description="original")})
-    before = descriptions._path.read_text(encoding="utf-8")
-    payload = {
-        "targets": {
-            "ds-buy": {"description": "changed", "inbox": True, "fields": {}},
-            "ds-todo": {"description": "", "inbox": True, "fields": {}},
-        },
-    }
-    status, _body = _post(server, "/api/descriptions", payload)
-    assert status == 400
-    assert descriptions._path.read_text(encoding="utf-8") == before
-
-
-def test_unknown_target_id_rejected(server, descriptions):
-    payload = {"targets": {"does-not-exist": {"description": "x", "inbox": False, "fields": {}}}}
-    status, _body = _post(server, "/api/descriptions", payload)
-    assert status == 400
-    assert not descriptions._path.exists()
-
-
-def test_unknown_field_id_rejected(server, descriptions):
-    payload = {
-        "targets": {
-            "ds-buy": {
-                "description": "x", "inbox": False,
-                "fields": {"not-a-field": {"description": "y", "required": True}},
-            },
-        },
-    }
-    status, _body = _post(server, "/api/descriptions", payload)
-    assert status == 400
-    assert not descriptions._path.exists()
+    assert "Notion" not in html
 
 
 def test_non_loopback_host_rejected(server):
-    status, _body = _get(server, "/api/targets", host="evil.example.com")
+    status, _body = _get(server, "/api/settings", host="evil.example.com")
     assert status == 403
 
 
-def test_non_loopback_host_rejected_on_post(server, descriptions):
-    payload = {"targets": {}}
-    status, _body = _post(server, "/api/descriptions", payload, host="evil.example.com")
+def test_non_loopback_host_rejected_on_post(server):
+    payload = {}
+    status, _body = _post(server, "/api/settings", payload, host="evil.example.com")
     assert status == 403
-    assert not descriptions._path.exists()
 
 
 def test_unknown_path_is_404(server):
@@ -201,17 +68,19 @@ def test_unknown_path_is_404(server):
     assert status == 404
 
 
-def test_wrong_method_on_known_path_is_404(server):
-    status, _body = _post(server, "/api/targets", {"targets": {}})
-    assert status == 404
+def test_the_old_paths_are_gone(server):
+    assert _get(server, "/api/targets")[0] == 404
+    assert _post(server, "/api/descriptions", {})[0] == 404
 
 
-def test_malformed_json_rejected_and_nothing_written(server, descriptions):
-    descriptions.save({"ds-buy": TargetMeta(description="original")})
-    before = descriptions._path.read_text(encoding="utf-8")
-    status, _body = _post(server, "/api/descriptions", b"{not json at all")
+def test_malformed_json_rejected(server):
+    status, _body = _post(server, "/api/settings", b"{not json at all")
     assert status == 400
-    assert descriptions._path.read_text(encoding="utf-8") == before
+
+
+def test_a_body_that_is_not_an_object_is_rejected(server):
+    status, _body = _post(server, "/api/settings", [1, 2])
+    assert status == 400
 
 
 def _post_with_content_length(server, path, body_bytes, content_length_header):
@@ -231,84 +100,30 @@ def _post_with_content_length(server, path, body_bytes, content_length_header):
         conn.close()
 
 
-def test_non_numeric_content_length_rejected(server, descriptions):
-    status, _body = _post_with_content_length(server, "/api/descriptions", b"{}", "abc")
+def test_non_numeric_content_length_rejected(server):
+    status, _body = _post_with_content_length(server, "/api/settings", b"{}", "abc")
     assert status == 400
-    assert not descriptions._path.exists()
 
 
-def test_negative_content_length_rejected(server, descriptions):
-    status, _body = _post_with_content_length(server, "/api/descriptions", b"{}", "-1")
+def test_negative_content_length_rejected(server):
+    status, _body = _post_with_content_length(server, "/api/settings", b"{}", "-1")
     assert status == 400
-    assert not descriptions._path.exists()
 
 
-def test_content_length_over_cap_rejected(server, descriptions):
+def test_content_length_over_cap_rejected(server):
     status, _body = _post_with_content_length(
-        server, "/api/descriptions", b"{}", str(MAX_BODY_BYTES + 1)
+        server, "/api/settings", b"{}", str(MAX_BODY_BYTES + 1)
     )
     assert status == 400
-    assert not descriptions._path.exists()
 
 
 # ---- the INBOX_TARGET_ID override must not be written into the file ----------------------------
 
 
-@pytest.fixture
-def locked_server(env, discovery, descriptions):
-    """A server whose settings carry INBOX_TARGET_ID, i.e. the page's inbox radios are disabled."""
-    s = AdminServer(
-        Settings(_env_file=None, admin_ui_port=0, inbox_target_id="ds-buy"),
-        discovery, descriptions,
-    )
-    s.start()
-    yield s
-    s.stop()
-
-
-def test_inbox_flag_is_not_persisted_while_the_env_override_is_active(
-    locked_server, descriptions
-):
-    """The page disables the radio group when INBOX_TARGET_ID is set, but a disabled radio is
-    still `checked` and `collectBody` reads `.checked` — so every save posts the env-chosen
-    target's `inbox: true`. Persisting it would leave an inbox the user never picked behind once
-    the env var is unset again."""
-    payload = {
-        "targets": {"ds-buy": {"description": "Мой список", "inbox": True, "fields": {}}},
-    }
-    status, _ = _post(locked_server, "/api/descriptions", payload)
-
-    assert status == 200
-    on_disk = yaml.safe_load(descriptions._path.read_text(encoding="utf-8"))
-    assert on_disk["ds-buy"]["description"] == "Мой список"  # the rest of the save still applies
-    assert on_disk["ds-buy"]["inbox"] is False
-
-
-def test_inbox_flag_already_in_the_file_survives_a_locked_save(locked_server, descriptions):
-    """The override hides the user's own earlier choice; a save while it is active must not
-    quietly clear it either."""
-    descriptions.save({"ds-todo": TargetMeta(description="x", inbox=True)})
-    payload = {"targets": {"ds-buy": {"description": "y", "inbox": True, "fields": {}}}}
-
-    status, _ = _post(locked_server, "/api/descriptions", payload)
-
-    assert status == 200
-    assert descriptions.load()["ds-todo"].inbox is True
-
-
-def test_inbox_flag_is_persisted_when_no_override_is_set(server, descriptions):
-    payload = {"targets": {"ds-buy": {"description": "x", "inbox": True, "fields": {}}}}
-
-    status, _ = _post(server, "/api/descriptions", payload)
-
-    assert status == 200
-    assert descriptions.load()["ds-buy"].inbox is True
-
-
 # ---- the page reports a failed load instead of going blank ------------------------------------
 
 
-def test_page_surfaces_a_failed_targets_fetch(server):
+def test_page_surfaces_a_failed_load(server):
     """An unhandled promise rejection in load() leaves a blank page and a message only visible in
     the browser console; the page has to say something itself."""
     _, body = _get(server, "/")
@@ -320,147 +135,51 @@ def test_page_surfaces_a_failed_targets_fetch(server):
 
 
 
-def test_saved_values_show_immediately_even_with_a_stale_snapshot(server, discovery):
-    """The page used to redraw from the snapshot, which discovery refreshes only when a Telegram
-    message arrives — so a save looked lost after every reload."""
-    stale = discovery.last
-    status, _ = _post(server, "/api/descriptions", {"targets": {
-        "ds-buy": {"description": "Покупки для дома", "inbox": True,
-                   "fields": {"shop": {"description": "Где купить", "required": True}}},
-    }})
-    assert status == 200
-    assert discovery.last is stale  # nothing re-ran discovery
-
-    data = json.loads(_get(server, "/api/targets")[1])
-    buy = next(t for t in data["targets"] if t["id"] == "ds-buy")
-    assert buy["description"] == "Покупки для дома"
-    assert buy["notion_description"] == ""  # a saved value needs no hint
-    assert buy["is_inbox"] is True
-    shop = next(f for f in buy["fields"] if f["id"] == "shop")
-    assert shop["description"] == "Где купить" and shop["required"] is True
-
-
-def test_saving_what_the_page_shows_changes_nothing(server, descriptions):
-    """Save posts every box on the page. If the page showed anything other than the file, a
-    save would write that back over it — the stale-snapshot version wrote blanks over real
-    descriptions. Load, post it back unchanged, and every saved value must survive."""
-    _post(server, "/api/descriptions", {"targets": {
-        "ds-buy": {"description": "Покупки для дома", "inbox": True, "fields": {}},
-        "ds-todo": {"description": "Дела", "inbox": False,
-                    "fields": {"prio": {"description": "Срочность", "required": True}}},
-    }})
-    shown = json.loads(_get(server, "/api/targets")[1])
-    echoed = {"targets": {
-        t["id"]: {
-            "description": t["description"], "inbox": t["is_inbox"],
-            "fields": {f["id"]: {"description": f["description"], "required": f["required"]}
-                       for f in t["fields"]},
-        }
-        for t in shown["targets"]
-    }}
-    assert _post(server, "/api/descriptions", echoed)[0] == 200
-
-    after = descriptions.load()
-    assert after["ds-buy"].description == "Покупки для дома" and after["ds-buy"].inbox
-    assert after["ds-todo"].description == "Дела"
-    assert after["ds-todo"].fields["prio"].required
-    assert after["ds-todo"].fields["prio"].description == "Срочность"
-
-
-def test_local_only_flag_round_trips_through_the_page(server, descriptions):
-    payload = {"targets": {"ds-buy": {"description": "", "inbox": False, "local_only": True,
-                                      "fields": {}}}}
-    status, body = _post(server, "/api/descriptions", payload)
-    assert status == 200 and json.loads(body) == {"saved": 1}
-    assert descriptions.load()["ds-buy"].local_only is True
-    by_id = {t["id"]: t for t in json.loads(_get(server, "/api/targets")[1])["targets"]}
-    assert by_id["ds-buy"]["local_only"] is True and by_id["ds-todo"]["local_only"] is False
-
-
-def test_targets_lists_options_of_select_fields_only(server, descriptions):
-    descriptions.save({"ds-todo": TargetMeta(fields={
-        "tags": FieldMeta(options={"o-дом": "всё по дому"})})})
-    by_id = {t["id"]: t for t in json.loads(_get(server, "/api/targets")[1])["targets"]}
-    fields = {f["id"]: f for f in by_id["ds-todo"]["fields"]}
-    assert {o["name"]: o["description"] for o in fields["tags"]["options"]} == {
-        "дом": "всё по дому", "работа": "", "здоровье": ""}
-    assert fields["project"]["options"] == []  # a relation's options are rows, not a vocabulary
-    assert fields["title"]["options"] == []
-
-
-def test_option_descriptions_save_and_an_emptied_box_removes_one(server, descriptions):
-    def post(options):
-        payload = {"targets": {"ds-todo": {"description": "", "inbox": False,
-                                           "fields": {"tags": {"options": options}}}}}
-        return _post(server, "/api/descriptions", payload)
-
-    assert post({"o-дом": "всё по дому", "o-работа": "  "})[0] == 200
-    assert descriptions.load()["ds-todo"].fields["tags"].options == {"o-дом": "всё по дому"}
-    assert post({"o-дом": ""})[0] == 200
-    assert descriptions.load()["ds-todo"].fields["tags"].options == {}
-
-
-def test_unknown_option_is_rejected_and_nothing_written(server, descriptions):
-    payload = {"targets": {"ds-todo": {"description": "x", "fields": {
-        "tags": {"options": {"o-nope": "?"}}}}}}
-    status, _ = _post(server, "/api/descriptions", payload)
-    assert status == 400 and descriptions.load() == {}
-
-
-def test_hidden_flag_round_trips(server, descriptions):
-    payload = {"targets": {"ds-buy": {"description": "", "hidden": True, "fields": {}}}}
-    assert _post(server, "/api/descriptions", payload)[0] == 200
-    assert descriptions.load()["ds-buy"].hidden is True
-    by_id = {t["id"]: t for t in json.loads(_get(server, "/api/targets")[1])["targets"]}
-    assert by_id["ds-buy"]["hidden"] is True and by_id["ds-todo"]["hidden"] is False
-
-
-def test_mail_buckets_are_served_and_saved_without_a_release(settings, discovery,
-                                                              descriptions, tmp_path):
+def test_mail_buckets_are_served_and_saved_without_a_release(settings, tmp_path):
     """The buckets are vocabulary, not code: editing them must not need a new build."""
     from app.mail.buckets import Buckets
 
     buckets = Buckets(tmp_path / "mail_buckets.txt", "bills:что оплатить,other:остальное")
-    s = AdminServer(settings, discovery, descriptions, None, None, buckets)
+    s = AdminServer(settings, None, buckets)
     s.start()
     try:
-        assert json.loads(_get(s, "/api/targets")[1])["mail_buckets"].startswith("bills:")
+        assert json.loads(_get(s, "/api/settings")[1])["mail_buckets"].startswith("bills:")
         wanted = "bills:что-то нужно оплатить,financial:банк и платежи,other:остальное"
-        status, body = _post(s, "/api/descriptions", {"targets": {}, "mail_buckets": wanted})
+        status, body = _post(s, "/api/settings", {"mail_buckets": wanted})
         assert status == 200 and json.loads(body) == {"saved": 1}
         names, meanings = buckets.parsed()
         assert names == ["bills", "financial", "other"]
         assert meanings["financial"] == "банк и платежи"
-        assert json.loads(_post(s, "/api/descriptions",
-                                {"targets": {}, "mail_buckets": wanted})[1]) == {"saved": 0}
-        assert _post(s, "/api/descriptions", {"targets": {}, "mail_buckets": 5})[0] == 400
+        assert json.loads(_post(s, "/api/settings",
+                                {"mail_buckets": wanted})[1]) == {"saved": 0}
+        assert _post(s, "/api/settings", {"mail_buckets": 5})[0] == 400
     finally:
         s.stop()
 
 
-def test_tuning_is_served_and_saved(settings, discovery, descriptions, tmp_path):
+def test_tuning_is_served_and_saved(settings, tmp_path):
     """The settings that used to need a release, or at least a restart."""
     from app.tuning import Defaults, Tuning
 
     tuning = Tuning(tmp_path / "tuning.json", Defaults(
         bot_name="", agenda_at="09:00", mail_at="12:00,19:00",
         web_words=("найди",), countdown_tag="отсчёт", date_props=("date",)))
-    s = AdminServer(settings, discovery, descriptions, None, None, None, tuning)
+    s = AdminServer(settings, None, None, tuning)
     s.start()
     try:
-        served = json.loads(_get(s, "/api/targets")[1])["tuning"]
+        served = json.loads(_get(s, "/api/settings")[1])["tuning"]
         assert served["agenda_at"] == "09:00" and served["web_words"] == "найди"
-        status, body = _post(s, "/api/descriptions", {"targets": {}, "tuning": {
+        status, body = _post(s, "/api/settings", {"tuning": {
             "bot_name": "Робо", "agenda_at": "08:30", "web_words": "найди, погугли"}})
         assert status == 200 and json.loads(body) == {"saved": 3}
         assert tuning.bot_name == "Робо" and tuning.agenda_at == "08:30"
         assert tuning.web_words == ("найди", "погугли")
-        assert _post(s, "/api/descriptions", {"targets": {}, "tuning": "нет"})[0] == 400
+        assert _post(s, "/api/settings", {"tuning": "нет"})[0] == 400
     finally:
         s.stop()
 
 
-def test_the_never_open_list_is_on_the_page(settings, discovery, descriptions, tmp_path):
+def test_the_never_open_list_is_on_the_page(settings, tmp_path):
     """Sites whose links the bot never reads: served, editable, and shown in both lists the
     page loads and saves from."""
     import re
@@ -477,33 +196,15 @@ def test_the_never_open_list_is_on_the_page(settings, discovery, descriptions, t
     tuning = Tuning(tmp_path / "tuning.json", Defaults(
         bot_name="", agenda_at="09:00", mail_at="12:00,19:00",
         web_words=("найди",), countdown_tag="отсчёт", date_props=("date",)))
-    s = AdminServer(settings, discovery, descriptions, None, None, None, tuning)
+    s = AdminServer(settings, None, None, tuning)
     s.start()
     try:
-        assert "notion.so" in json.loads(_get(s, "/api/targets")[1])["tuning"]["never_open"]
-        _post(s, "/api/descriptions", {"targets": {}, "tuning": {"never_open": "mybank.example"}})
+        assert "notion.so" in json.loads(_get(s, "/api/settings")[1])["tuning"]["never_open"]
+        _post(s, "/api/settings", {"tuning": {"never_open": "mybank.example"}})
         assert tuning.never_open == ("mybank.example",)
     finally:
         s.stop()
 
-
-def test_workspace_note_is_served_and_saved(settings, discovery, descriptions, tmp_path):
-    note = WorkspaceNote(tmp_path / "workspace_note.md")
-    s = AdminServer(settings, discovery, descriptions, note)
-    s.start()
-    try:
-        assert json.loads(_get(s, "/api/targets")[1])["workspace_note"] == ""
-        status, body = _post(s, "/api/descriptions",
-                             {"targets": {}, "workspace_note": "Все задачи — в TODO."})
-        assert status == 200 and json.loads(body) == {"saved": 1}
-        assert note.load() == "Все задачи — в TODO."
-        assert json.loads(_get(s, "/api/targets")[1])["workspace_note"] == "Все задачи — в TODO."
-        status, body = _post(s, "/api/descriptions",
-                             {"targets": {}, "workspace_note": "Все задачи — в TODO."})
-        assert json.loads(body) == {"saved": 0}  # unchanged: nothing rewritten
-        assert _post(s, "/api/descriptions", {"targets": {}, "workspace_note": 5})[0] == 400
-    finally:
-        s.stop()
 
 # ---- the page's own script ---------------------------------------------------------------------
 
@@ -566,7 +267,7 @@ def test_every_element_the_script_reaches_for_exists_in_the_markup():
     assert wanted - declared == set()
 
     for prefix, names in (("tuning-", re.search(r'\["bot_name",(.*?)\]', html, re.S)),
-                          ("switch-", re.search(r'\["notion", "obsidian"(.*?)\]', html, re.S))):
+                          ("switch-", re.search(r'\["obsidian", "linker"(.*?)\]', html, re.S))):
         assert names is not None, prefix
         for name in re.findall(r'"([\w_]+)"', names.group(0)):
             assert prefix + name in declared, prefix + name
@@ -575,7 +276,7 @@ def test_every_element_the_script_reaches_for_exists_in_the_markup():
 def _post_as(server, headers: dict, payload: dict):
     conn = http.client.HTTPConnection("127.0.0.1", server.port, timeout=5)
     try:
-        conn.request("POST", "/api/descriptions", body=json.dumps(payload).encode(),
+        conn.request("POST", "/api/settings", body=json.dumps(payload).encode(),
                      headers={"Host": "127.0.0.1", **headers})
         resp = conn.getresponse()
         return resp.status, json.loads(resp.read() or b"{}")
@@ -583,12 +284,12 @@ def _post_as(server, headers: dict, payload: dict):
         conn.close()
 
 
-def test_a_post_from_another_site_is_refused(server, descriptions):
+def test_a_post_from_another_site_is_refused(server):
     """Loopback keeps other machines out, not other *pages*: a site open in the user's own
     browser could POST here and flip the switches or rewrite the research instructions. The
     page sends JSON, which a foreign origin cannot send without a preflight this server
     does not answer; anything else, or a foreign Origin, is refused before it is read."""
-    payload = {"targets": {}}
+    payload = {}
     assert _post_as(server, {"Content-Type": "text/plain"}, payload)[0] == 403
     assert _post_as(server, {"Content-Type": "application/json",
                              "Origin": "https://evil.example"}, payload)[0] == 403
@@ -598,8 +299,7 @@ def test_a_post_from_another_site_is_refused(server, descriptions):
                     payload)[0] == 200
 
 
-def test_chats_and_the_vaults_tags_are_served_and_chats_saved(settings, discovery, descriptions,
-                                                              tmp_path):
+def test_chats_and_the_vaults_tags_are_served_and_chats_saved(settings, tmp_path):
     """The page's «Чаты» section: listed groups, the groups seen, and the vault's tags and
     folders to pick a scope from."""
     from app.chats import Chats
@@ -610,27 +310,26 @@ def test_chats_and_the_vaults_tags_are_served_and_chats_saved(settings, discover
                                                     encoding="utf-8")
     chats = Chats(tmp_path / "chats.json")
     chats.saw(-100500, "Клуб")
-    s = AdminServer(settings, discovery, descriptions, chats=chats,
+    s = AdminServer(settings, chats=chats,
                     vault_index=VaultIndex(tmp_path / "vault"))
     s.start()
     try:
-        served = json.loads(_get(s, "/api/targets")[1])
+        served = json.loads(_get(s, "/api/settings")[1])
         assert served["chats"] == {"chats": [], "seen": [
             {"chat_id": -100500, "title": "Клуб", "at": chats.all()["seen"][0]["at"]}]}
         assert served["vault_tags"] == ["клуб"] and served["vault_folders"] == ["Клуб"]
-        status, body = _post(s, "/api/descriptions", {"targets": {}, "chats": [
+        status, body = _post(s, "/api/settings", {"chats": [
             {"chat_id": -100500, "title": "Клуб", "rights": ["ask", "tasks"], "tag": "клуб",
              "folder": "Клуб", "enabled": True, "full": False, "instruction": ""}]})
         assert status == 200 and json.loads(body) == {"saved": 1}
         assert chats.get(-100500).rights == {"ask", "tasks"}
-        assert _post(s, "/api/descriptions", {"targets": {}, "chats": [{"title": "x"}]})[0] \
+        assert _post(s, "/api/settings", {"chats": [{"title": "x"}]})[0] \
             == 400
     finally:
         s.stop()
 
 
-def test_reminder_rules_and_pending_reminders_on_the_page(settings, discovery, descriptions,
-                                                          tmp_path):
+def test_reminder_rules_and_pending_reminders_on_the_page(settings, tmp_path):
     from datetime import UTC, datetime
 
     from app.audit.store import AuditStore
@@ -645,81 +344,79 @@ def test_reminder_rules_and_pending_reminders_on_the_page(settings, discovery, d
     rid = store.add(1, 1, "купить хлеб", datetime(2026, 10, 16, 6, 0, tzinfo=UTC))
     rules = ReminderRules(tmp_path / "rules.json")
     settings = settings.model_copy(update={"timezone": "Europe/Paris"})
-    s = AdminServer(settings, discovery, descriptions, reminder_rules=rules, reminders=store)
+    s = AdminServer(settings, reminder_rules=rules, reminders=store)
     s.start()
     try:
-        served = json.loads(_get(s, "/api/targets")[1])
+        served = json.loads(_get(s, "/api/settings")[1])
         assert served["reminder_rules"] == []
         assert served["reminders"][0]["text"] == "купить хлеб"
         assert served["reminders"][0]["due"].endswith("08:00")  # local time
         assert {c["chat_id"] for c in served["chat_choices"]} >= {1}
-        status, body = _post(s, "/api/descriptions", {
-            "targets": {}, "cancel_reminders": [rid],
+        status, body = _post(s, "/api/settings", {
+            "cancel_reminders": [rid],
             "reminder_rules": [{"kind": "notes", "folder": "Клуб", "days_before": 1,
                                 "time": "09:00", "chat_id": 1}]})
         assert status == 200 and json.loads(body) == {"saved": 2}
         assert store.pending() == [] and rules.all()[0].folder == "Клуб"
-        assert _post(s, "/api/descriptions", {"targets": {}, "reminder_rules": [
+        assert _post(s, "/api/settings", {"reminder_rules": [
             {"kind": "tasks", "chat_id": 1}]})[0] == 400  # a task rule needs a tag
     finally:
         s.stop()
         store.close()
 
 
-def test_google_sources_are_served_and_a_pasted_link_is_saved(settings, discovery,
-                                                              descriptions, tmp_path):
+def test_google_sources_are_served_and_a_pasted_link_is_saved(settings, tmp_path):
     from app.google.sources import Sources
 
     sources = Sources(tmp_path / "sources.json")
-    s = AdminServer(settings, discovery, descriptions, sources=sources,
+    s = AdminServer(settings, sources=sources,
                     google_status=lambda: {"sign_in_needed": False, "sources": []})
     s.start()
     try:
-        served = json.loads(_get(s, "/api/targets")[1])
+        served = json.loads(_get(s, "/api/settings")[1])
         assert served["sources"] == [] and served["google"]["sign_in_needed"] is False
-        status, body = _post(s, "/api/descriptions", {"targets": {}, "sources": [
+        status, body = _post(s, "/api/settings", {"sources": [
             {"link": "https://docs.google.com/document/d/Doc-1/edit", "title": "Заметки",
              "instruction": "главы по книгам", "chats": [-100], "split": "headings"}]})
         assert status == 200 and json.loads(body) == {"saved": 1}
         [saved] = sources.all()
         assert (saved.file_id, saved.kind, saved.split) == ("Doc-1", "doc", "headings")
         assert saved.instruction == "главы по книгам" and saved.chats == {-100}
-        assert _post(s, "/api/descriptions", {"targets": {}, "sources": [
+        assert _post(s, "/api/settings", {"sources": [
             {"link": "https://example.com/x"}]})[0] == 400
     finally:
         s.stop()
 
 
-def test_watched_folders_and_syncthing_are_served_and_a_folder_is_saved(settings, discovery,
-                                                                        descriptions, tmp_path):
+def test_watched_folders_and_syncthing_are_served_and_a_folder_is_saved(settings, tmp_path):
     from app.watch.folders import Folders
 
     folders = Folders(tmp_path / "folders.json")
-    s = AdminServer(settings, discovery, descriptions, folders=folders,
+    s = AdminServer(settings, folders=folders,
                     folder_status=lambda: [{"id": "x", "title": "Runs", "ok": True,
                                             "detail": "ok"}],
                     sync_status=lambda: [{"name": "Phone", "ok": False, "detail": "away"}])
     s.start()
     try:
-        served = json.loads(_get(s, "/api/targets")[1])
+        served = json.loads(_get(s, "/api/settings")[1])
         assert served["folders"] == [] and served["folder_status"][0]["title"] == "Runs"
         assert served["syncthing"] == [{"name": "Phone", "ok": False, "detail": "away"}]
-        status, body = _post(s, "/api/descriptions", {"targets": {}, "folders": [
+        status, body = _post(s, "/api/settings", {"folders": [
             {"path": "D:/runs", "title": "Runs", "pattern": "*.md", "instruction": "anything?"}]})
         assert status == 200 and json.loads(body) == {"saved": 1}
         [saved] = folders.all()
         assert (saved.path, saved.pattern, saved.instruction) == ("D:/runs", "*.md", "anything?")
-        assert _post(s, "/api/descriptions", {"targets": {}, "folders": [
+        assert _post(s, "/api/settings", {"folders": [
             {"title": "no path"}]})[0] == 400
     finally:
         s.stop()
 
 
-def test_without_syncthing_the_page_is_told_so(settings, discovery, descriptions):
-    s = AdminServer(settings, discovery, descriptions)
+def test_without_syncthing_the_page_is_told_so(settings):
+    s = AdminServer(settings)
     s.start()
     try:
-        served = json.loads(_get(s, "/api/targets")[1])
+        served = json.loads(_get(s, "/api/settings")[1])
         assert served["syncthing"] is None and "folders" not in served
     finally:
         s.stop()

@@ -1,11 +1,11 @@
 """The thin PTB transport over app.conversation.orchestrator.Orchestrator: parse one update, call
-one orchestrator method, render the Reply it returns, stop. No Interpretation, no Notion payload,
-no decision about what gets saved lives here — that is the orchestrator's job, and if a handler
+one orchestrator method, render the Reply it returns, stop. No decision about what gets saved
+lives here — that is the orchestrator's job, and if a handler
 below starts making one, that is a bug in this module, not a missing feature.
 
 `register` is the only export most callers need; it wires every handler onto the PTB
-`Application` and stashes the five collaborators (orchestrator, settings, speech, discovery,
-audit store) on `application.bot_data`, so every handler function below reads them from
+`Application` and stashes its collaborators (orchestrator, settings, speech, audit store,
+chats) on `application.bot_data`, so every handler function below reads them from
 `context.bot_data` rather than closing over them — which keeps the handler functions themselves
 plain, module-level, and callable directly from a test with a hand-built `context`.
 
@@ -54,13 +54,10 @@ from app.conversation.orchestrator import Orchestrator
 from app.conversation.reply import Reply
 from app.logging_setup import event_id_var
 from app.media.instagram import Instagram
-from app.notion.discovery import Discovery
-from app.notion.snapshot import WorkspaceSnapshot
 from app.pointing import clean_answer, points_back
 from app.speech.base import SpeechEmpty, SpeechError, SpeechToText
 from app.telegram.auth import (
     GROUPS,
-    allowed_filter,
     chat_filter,
     deny,
     is_allowed,
@@ -79,7 +76,6 @@ log = logging.getLogger(__name__)
 _ORCH = "orch"
 _SETTINGS = "settings"
 _SPEECH = "speech"
-_DISCOVERY = "discovery"
 _STORE = "store"
 _CHATS = "chats"
 _RECENT = "recent"
@@ -94,14 +90,13 @@ MAIL_READ, MAIL_UNREAD = "mr", "mu"
 
 def register(
     app: Application, orch: Orchestrator, settings: Settings, speech: SpeechToText,
-    discovery: Discovery, store: AuditStore, mail=None, chats: Chats | None = None,
+    store: AuditStore, mail=None, chats: Chats | None = None,
     names: Callable[[], tuple[str, ...]] = lambda: (),
     recent: RecentMessages | None = None, instagram: Instagram | None = None,
 ) -> None:
     app.bot_data[_ORCH] = orch
     app.bot_data[_SETTINGS] = settings
     app.bot_data[_SPEECH] = speech
-    app.bot_data[_DISCOVERY] = discovery
     app.bot_data[_STORE] = store
     app.bot_data[MAIL] = mail
     app.bot_data[_CHATS] = chats
@@ -110,13 +105,8 @@ def register(
 
     # Private chats of allowed users, and the groups listed in data/chats.json (app/chats.py).
     gate = chat_filter(settings, chats, names, recent)
-    # Notion's targets and discovery are the owner's: private chats only.
-    owner = allowed_filter(settings) & filters.ChatType.PRIVATE
     app.add_handler(CommandHandler(["start", "help"], _cmd_help, filters=gate))
     app.add_handler(CommandHandler("undo", _cmd_undo, filters=gate))
-    app.add_handler(CommandHandler("cancel", _cmd_cancel, filters=gate))
-    app.add_handler(CommandHandler("refresh", _cmd_refresh, filters=owner))
-    app.add_handler(CommandHandler("targets", _cmd_targets, filters=owner))
     # `gate` is the outermost (rightmost) operand of every `&` below, not the leftmost: PTB's
     # `_MergedFilter.filter` always evaluates its `base_filter` first and short-circuits the
     # `and_filter` when that base is falsy, so putting the cheap type check first means `gate`
@@ -410,50 +400,6 @@ async def _cmd_undo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     orch: Orchestrator = context.bot_data[_ORCH]
     reply = await orch.undo(update.effective_chat.id, user_id=update.effective_user.id)
     await _send(update, context, reply, context.bot_data[_STORE])
-
-
-async def _cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    orch: Orchestrator = context.bot_data[_ORCH]
-    reply = await orch.cancel(update.effective_chat.id, user_id=update.effective_user.id)
-    await _send(update, context, reply, context.bot_data[_STORE])
-
-
-async def _cmd_refresh(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    discovery: Discovery = context.bot_data[_DISCOVERY]
-    store: AuditStore = context.bot_data[_STORE]
-    discovery.invalidate()
-    try:
-        snapshot = await discovery.get()
-    except Exception as e:  # same class of failure app.conversation.orchestrator degrades on
-        log.warning("refresh failed: %s", e)
-        await _send(update, context, Reply(texts.ERRORS["DISCOVERY_FAILED"]), store)
-        return
-    reply = Reply(texts.REFRESH_DONE.format(count=len(snapshot.targets)))
-    await _send(update, context, reply, store)
-
-
-async def _cmd_targets(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    discovery: Discovery = context.bot_data[_DISCOVERY]
-    store: AuditStore = context.bot_data[_STORE]
-    snapshot = discovery.last
-    if snapshot is None:
-        await _send(update, context, Reply(texts.TARGETS_NONE_YET), store)
-        return
-    await _send(update, context, Reply(_targets_text(snapshot)), store)
-
-
-def _targets_text(snapshot: WorkspaceSnapshot) -> str:
-    """One line per target: its full path (the breadcrumb already ends in the target's own
-    name, so the path alone carries both), its kind, and texts.TARGETS_INBOX_MARKER on whichever
-    one is the inbox — the point of /targets is to show the user at a glance where an unresolved
-    message goes."""
-    lines = [texts.TARGETS_HEADER]
-    for t in snapshot.targets:
-        marker = f" {texts.TARGETS_INBOX_MARKER}" if t.is_inbox else ""
-        if t.hidden:
-            marker += f" {texts.TARGETS_HIDDEN_MARKER}"
-        lines.append(f"{t.path} — {texts.TARGET_KIND_LABELS[t.kind]}{marker}")
-    return "\n".join(lines)
 
 
 # ---- errors --------------------------------------------------------------------------------

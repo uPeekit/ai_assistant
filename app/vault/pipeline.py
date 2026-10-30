@@ -1,8 +1,5 @@
-"""The Obsidian side of a message, end to end and on its own.
-
-It shares nothing with the Notion pipeline but the message itself: its own interpreter (the
-filer), its own check, its own writer, its own undo. Notion can be switched off without
-touching any of it.
+"""What the bot does with a message, end to end: the interpreter (the filer), its check, the
+writer, and undo.
 
 It never asks the user anything and never fails a message: a model that is down, an action that
 does not check out, a note that is gone — all of it ends as a line in the inbox note or as one
@@ -411,12 +408,6 @@ class VaultPipeline:
             return actions, []
         return gate(actions, self._index)
 
-    @property
-    def plans_itself(self) -> bool:
-        """Does this vault's reader look things up and search the web on its own? Then the
-        Notion side hands it nothing: the two branches plan independently."""
-        return bool(getattr(self._filer, "plans_itself", False))
-
     async def aclose(self) -> None:
         for task in list(self._tasks):
             task.cancel()
@@ -433,7 +424,6 @@ class VaultPipeline:
             await self._answerer.aclose()
 
     async def handle(self, message: str, *, content: str = "",
-                     go: Callable[[], Awaitable[bool]] | None = None,
                      research: Research | None = None, links: tuple = (),
                      answer: Callable[[str, list], Awaitable[str]] | None = None,
                      chat: ChatRef | None = None, history: str = "", answers: tuple = (),
@@ -444,14 +434,10 @@ class VaultPipeline:
         """Read the message, write the vault, and start the linking behind the reply.
 
         `content` is text the caller already has (a plan step's research): the filer still
-        decides where it goes, but it is written as it stands. `go` is awaited before
-        anything is written, so a caller that started this in parallel and then learned it
-        was not wanted can stop it without a half-finished write — cancelling the task
-        could not, because the writes happen in a thread.
+        decides where it goes, but it is written as it stands.
 
         `research` runs a web search for an action that asks for one (the staged reader
-        decides that on its own); the orchestrator hands in one that is shared with the
-        Notion side, so the same search for the same message runs once."""
+        decides that on its own)."""
         try:
             # The answer to the bot's «who are you in the records»: their name is kept, and
             # the question they asked first is the one to answer now.
@@ -463,7 +449,7 @@ class VaultPipeline:
                 await self._refreshed()
             tally = [0, 0]
             plan_ctx = filtering = None
-            if (self._planner is not None and not plain and go is None and not content
+            if (self._planner is not None and not plain and not content
                     and message.strip()
                     and (self._scope is None or self._scope.may("ask"))):
                 # The quick filter runs beside the reader: a one-step message waits for
@@ -508,14 +494,12 @@ class VaultPipeline:
             log.warning("filer failed: %s", e)
             if plain:  # a plan's step: its failure is reported by the plan, nothing kept here
                 return VaultTurn(error=str(e), reason=e.reason, model=self._filer.model)
-            return await self._kept(message, e, go)
+            return await self._kept(message, e)
         except OSError as e:
             log.warning("vault unreadable: %s", e)
             return VaultTurn(error=type(e).__name__)
         model = self._filer.model
         actions = check(raw, self._index, message)
-        # Before the gate, not after it: the gate opens when the whole turn is over, and a
-        # second model call there would be added to the wait instead of hidden inside it.
         # Text the caller already has fills an empty note, so there is nothing to doubt.
         why = doubtful(actions) if self._strong is not None and not content else ""
         if why:
@@ -540,10 +524,6 @@ class VaultPipeline:
             # do here, or that the bot did not understand, and nothing is written.
             return VaultTurn(answer=_not_here(refused), model=model,
                              prompt_tokens=prompt_tokens, output_tokens=output_tokens)
-        if go is not None and not await go():
-            log.info("vault: held back; the text the Notion side produced is written instead")
-            return VaultTurn(model=model, prompt_tokens=prompt_tokens,
-                             output_tokens=output_tokens)
         if not actions and any(isinstance(r, dict) and r.get("looked_up") for r in raw):
             # Every item of the set the user asked for is already in the vault, and check()
             # leaves those alone. That is an answer, not a message nobody understood.
@@ -801,7 +781,7 @@ class VaultPipeline:
                    if not (who and s.kind == "ask"))]
         if any(s.kind == "write" for s, _ in failed):
             # A part that should have written did not: the owner's own words are kept, once.
-            kept = await self._kept(message, FilerError("a plan step failed"), None)
+            kept = await self._kept(message, FilerError("a plan step failed"))
             merged.writes += kept.writes
             if kept.writes:
                 lines.append(texts.PLAN_KEPT)
@@ -913,16 +893,14 @@ class VaultPipeline:
                     out.append(f"### {note.name}\n{self._index.read(note.path)}")
         return out
 
-    async def _kept(self, message: str, error: FilerError,
-                    go: Callable[[], Awaitable[bool]] | None) -> VaultTurn:
+    async def _kept(self, message: str, error: FilerError) -> VaultTurn:
         """The model could not be asked — Claude is down, out of credit, or answered rubbish.
-        The words go to the inbox note as they are, which takes no model: with Notion off
-        there is no other place that would have kept them. The reply says both things, that
-        they are saved and why they are not filed."""
+        The words go to the inbox note as they are, which takes no model. The reply says both
+        things, that they are saved and why they are not filed."""
         turn = VaultTurn(error=str(error), reason=error.reason, model=self._filer.model)
         if self._scope is not None:
             return turn  # the inbox is the owner's: a group's words are not kept there
-        if not message.strip() or (go is not None and not await go()):
+        if not message.strip():
             return turn
         try:
             write = await asyncio.to_thread(
@@ -1268,9 +1246,7 @@ class VaultPipeline:
     async def _answer_links(message: str, links: tuple,
                             answer: Callable[[str, list], Awaitable[str]] | None,
                             turn: VaultTurn) -> None:
-        """A question about a page the user sent, answered from the page; nothing written.
-        Only asked when the vault is on its own: with Notion on, its interpreter decides
-        answers, so the two sides never both answer one message."""
+        """A question about a page the user sent, answered from the page; nothing written."""
         pages = [page for page in links if not page.error]
         if answer is None or not pages:
             return
