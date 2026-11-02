@@ -98,8 +98,15 @@ async def test_a_link_in_the_group_gets_the_video_in_reply(harness):
     assert await run(harness, update)
     [(kind, sent)] = harness.bot.media
     assert kind == "video" and sent["chat_id"] == GROUP and sent["payload"] == b"mp4"
-    assert sent["caption"] == "Earth at night" and sent["supports_streaming"]
+    assert sent["caption"] is None and sent["supports_streaming"]  # the media alone
     assert sent["reply_parameters"].message_id == 7  # a reply to the link
+
+
+async def test_with_captions_switched_on_the_posts_text_goes_under_it(harness):
+    harness.app.bot_data[h._CAPTIONS] = lambda: True
+    assert await run(harness, _msg(harness.bot, GROUP, MEMBER, text=LINK, mid=7))
+    [(_, sent)] = harness.bot.media
+    assert sent["caption"] == "Earth at night"
 
 
 async def test_the_handler_does_not_block_the_conversation(harness):
@@ -152,11 +159,19 @@ class Replying:
         self.calls.append(("album", items, kw))
 
 
+async def test_a_carousel_is_one_album_with_no_caption_by_default():
+    post = Post([Item("photo", b"1"), Item("video", b"2")], caption="Talk", source="vx.example")
+    message = Replying()
+    await media._send(message, post)
+    [(kind, items, _)] = message.calls
+    assert kind == "album" and [i.caption for i in items] == [None, None]
+
+
 async def test_a_carousel_is_one_album_with_the_caption_under_the_first():
     post = Post([Item("photo", b"1"), Item("video", b"2"), Item("photo", b"3")],
                 caption="Talk about complicated", source="vx.example")
     message = Replying()
-    await media._send(message, post)
+    await media._send(message, post, captions=True)
     [(kind, items, kw)] = message.calls
     assert kind == "album" and kw["do_quote"] is True
     assert [type(i) for i in items] == [InputMediaPhoto, InputMediaVideo, InputMediaPhoto]
@@ -166,7 +181,7 @@ async def test_a_carousel_is_one_album_with_the_caption_under_the_first():
 
 async def test_a_single_photo_goes_as_a_photo_without_an_empty_caption():
     message = Replying()
-    await media._send(message, Post([Item("photo", b"1")], source="kk.example"))
+    await media._send(message, Post([Item("photo", b"1")], source="kk.example"), captions=True)
     [(kind, data, kw)] = message.calls
     assert kind == "photo" and data == b"1" and kw["caption"] is None
 

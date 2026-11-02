@@ -16,13 +16,17 @@ log = logging.getLogger(__name__)
 # mail:      the read-only inbox digest
 # syncthing: the check that Syncthing runs and the phone syncs
 # folders:   the watched folders' digest
-NAMES = ("obsidian", "linker", "mail", "syncthing", "folders")
+# insta_captions: an Instagram post's own text under its photos and videos; off, the media alone
+NAMES = ("obsidian", "linker", "mail", "syncthing", "folders", "insta_captions")
+# Off until switched on: a post's text is mostly noise next to its pictures.
+OFF_BY_DEFAULT = frozenset({"insta_captions"})
 
 
 class Switches:
     def __init__(self, path: Path, defaults: dict[str, bool] | None = None) -> None:
         self._path = path
-        self._defaults = {name: True for name in NAMES} | dict(defaults or {})
+        self._defaults = ({name: name not in OFF_BY_DEFAULT for name in NAMES}
+                          | dict(defaults or {}))
         self._values: dict[str, bool] = dict(self._defaults)
         self._mtime: float | None = None
         self.reload()

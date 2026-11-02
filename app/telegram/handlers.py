@@ -80,6 +80,7 @@ _STORE = "store"
 _CHATS = "chats"
 _RECENT = "recent"
 _INSTAGRAM = "instagram"
+_CAPTIONS = "captions"
 # How many recent group messages a message pointing back is shown.
 MAX_POINTED = 10
 # The mail service, when mail is on: its digests' buttons are answered here, not by the
@@ -93,6 +94,7 @@ def register(
     store: AuditStore, mail=None, chats: Chats | None = None,
     names: Callable[[], tuple[str, ...]] = lambda: (),
     recent: RecentMessages | None = None, instagram: Instagram | None = None,
+    captions: Callable[[], bool] = lambda: False,
 ) -> None:
     app.bot_data[_ORCH] = orch
     app.bot_data[_SETTINGS] = settings
@@ -102,6 +104,8 @@ def register(
     app.bot_data[_CHATS] = chats
     app.bot_data[_RECENT] = recent
     app.bot_data[_INSTAGRAM] = instagram
+    # Whether an Instagram post's own text goes under it: the admin page's switch, per post.
+    app.bot_data[_CAPTIONS] = captions
 
     # Private chats of allowed users, and the groups listed in data/chats.json (app/chats.py).
     gate = chat_filter(settings, chats, names, recent)
@@ -140,7 +144,8 @@ async def _on_instagram(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     message = update.effective_message
     # The owner asked for it in their own chat: a post not fetched is said there, never in a group.
     await reply_with_posts(message, context.bot_data[_INSTAGRAM],
-                           say_failure=message.chat.type not in GROUPS)
+                           say_failure=message.chat.type not in GROUPS,
+                           captions=context.bot_data[_CAPTIONS]())
 
 
 # ---- sending -------------------------------------------------------------------------------

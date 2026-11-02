@@ -741,7 +741,7 @@ in code: they are long, interdependent and covered by tests, and the working pat
 structured text the prompt *reads* (`_bot.md`, the mail buckets).
 
 **Switches** (`app/switches.py`, `data/switches.json`, edited on the admin page): `obsidian`,
-`linker`, `mail`, `syncthing`, `folders`. `.env` says what `obsidian` and `linker` are until the
+`linker`, `mail`, `syncthing`, `folders`, and `insta_captions`, the one off by default. `.env` says what `obsidian` and `linker` are until the
 file exists; the file then wins, and each is read per message or per run, so a change needs no
 restart. With `obsidian` off a message is refused (`NOTHING_ENABLED`) rather than swallowed. A
 switch only turns off what was built: `OBSIDIAN_ENABLED=false` at startup, or no vault or no key,
@@ -773,8 +773,8 @@ stock line (`texts.BANTER_LINES`).
 
 **Instagram links** (`app/media/instagram.py`, `app/telegram/media.py`). In a group with the
 `media` right, a message with an Instagram post link that is *not* addressed to the bot gets
-the post back as a reply: a video, a photo, or an album of a carousel with the caption under
-the first item. Its own handler group and `block=False`, so a download never holds up the
+the post back as a reply: a video, a photo, or an album of a carousel — the media alone, or with
+the post's text under it (the first item of an album) while the `insta_captions` switch is on. Its own handler group and `block=False`, so a download never holds up the
 conversation. yt-dlp asks Instagram first (no login, no ffmpeg: a progressive format); when
 Instagram refuses, `INSTAGRAM_MIRRORS` are tried in order — URL templates, `{n}` for a numbered
 carousel item (a repeated file ends it). Nothing fetched, or Telegram refusing the upload

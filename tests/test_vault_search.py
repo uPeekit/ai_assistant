@@ -160,7 +160,7 @@ def test_switches_default_to_env_and_are_overridden_by_the_file(tmp_path):
     path = tmp_path / "switches.json"
     switches = Switches(path, {"linker": False})
     assert switches.all() == {"obsidian": True, "linker": False, "mail": True,
-                              "syncthing": True, "folders": True}
+                              "syncthing": True, "folders": True, "insta_captions": False}
 
     assert switches.save({"obsidian": False, "linker": True, "mail": True}) == 2
     assert switches.save({"obsidian": False, "linker": True, "mail": True}) == 0
@@ -192,4 +192,4 @@ def test_a_broken_switches_file_leaves_everything_as_env_had_it(tmp_path, caplog
     path.write_text("{not json", encoding="utf-8")
     switches = Switches(path, {"obsidian": True, "linker": False})
     assert switches.all() == {"obsidian": True, "linker": False, "mail": True,
-                              "syncthing": True, "folders": True}
+                              "syncthing": True, "folders": True, "insta_captions": False}

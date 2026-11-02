@@ -78,6 +78,8 @@
     <label><input type="checkbox" id="switch-mail"> Сводка по почте</label>
     <label><input type="checkbox" id="switch-syncthing"> Следить за Syncthing</label>
     <label><input type="checkbox" id="switch-folders"> Следить за папками</label>
+    <label><input type="checkbox" id="switch-insta_captions"> Подпись к постам Instagram (текст поста
+      под фото и видео)</label>
   </div>
 </details>
 
@@ -308,7 +310,7 @@ function load() {
       document.getElementById("mail-buckets").value =
         (data.mail_buckets || "").split(/,\s*(?=[^\s,:]+\s*:)/).join("\n");
       var switches = data.switches || {};
-      ["obsidian", "linker", "mail", "syncthing", "folders"].forEach(function (name) {
+      ["obsidian", "linker", "mail", "syncthing", "folders", "insta_captions"].forEach(function (name) {
         var el = document.getElementById("switch-" + name);
         el.checked = switches[name] !== false;
       });
@@ -982,6 +984,7 @@ function collectBody() {
       mail: document.getElementById("switch-mail").checked,
       syncthing: document.getElementById("switch-syncthing").checked,
       folders: document.getElementById("switch-folders").checked,
+      insta_captions: document.getElementById("switch-insta_captions").checked,
     },
   };
   // Only when the server sent chats: an empty list would otherwise remove every group.

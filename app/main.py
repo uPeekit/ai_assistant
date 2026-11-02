@@ -572,7 +572,8 @@ def build(
     telegram_app = Application.builder().token(token).build()
     register(telegram_app, orchestrator, settings, speech, store, mail=mail,
              chats=chats, names=lambda: address.names(tuning.bot_name), recent=recent,
-             instagram=Instagram(mirrors(settings.instagram_mirrors)))
+             instagram=Instagram(mirrors(settings.instagram_mirrors)),
+             captions=lambda: switches.get("insta_captions"))
 
     # `app` is assigned below, after these closures are defined but before either is ever called
     # (PTB only calls post_init/post_shutdown once run_polling() — or a test — invokes them), so

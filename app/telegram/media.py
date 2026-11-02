@@ -1,8 +1,9 @@
 """An Instagram post sent back as a reply to its link (app/media/instagram.py fetches it).
 
-One item goes as a photo or a video, more as an album with the caption under the first. The
-post that could not be fetched or sent leaves no trace in the chat: someone's link is not the
-place for the bot's errors."""
+One item goes as a photo or a video, more as an album; the post's own text goes under it (the
+first item of an album) only when the admin page's switch says so. The post that could not be
+fetched or sent leaves no trace in the chat: someone's link is not the place for the bot's
+errors."""
 
 from __future__ import annotations
 
@@ -28,9 +29,11 @@ def caption(text: str) -> str:
     return parts[0] + "…" if len(parts) > 1 else parts[0]
 
 
-async def reply_with_posts(message, instagram: Instagram, *, say_failure: bool = False) -> None:
+async def reply_with_posts(message, instagram: Instagram, *, say_failure: bool = False,
+                           captions: bool = False) -> None:
     """Every post linked in `message`, each as a reply to it. With `say_failure`, a post that
-    could not be fetched or sent is said in a line of text."""
+    could not be fetched or sent is said in a line of text; with `captions`, its text goes
+    under it."""
     for code in codes(message.text or ""):
         post = await instagram.fetch(code)
         if post is None:
@@ -38,7 +41,7 @@ async def reply_with_posts(message, instagram: Instagram, *, say_failure: bool =
             await _failed(message, say_failure)
             continue
         try:
-            await _send(message, post)
+            await _send(message, post, captions=captions)
         except TelegramError as e:
             log.warning("instagram: sending a post failed (%s)", e)
             await _failed(message, say_failure)
@@ -56,8 +59,8 @@ async def _failed(message, say: bool) -> None:
         log.warning("instagram: saying so failed too (%s)", e)
 
 
-async def _send(message, post: Post) -> None:
-    text = caption(post.caption) or None
+async def _send(message, post: Post, *, captions: bool = False) -> None:
+    text = (caption(post.caption) or None) if captions else None
     if len(post.items) == 1:
         [item] = post.items
         if item.kind == "photo":
