@@ -31,7 +31,12 @@ documents). `cases.yaml` there holds the cases:
         reminders: 2
         lines_at_least: 10
 
-    - id: report-still-running         # a watched folder's file: reported now, or waiting?
+    - id: reminder-time-fixed          # a correction after the Fix button: judged on its reply
+      text: remind me tomorrow at 18 to buy bread
+      fix: not at 18, at 19            # its writes, and the reminders still pending
+      expect: {contains: ["19:00"], absent: ["18:00"], reminders: 1}
+
+    - id: report-still-running        # a watched folder's file: reported now, or waiting?
       kind: folder
       files: [2026-10-21_1300.md]      # under data/eval/regressions/files/
       expect: {reported: false}
@@ -236,6 +241,12 @@ async def _turn(case: dict, models: Models, work: Path, copies: Path,
                    name=str(case.get("name", "")))
     try:
         turn = await pipe.handle(str(case["text"]), chat=chat)
+        if case.get("fix"):
+            # The Fix button, then this correction: the case is judged on the fix's reply.
+            fixed = await pipe.fix(str(case["text"]), str(case["fix"]), turn.undos,
+                                   turn.reminders)
+            return (fixed.reply_line(), [w.kind for w in fixed.writes],
+                    len(store.pending(chat.chat_id)))
     finally:
         await base.aclose()
         store.close()  # Windows keeps an open database from being deleted
@@ -417,6 +428,8 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--only", default="", help="cases whose id contains this")
     r.add_argument("--write", type=Path)
     a = p.parse_args(argv)
+    # A Windows console's code page has no Cyrillic: a miss quoting the reply crashed the run.
+    sys.stdout.reconfigure(errors="replace")
     return asyncio.run(snapshot(a) if a.command == "snapshot" else run(a))
 
 

@@ -275,6 +275,30 @@ async def test_a_fix_that_drops_the_task_cancels_the_reminder(staged_bot):  # no
     store.close()
 
 
+async def test_a_fix_of_the_time_moves_the_task_s_time_and_the_reminder(
+        staged_bot):  # noqa: F811
+    """«не в 19, а в 20»: the time in front of the task's words and the reminder, both."""
+    store, fixed = await _remind_then_fix(
+        staged_bot, {"op": "set", "field": "time", "value": "20:00"}, "не в 19, а в 20")
+
+    [reminder] = store.pending(CHAT)
+    assert reminder.due_at == local(2026, 9, 23, 20, 0) and reminder.text == "купить хлеб"
+    tasks = staged_bot.index.read(f"{texts.VAULT_TASKS_NOTE}.md")
+    assert "20:00 купить хлеб" in tasks and "19:00" not in tasks
+    assert texts.REMIND_SET.format(when="завтра в 20:00", text="купить хлеб") in fixed.text
+    store.close()
+
+
+async def test_a_time_the_correction_does_not_say_is_not_set(staged_bot):  # noqa: F811
+    store, fixed = await _remind_then_fix(
+        staged_bot, {"op": "set", "field": "time", "value": "21:00"}, "попозже")
+
+    [reminder] = store.pending(CHAT)
+    assert reminder.due_at == local(2026, 9, 23, 19, 0)
+    assert "21:00" not in staged_bot.index.read(f"{texts.VAULT_TASKS_NOTE}.md")
+    store.close()
+
+
 async def test_one_message_sets_each_of_its_reminders(setup):
     """«напомни сегодня в 19:00 заняться выводами, а 27 числа в 18:00 — дизайном шагомера»:
     one answer kept only the first; each item is its own reminder, with its own task."""

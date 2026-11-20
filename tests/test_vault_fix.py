@@ -86,6 +86,16 @@ async def test_the_model_is_shown_what_was_written_and_the_places_but_not_the_gu
     assert not turn.applied and texts.FIX_UNCLEAR in turn.reply_line()
 
 
+async def test_a_task_s_time_is_shown_and_may_be_set(index):
+    undos = write(index, VaultAction(action="task", text="позвонить маме", heading="дом",
+                                     due="2026-10-07", time="18:00"))
+    script = Script(FIX_PROMPT={"changes": [], "add": [], "unclear": True})
+    await pipe(index, script).fix("позвонить маме завтра в 18", "в 19", undos)
+    [(_, schema, content)] = script.asked
+    assert P.FIX_TIME.format(time="18:00") in content
+    assert "time" in schema["properties"]["changes"]["items"]["properties"]["field"]["enum"]
+
+
 # ---- applying it -------------------------------------------------------------------------------
 
 async def test_a_turn_misread_as_a_whole_is_taken_back_and_read_again(index):

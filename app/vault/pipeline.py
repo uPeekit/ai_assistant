@@ -348,17 +348,18 @@ class VaultPipeline:
             text = fixing.words(now_is) or reminder.text
             at = reminder.due_at.astimezone(now.tzinfo)
             day = now_is.due if now_is.due and now_is.due != old.due else ""
-            rule = now_is.repeat if now_is.action == "task" and now_is.repeat != old.repeat \
-                else None
-            if text == reminder.text and not day and rule is None:
+            task = now_is.action == "task"
+            clock = now_is.time if task and now_is.time and now_is.time != old.time else ""
+            rule = now_is.repeat if task and now_is.repeat != old.repeat else None
+            if text == reminder.text and not day and not clock and rule is None:
                 continue
             moment = None
-            if day or rule is not None:
+            if day or clock or rule is not None:
                 repeat = reminder.repeat if rule is None else rule
-                moment = timing.first_due(day or at.date().isoformat(), at.strftime("%H:%M"),
-                                          repeat, now)
+                clock = clock or at.strftime("%H:%M")
+                moment = timing.first_due(day or at.date().isoformat(), clock, repeat, now)
                 if moment is None:
-                    asked = timing.asked_for(day, at.strftime("%H:%M"), now)
+                    asked = timing.asked_for(day or at.date().isoformat(), clock, now)
                     lines.append(texts.FIX_REMINDER_PAST.format(
                         when=timing.when(asked, now.date()), text=reminder.text))
                     continue

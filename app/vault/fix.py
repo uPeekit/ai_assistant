@@ -24,7 +24,7 @@ from app.llm import staged_prompts as P
 from app.vault.writer import VaultAction
 
 OPS = ("drop", "set", "move")
-FIELDS = ("text", "title", "due", "repeat", "heading", "tag", "prop")
+FIELDS = ("text", "title", "due", "time", "repeat", "heading", "tag", "prop")
 MAX_BODY_SHOWN = 3
 _STRING = {"type": "string"}
 
@@ -96,6 +96,8 @@ def describe(action: VaultAction, tasks_note: str) -> str:
         words=words(action), note=note, folder=action.folder)
     if action.due:
         line += P.FIX_DUE.format(due=action.due)
+    if action.time:
+        line += P.FIX_TIME.format(time=action.time)
     if action.heading:
         line += P.FIX_HEADING.format(heading=action.heading)
     if action.tags:
@@ -133,6 +135,11 @@ def _set(action: VaultAction, change: dict, gate, tags: list[str]) -> VaultActio
     if name == "due":
         due = gate.date(value)
         return action.model_copy(update={"due": due}) if due or not value else None
+    if name == "time":
+        # A task's time of day, and its reminder's (the pipeline moves that one).
+        clock = gate.clock(value)
+        return action.model_copy(update={"time": clock}) if clock and kind == "task" \
+            else None
     if name == "repeat":
         ok = value.lower().startswith("every") or not value
         return action.model_copy(update={"repeat": value}) if ok else None
