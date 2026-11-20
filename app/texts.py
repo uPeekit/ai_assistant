@@ -268,7 +268,7 @@ REMIND_LIST = "⏰ Напоминания:"
 REMIND_ITEM = "• {when} — {text}"
 REMIND_CANCELLED = "⏰ Отменил: {text}"
 REMIND_NOT_FOUND = "⏰ Не нашёл такого напоминания."
-FIX_REMINDER_KEPT = "⏰ Напоминание осталось как было — если надо, отмените его и поставьте заново."
+FIX_REMINDER_PAST = "⏰ Напоминание не перенёс — {when} уже прошло: {text}"
 REMIND_OFF = "⏰ Напоминания здесь не настроены."
 # Repeat rules as the reply says them (app/reminders/repeat.py words).
 REMIND_EVERY = {"day": "каждый день", "week": "каждую неделю", "month": "каждый месяц",

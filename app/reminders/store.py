@@ -112,6 +112,23 @@ class ReminderStore:
                                "AND cancelled = 0 AND sent_at IS NULL",
                                (new_chat_id, old_chat_id))
 
+    def update(self, reminder_id: int, text: str, due_at: datetime | None = None,
+               repeat: str | None = None) -> bool:
+        """A pending reminder's words, and its time and repeat when given (a new time is its
+        new first time too). True when it was pending."""
+        sets, args = ["text = ?"], [text]
+        if due_at is not None:
+            sets += ["due_at = ?", "start_at = ?"]
+            args += [_iso(due_at), _iso(due_at)]
+        if repeat is not None:
+            sets.append("repeat = ?")
+            args.append(repeat)
+        with self._lock, self._conn:
+            cur = self._conn.execute(
+                f"UPDATE reminders SET {', '.join(sets)} WHERE id = ? AND cancelled = 0 "
+                "AND sent_at IS NULL", (*args, reminder_id))
+            return cur.rowcount == 1
+
     def cancel(self, reminder_id: int) -> bool:
         """True when it was pending and is now cancelled."""
         with self._lock, self._conn:

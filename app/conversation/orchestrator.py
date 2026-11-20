@@ -445,7 +445,8 @@ class Orchestrator:
         turn.audit(decision=_kind("FIX"))
         event = self._store.get_event(row["event_id"]) or {}
         original = (event.get("raw_input") or event.get("transcription") or "").strip()
-        result = await self._vault_for(turn).fix(original, text, record.vault)
+        result = await self._vault_for(turn).fix(original, text, record.vault,
+                                                 record.reminders)
         if result.model:
             turn.call(result.model, "fix", fixed=execution_id, writes=len(result.writes) or None,
                       error=result.error or None, prompt_tokens=result.prompt_tokens,
@@ -458,10 +459,8 @@ class Orchestrator:
             return Reply(line, _vault_buttons(execution_id))
         self._store.mark_undone(execution_id)
         undos = result.undos
-        if record.reminders:
-            # A fix changes files, not the reminder: it stays as it was set, and Undo of the
-            # fixed turn still cancels it.
-            line = f"{line}\n{texts.FIX_REMINDER_KEPT}"
+        # The reminders go on to the new row whatever the fix did to them: Undo of the fixed
+        # turn cancels them (one the fix already cancelled stays cancelled).
         if not undos and not record.reminders:  # everything dropped: nothing to take back
             return Reply(line)
         execution_id = self._add_execution(turn, undos, record.reminders)

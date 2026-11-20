@@ -212,6 +212,8 @@ class FixTurn:
     error: str = ""
     reason: str = ""
     left: list[str] = field(default_factory=list)
+    # What became of the turn's reminders whose task was fixed: a line each.
+    reminded: list[str] = field(default_factory=list)
     model: str = ""
     prompt_tokens: int = 0
     output_tokens: int = 0
@@ -230,7 +232,7 @@ class FixTurn:
         what = "; ".join(self.said) or ", ".join(w.what for w in self.writes)
         if self.error:
             what += f" — {self.error}"
-        return texts.FIX_DONE.format(what=what)
+        return "\n".join([texts.FIX_DONE.format(what=what), *self.reminded])
 
 
 def _not_here(refused: list[str]) -> str:
@@ -320,6 +322,52 @@ class VaultPipeline:
         if self._reminders is not None:
             for reminder_id in ids:
                 self._reminders.cancel(reminder_id)
+
+    def _follow(self, became: list[tuple[VaultAction, list[dict] | None]],
+                ids: list[int]) -> list[str]:
+        """A fix of a reminder's task fixes the reminder too (they were set as one, with the
+        same words): its words, its day — at the time of day it had — and its repeat follow
+        the task, and a task dropped cancels it. A line for each one changed."""
+        if self._reminders is None:
+            return []
+        pending = {r.id: r for r in self._reminders.pending()}
+        now = self._local()
+        lines: list[str] = []
+        for reminder in (pending[i] for i in ids if i in pending):
+            key = reminder.text.strip().casefold()
+            found = next(((old, new) for old, new in became
+                          if old.action == "task" and old.text.strip().casefold() == key), None)
+            if found is None:
+                continue
+            old, new = found
+            if not new:
+                self._reminders.cancel(reminder.id)
+                lines.append(texts.REMIND_CANCELLED.format(text=reminder.text))
+                continue
+            now_is = VaultAction(**new[0])
+            text = fixing.words(now_is) or reminder.text
+            at = reminder.due_at.astimezone(now.tzinfo)
+            day = now_is.due if now_is.due and now_is.due != old.due else ""
+            rule = now_is.repeat if now_is.action == "task" and now_is.repeat != old.repeat \
+                else None
+            if text == reminder.text and not day and rule is None:
+                continue
+            moment = None
+            if day or rule is not None:
+                repeat = reminder.repeat if rule is None else rule
+                moment = timing.first_due(day or at.date().isoformat(), at.strftime("%H:%M"),
+                                          repeat, now)
+                if moment is None:
+                    asked = timing.asked_for(day, at.strftime("%H:%M"), now)
+                    lines.append(texts.FIX_REMINDER_PAST.format(
+                        when=timing.when(asked, now.date()), text=reminder.text))
+                    continue
+            self._reminders.update(reminder.id, text, moment, rule)
+            shown = moment or at
+            lines.append(texts.REMIND_SET.format(
+                when=timing.label(shown, reminder.repeat if rule is None else rule,
+                                  now.date()), text=text))
+        return lines
 
     def _reminded(self, actions: list[VaultAction], chat: ChatRef | None,
                   pending: list[Reminder], turn: VaultTurn) -> list[VaultAction]:
@@ -622,10 +670,11 @@ class VaultPipeline:
         self._link_later(turn.writes)
         return turn
 
-    async def fix(self, original: str, correction: str,
-                  undos: list[VaultUndo]) -> FixTurn:
+    async def fix(self, original: str, correction: str, undos: list[VaultUndo],
+                  reminders: list[int] | None = None) -> FixTurn:
         """Change part of what one turn wrote (app/vault/fix.py). `undos` are that turn's
-        writes, each carrying the action it did. Never raises, never asks."""
+        writes, each carrying the action it did; `reminders` the reminders it set, which
+        follow their tasks. Never raises, never asks."""
         turn = FixTurn(model=self._filer.model)
         fix = getattr(self._filer, "fix", None)
         previous = [VaultAction(**u.action) for u in undos if u.action is not None]
@@ -690,6 +739,8 @@ class VaultPipeline:
             problems.append(texts.FIX_NOT_TAKEN_BACK.format(
                 notes=", ".join(f"«{name}»" for name in stuck)))
         turn.error = "; ".join(problems)
+        if reminders and plan.became:
+            turn.reminded = await asyncio.to_thread(self._follow, plan.became, reminders)
         log.info("vault fix %s: took back %d, wrote %d", turn.model, len(old),
                  len(turn.writes))
         self._link_later(turn.writes)

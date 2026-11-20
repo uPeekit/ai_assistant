@@ -55,6 +55,9 @@ class FixPlan:
     write: list[dict] = field(default_factory=list)  # raw actions, checked like any answer
     said: list[str] = field(default_factory=list)  # one reply phrase per change
     unclear: bool = False
+    # Each changed item as it was and the raw actions it became (None: dropped) — what a
+    # reminder set with a task follows.
+    became: list[tuple[VaultAction, list[dict] | None]] = field(default_factory=list)
 
 
 def words(action: VaultAction) -> str:
@@ -205,6 +208,7 @@ async def plan(previous: list[VaultAction], answer: dict, gate, *, tags: list[st
             out.write.append(added)
             out.said.append(texts.FIX_ADDED.format(item=name))
     out.take_back = touched
+    out.became = [(its[i].action, changed[i]) for i in sorted(changed)]
     out.unclear = not out.take_back and not out.write
     return out
 

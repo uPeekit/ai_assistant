@@ -219,23 +219,59 @@ def test_a_reminder_set_while_the_task_write_failed_is_still_reported():
     assert "⏰ Напомню завтра: x" in turn.reply_line()
 
 
-async def test_a_fix_keeps_the_reminder_and_undo_still_cancels_it(staged_bot):  # noqa: F811
-    store = ReminderStore(staged_bot.db)
-    staged_bot.vault._reminders = store
-    staged_bot.vault._zone = TZ
-    staged_bot.script.answers.update(
+async def _remind_then_fix(vault_bot, change: dict, correction: str):
+    """«напомни завтра в 19:00 купить хлеб», then Fix with `change` to its task."""
+    store = ReminderStore(vault_bot.db)
+    vault_bot.vault._reminders = store
+    vault_bot.vault._zone = TZ
+    vault_bot.script.answers.update(
         INTENT_PROMPT={"intent": "remind"},
         REMIND_PROMPT={"op": "add", "items": [{"text": "купить хлеб", "due": "2026-09-23",
-                                               "time": "", "repeat": ""}], "target": "none"})
-    first = await staged_bot.orch.handle_text(CHAT, USER, "напомни завтра купить хлеб")
-    staged_bot.script.answers["FIX_PROMPT"] = {
-        "changes": [{"key": "a1", "op": "set", "field": "text", "prop": "",
-                     "value": "купить хлеб и молоко", "to": ""}], "add": [], "unclear": False}
-    await staged_bot.orch.handle_callback(CHAT, USER, f"f:{first.undo_id}")
-    fixed = await staged_bot.orch.handle_text(CHAT, USER, "купить хлеб и молоко")
-    assert texts.FIX_REMINDER_KEPT in fixed.text and len(store.pending()) == 1
+                                               "time": "19:00", "repeat": ""}],
+                       "target": "none"})
+    first = await vault_bot.orch.handle_text(CHAT, USER, "напомни завтра в 19:00 купить хлеб")
+    assert len(store.pending(CHAT)) == 1
+    vault_bot.script.answers["FIX_PROMPT"] = {"changes": [{"key": "a1", "prop": "", "to": "",
+                                                     **change}],
+                                        "add": [], "unclear": False}
+    await vault_bot.orch.handle_callback(CHAT, USER, f"f:{first.undo_id}")
+    return store, await vault_bot.orch.handle_text(CHAT, USER, correction)
+
+
+async def test_a_fix_of_the_task_s_words_fixes_the_reminder_and_undo_still_cancels_it(
+        staged_bot):  # noqa: F811
+    store, fixed = await _remind_then_fix(
+        staged_bot, {"op": "set", "field": "text", "value": "купить хлеб и молоко"},
+        "купить хлеб и молоко")
+
+    [reminder] = store.pending(CHAT)
+    assert reminder.text == "купить хлеб и молоко"
+    assert reminder.due_at == local(2026, 9, 23, 19, 0)  # the time is left as it was
+    assert texts.REMIND_SET.format(when="завтра в 19:00", text="купить хлеб и молоко") \
+        in fixed.text
     await staged_bot.orch.handle_callback(CHAT, USER, f"u:{fixed.undo_id}")
     assert store.pending() == []
+    store.close()
+
+
+async def test_a_fix_of_the_task_s_date_moves_the_reminder_at_the_same_time(
+        staged_bot):  # noqa: F811
+    store, fixed = await _remind_then_fix(
+        staged_bot, {"op": "set", "field": "due", "value": "2026-09-25"}, "на пятницу")
+
+    [reminder] = store.pending(CHAT)
+    assert reminder.due_at == local(2026, 9, 25, 19, 0) and reminder.text == "купить хлеб"
+    assert "📅 2026-09-25" in staged_bot.index.read(f"{texts.VAULT_TASKS_NOTE}.md")
+    assert "купить хлеб" in fixed.text and "19:00" in fixed.text
+    store.close()
+
+
+async def test_a_fix_that_drops_the_task_cancels_the_reminder(staged_bot):  # noqa: F811
+    store, fixed = await _remind_then_fix(
+        staged_bot, {"op": "drop", "field": "", "value": ""}, "убери это")
+
+    assert store.pending() == []
+    assert texts.REMIND_CANCELLED.format(text="купить хлеб") in fixed.text
     store.close()
 
 
