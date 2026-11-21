@@ -38,9 +38,10 @@ import sys
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import NoReturn
+from zoneinfo import ZoneInfo
 
 import anthropic
 from telegram import Bot, BotCommand, BotCommandScopeAllPrivateChats, BotCommandScopeDefault
@@ -88,6 +89,7 @@ from app.telegram.sending import send_text
 from app.tuning import Defaults, Tuning
 from app.vault.answer import VaultAnswerer
 from app.vault.askers import Askers
+from app.vault.cleanup import Kept, due_on, weekly
 from app.vault.filer import Filer
 from app.vault.index import VaultIndex
 from app.vault.linker import Linker
@@ -250,6 +252,8 @@ def _vault_pipeline(settings: Settings, switches: Switches, tuning: Tuning,
                          web_words=lambda: tuning.web_words,
                          date_props=lambda: tuning.date_props,
                          askers=Askers(settings.db_path.with_name("askers.json")),
+                         kept=Kept(settings.db_path.with_name("cleanup_kept.json")),
+                         archive_log=settings.db_path.with_name("archive_state.json"),
                          banter=(Banter(key, settings.banter_model,
                                         note=lambda: tuning.banter_note, health=health)
                                  if settings.banter_model.strip() else None),
@@ -311,6 +315,28 @@ def _reminder_scheduler(settings: Settings, store: ReminderStore, rules: Reminde
                         settings.timezone)
 
     return ReminderScheduler(store, send, settings.timezone, rules=run)
+
+
+def _weekly_archive(settings: Settings, vault: VaultPipeline | None, switches: Switches,
+                    tuning: Tuning) -> DailyMessage | None:
+    """Done tasks to the archive once a week, at the admin page's day and time. Silent: the
+    morning agenda says how many went."""
+    if vault is None:
+        return None
+
+    async def run() -> None:
+        today = datetime.now(ZoneInfo(settings.timezone)).date()
+        if not switches.get("obsidian") or not due_on(tuning.archive_at, today):
+            return
+        await asyncio.to_thread(vault.archive_week, today)
+
+    def at() -> tuple:
+        when = weekly(tuning.archive_at)
+        return parse_times(when[1]) if when else ()
+
+    return DailyMessage(run, at, settings.timezone,
+                        remember=LastRun(settings.db_path.with_name("daily_state.json"),
+                                         "archive"))
 
 
 def _daily_digest(settings: Settings, vault: VaultPipeline | None, switches: Switches,
@@ -565,6 +591,7 @@ def build(
     reminders = _reminder_scheduler(settings, reminder_store, reminder_rules, vault, chats,
                                     tuning, lambda: telegram_app)
     daily = _daily_digest(settings, vault, switches, tuning, health, lambda: telegram_app)
+    archive = _weekly_archive(settings, vault, switches, tuning)
     mail, mail_digest = _mail_digest(settings, switches, buckets_file, tuning, health,
                                      lambda: telegram_app)
 
@@ -584,6 +611,8 @@ def build(
         await post_init_checks(app, application)
         if daily is not None:
             daily.start()
+        if archive is not None:
+            archive.start()
         if mail_digest is not None:
             mail_digest.start()
         if sync_watch is not None:
@@ -608,6 +637,8 @@ def build(
         await reminders.stop()
         if daily is not None:
             await daily.stop()
+        if archive is not None:
+            await archive.stop()
         admin.stop()
         if mail_digest is not None:
             await mail_digest.stop()

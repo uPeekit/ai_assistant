@@ -312,14 +312,37 @@ digest, Syncthing, watched folders), the bot's name, the agenda's times, the sit
 the words that start a web search, the mail buckets, group chats and what each may do, reminders
 and reminder rules, Google sources, and watched folders.
 
+## Going through the undated tasks
+
+`/cleanup` shows the first open task in `Задачи.md` that has no date and does not repeat:
+
+```
+🧹 3 из 34 · дом
+смазать двери #home
+[Сделано] [Не нужно] [Оставить] [Стоп]
+```
+
+Press a button, or just answer in words — «в субботу», «завтра в 10», «перенеси в personal»,
+«назови смазать петли» — and the next card follows. **Сделано** ticks it with today's ✅ date;
+**Не нужно** moves it to «Задачи — архив», marked cancelled (`- [-] … ❌ date`); **Оставить**
+keeps it undated and it is never asked about again (`data/cleanup_kept.json`); **Стоп**, or 30
+minutes without an answer, ends it — `/cleanup` again continues with what is left. A message that
+is not about the task (a new errand, a question) is handled as usual and the card stays open.
+`/undo` takes back the last answer.
+
+Once a week (Monday 04:00 unless the admin page says otherwise, «пн 04:00») the ticked tasks move
+from `Задачи.md` to the top of «Задачи — архив», all but those ticked that same day; the morning
+agenda says how many went («📦 В архив: 23»).
+
 ## Telegram commands
 
 | Command | Does |
 |---|---|
 | `/start`, `/help` | Prints a short usage reminder. |
 | `/undo` | Reverts the most recent change in this chat, if the undo window hasn't closed. In a group, your own most recent change. |
+| `/cleanup` | Goes through your undated tasks one at a time (private chat only). Also starts from plain words: «давай разберём задачи». |
 
-All three are published to Telegram at startup, for private chats only, so they show up in the
+All four are published to Telegram at startup, for private chats only, so they show up in the
 "/" menu in the chat rather than having to be remembered. A group shows no menu.
 
 Besides commands, just talk to it — text or a voice note, in Russian. A voice note is transcribed

@@ -771,6 +771,25 @@ the recent exchanges, no notes, in the tone of the admin page's `banter_note`, w
 kind of request the group may not make is still refused; when Claude cannot be asked the joke is a
 stock line (`texts.BANTER_LINES`).
 
+**Going through the undated tasks** (`app/vault/cleanup.py`; the talk is the orchestrator's).
+`/cleanup` (private chats only), or the staged reader's intent `cleanup` from plain words, starts
+a session per (chat, owner): the open tasks of `Задачи.md` with no 📅 and no 🔁, minus the ones
+kept (`data/cleanup_kept.json`). One card per reply, buttons `c:<op>:<n>` — a button of an earlier
+card answers `CLEANUP_OVER`. While a card is open the owner's next message is read against it by
+`CLEANUP_PROMPT` on the reader's own model (date, done, drop, keep, stop, change, other); "other"
+goes on as an ordinary message and the card stays. A task is found again by its line, never a
+line number: changed or gone since, it is skipped (`CLEANUP_GONE`). Done adds ✅ today; drop
+writes the archive first and then takes the line out, so a failure halfway leaves a copy, never a
+lost task; a move with no tag named takes the tag the section's tasks wear most. Every answer that
+writes is one `executions` row, so /undo takes it back. The session is in memory and ends after 30
+minutes without an answer.
+
+**The weekly archive.** At the admin page's `archive_at` («пн 04:00»), the ticked tasks of
+`Задачи.md` move to the top of «Задачи — архив», all but those ✅ that day (their Undo still
+works); a task ticked by the bot carries no ✅ date and goes too. Archive first, then the task
+file. No undo, nothing deleted. The morning digest adds «📦 В архив: N» that day
+(`data/archive_state.json`).
+
 **Instagram links** (`app/media/instagram.py`, `app/telegram/media.py`). In a group with the
 `media` right, a message with an Instagram post link that is *not* addressed to the bot gets
 the post back as a reply: a video, a photo, or an album of a carousel — the media alone, or with

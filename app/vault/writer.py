@@ -208,6 +208,16 @@ class VaultWriter:
             self._write(rel, text, None)
             return True
 
+    def edit(self, rel: str, change: Callable[[str], str | None]) -> VaultUndo | None:
+        """One change to a note, worked out from the text it holds now; None when `change`
+        refuses (None) or changes nothing. Undo takes back only this change."""
+        with self._lock:
+            previous = self._read(rel)
+            text = change(previous or "")
+            if text is None or text == (previous or ""):
+                return None
+            return self._write(rel, text, previous)
+
     def undo(self, undo: VaultUndo) -> bool:
         """Take one write back. False when the file has changed since in the very lines the
         write touched: it is then left exactly as it is, and the caller says so."""

@@ -46,6 +46,7 @@ from app.llm.research import WebResearcher
 from app.logging_setup import bind_event
 from app.switches import Switches
 from app.tuning import Tuning
+from app.vault.cleanup import Card
 from app.vault.pipeline import VaultPipeline, VaultTurn
 from app.vault.writer import VaultUndo
 from app.web.links import LinkReader
@@ -59,6 +60,9 @@ OPEN = "OPEN"
 # the events row still needs a non-null user column.
 NO_USER = 0
 MAX_ANSWERS = 3  # recent answers a «save this» may mean
+# A task cleanup nobody answered for this long is over: the next message is an ordinary one.
+CLEANUP_IDLE = timedelta(minutes=30)
+CLEANUP_BUTTONS = ("done", "drop", "keep", "stop")
 
 
 def now_utc() -> datetime:
@@ -91,6 +95,30 @@ def _vault_buttons(execution_id: int) -> list[list[Button]]:
     """Undo, and Fix: a write can be changed in part (app/vault/fix.py)."""
     return [[Button(f"u:{execution_id}", texts.BTN_UNDO),
              Button(f"f:{execution_id}", texts.BTN_FIX)]]
+
+
+@dataclass
+class _Cleanup:
+    """A task cleanup in progress: the cards, the one on screen, how many were answered, and
+    when it last moved."""
+
+    cards: list[Card]
+    at: datetime
+    index: int = 0
+    answered: int = 0
+
+
+def _card(session: _Cleanup) -> Reply:
+    card = session.cards[session.index]
+    n = session.index
+    return Reply(
+        texts.CLEANUP_CARD.format(n=n + 1, total=len(session.cards),
+                                  heading=card.heading or texts.VAULT_NO_TAG_HEADING,
+                                  task=card.line),
+        [[Button(f"c:done:{n}", texts.BTN_CLEANUP_DONE),
+          Button(f"c:drop:{n}", texts.BTN_CLEANUP_DROP)],
+         [Button(f"c:keep:{n}", texts.BTN_CLEANUP_KEEP),
+          Button(f"c:stop:{n}", texts.BTN_CLEANUP_STOP)]])
 
 
 @dataclass
@@ -168,6 +196,10 @@ class Orchestrator:
         # it, and pressing the button again costs nothing. In a group only the presser's next
         # message is the fix: another member's message is their own.
         self._fixing: dict[tuple[int, int], tuple[int, datetime]] = {}
+        # Task cleanups in progress, (chat, owner) -> the cards and where it is (see
+        # _cleanup_start). In memory: a restart forgets it, and asking again continues with
+        # what is left, since a decided task is no longer undated.
+        self._cleanups: dict[tuple[int, int], _Cleanup] = {}
 
     @asynccontextmanager
     async def _chat_lock(self, chat_id: int) -> AsyncIterator[None]:
@@ -219,6 +251,11 @@ class Orchestrator:
             return await self._turn(chat_id, user_id, "callback",
                                     lambda t: self._callback(t, data), progress=progress,
                                     raw_input=data)
+
+    async def cleanup(self, chat_id: int, user_id: int = NO_USER) -> Reply:
+        """/cleanup: go through the undated tasks, one card at a time."""
+        async with self._chat_lock(chat_id):
+            return await self._turn(chat_id, user_id, "cleanup", self._cleanup_start)
 
     async def undo(self, chat_id: int, execution_id: int | None = None,
                    user_id: int = NO_USER) -> Reply:
@@ -298,6 +335,11 @@ class Orchestrator:
                 return await self._fix(turn, text, execution_id)
             if turn.now - pressed_at < timedelta(seconds=self._s.undo_window_s):
                 return self._fix_too_late(turn)
+        session = self._cleanup_session(turn)
+        if session is not None and scope is None and self._vault is not None:
+            answered = await self._cleanup_answer(turn, session, text)
+            if answered is not None:
+                return answered
         if self._vault is None:
             return self._plain(turn, "VAULT_NOT_SET")
         if not self._vault_on():
@@ -398,6 +440,8 @@ class Orchestrator:
         self._forget_fix(turn)
         if prefix == "f" and rest.isdigit():
             return self._fix_ask(turn, int(rest))
+        if prefix == "c":
+            return await self._cleanup_press(turn, rest)
         if prefix == "u" and rest.isdigit():
             return await self._undo(turn, int(rest))
         # A button from an older version of the bot (a Notion question, its inbox offer).
@@ -465,6 +509,88 @@ class Orchestrator:
             return Reply(line)
         execution_id = self._add_execution(turn, undos, record.reminders)
         return Reply(line, _vault_buttons(execution_id), undo_id=execution_id)
+
+    # ---- going through the undated tasks -------------------------------------------------------
+
+    async def _cleanup_start(self, turn: _Turn) -> Reply:
+        """The first card. The owner's private chat only: the task file is theirs."""
+        if turn.chat_id < 0 or self._scopes(turn.chat_id) is not None:
+            return Reply(texts.CLEANUP_PRIVATE)
+        if self._vault is None:
+            return self._plain(turn, "VAULT_NOT_SET")
+        if not self._vault_on():
+            return self._plain(turn, "NOTHING_ENABLED")
+        turn.audit(decision=_kind("CLEANUP"))
+        cards = await asyncio.to_thread(self._vault.cleanup_cards)
+        key = (turn.chat_id, turn.user_id)
+        if not cards:
+            self._cleanups.pop(key, None)
+            return Reply(texts.CLEANUP_NOTHING)
+        session = self._cleanups[key] = _Cleanup(cards, at=turn.now)
+        return _card(session)
+
+    def _cleanup_session(self, turn: _Turn) -> _Cleanup | None:
+        key = (turn.chat_id, turn.user_id)
+        session = self._cleanups.get(key)
+        if session is not None and turn.now - session.at > CLEANUP_IDLE:
+            del self._cleanups[key]
+            return None
+        return session
+
+    async def _cleanup_press(self, turn: _Turn, rest: str) -> Reply:
+        op, _, number = rest.partition(":")
+        session = self._cleanup_session(turn)
+        if (session is None or op not in CLEANUP_BUTTONS or not number.isdigit()
+                or int(number) != session.index):
+            # A button of an earlier card, or of a cleanup that is over.
+            return Reply(texts.CLEANUP_OVER)
+        turn.audit(decision=_kind("CLEANUP"))
+        if op == "stop":
+            return self._cleanup_stop(turn, session)
+        return await self._cleanup_do(turn, session, op, {})
+
+    async def _cleanup_answer(self, turn: _Turn, session: _Cleanup, text: str) -> Reply | None:
+        """A message while a card is open. None when it is about something else: the card stays
+        and the message is handled as it always is."""
+        assert self._vault is not None
+        fields, model, used_in, used_out = await self._vault.cleanup_read(
+            session.cards[session.index], text)
+        if model:
+            turn.call(model, "cleanup", read=fields["kind"], prompt_tokens=used_in,
+                      output_tokens=used_out)
+        if fields["kind"] == "other":
+            return None
+        turn.audit(decision=_kind("CLEANUP"))
+        if fields["kind"] == "stop":
+            return self._cleanup_stop(turn, session)
+        return await self._cleanup_do(turn, session, fields["kind"], fields)
+
+    async def _cleanup_do(self, turn: _Turn, session: _Cleanup, kind: str,
+                          fields: dict) -> Reply:
+        assert self._vault is not None
+        card = session.cards[session.index]
+        undos = await asyncio.to_thread(self._vault.cleanup_apply, card, kind, fields)
+        if undos is None:
+            line = texts.CLEANUP_GONE
+        else:
+            session.answered += 1
+            if undos:  # /undo takes this answer back
+                self._add_execution(turn, undos, [])
+            when = " ".join(p for p in (fields.get("due", ""), fields.get("time", "")) if p)
+            line = texts.CLEANUP_DID[kind].format(task=card.line, when=when)
+        session.index += 1
+        session.at = turn.now
+        if session.index >= len(session.cards):
+            self._cleanups.pop((turn.chat_id, turn.user_id), None)
+            end = texts.CLEANUP_END.format(done=session.answered, total=len(session.cards))
+            return Reply(f"{line}\n\n{end}")
+        following = _card(session)
+        return Reply(f"{line}\n\n{following.text}", following.buttons)
+
+    def _cleanup_stop(self, turn: _Turn, session: _Cleanup) -> Reply:
+        self._cleanups.pop((turn.chat_id, turn.user_id), None)
+        return Reply(texts.CLEANUP_STOPPED.format(done=session.answered,
+                                                  total=len(session.cards)))
 
     # ---- undo --------------------------------------------------------------------------------
 
@@ -555,6 +681,8 @@ class Orchestrator:
         if turn.vault is None:
             return reply
         result: VaultTurn = await turn.vault
+        if result.cleanup:
+            return await self._cleanup_start(turn)
         if result.said:
             reply = replace(reply, answer=result.said)
         if result.model and (result.writes or result.error):

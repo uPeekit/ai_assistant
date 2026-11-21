@@ -211,6 +211,8 @@ change there needs no restart.
 | `google_token.json` | `tools/google_login.py` | the Google sign-in |
 | `sources/<file id>.json` | the bot | copies of Google files, as sections |
 | `askers.json` | the bot | the names a person goes by in the records |
+| `cleanup_kept.json` | the bot | undated tasks kept as they are during a cleanup: never asked again |
+| `archive_state.json` | the bot | the weekly archive's last run: its day and how many tasks moved |
 | `mail_state.json`, `mail_digests.json` | the bot | what was digested; which letters each digest covered |
 | `daily_state.json` | the bot | when each scheduled message last went out |
 | `folders_state.json`, `syncthing_state.json` | the bot | what the watchers already reported |

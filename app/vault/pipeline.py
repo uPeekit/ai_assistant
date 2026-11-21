@@ -9,14 +9,15 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import json
 import logging
 import random
 import re
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass, field, replace
-from datetime import date, datetime
-from pathlib import PurePosixPath
+from datetime import date, datetime, timedelta
+from pathlib import Path, PurePosixPath
 from zoneinfo import ZoneInfo
 
 from app import texts
@@ -26,15 +27,15 @@ from app.llm import staged_prompts as P
 from app.llm.banter import Banter, BanterError
 from app.llm.edits import EditError, Editor, NothingToChange
 from app.llm.edits import TooLong as EditTooLong
-from app.llm.prompts import MOVE_INSTRUCTION
+from app.llm.prompts import MOVE_INSTRUCTION, RU_WEEKDAYS
 from app.llm.research import ResearchError, ResearchQuestion
 from app.llm.rewrite import RewriteError, Rewriter
 from app.llm.rewrite import TooLong as RewriteTooLong
 from app.reminders import timing
 from app.reminders.store import Reminder, ReminderStore
 from app.vault import agenda as agenda_mod
+from app.vault import cleanup, frontmatter, mdedit, summary
 from app.vault import fix as fixing
-from app.vault import frontmatter, mdedit, summary
 from app.vault.answer import VaultAnswerer
 from app.vault.askers import Askers
 from app.vault.filer import GROCERY_LIST, Filer, FilerError, check, context, doubtful
@@ -141,6 +142,8 @@ class VaultTurn:
     who: str = ""
     # What the answerer drew on (notes, general, web …): only notes count as a source later.
     answered: str = ""
+    # The message asked to go through the undated tasks: the orchestrator holds that talk.
+    cleanup: bool = False
 
     @property
     def undos(self) -> list[VaultUndo]:
@@ -235,6 +238,14 @@ class FixTurn:
         return "\n".join([texts.FIX_DONE.format(what=what), *self.reminded])
 
 
+def _iso_date(value: str) -> bool:
+    try:
+        date.fromisoformat(value)
+    except ValueError:
+        return False
+    return True
+
+
 def _not_here(refused: list[str]) -> str:
     """What a group chat is told when part of its message was not its to ask."""
     # "inbox" is what a message nobody understood becomes, not something the group asked for.
@@ -259,7 +270,8 @@ class VaultPipeline:
                  web_words: Callable[[], tuple[str, ...]] | None = None,
                  date_props: Callable[[], tuple[str, ...]] | None = None,
                  askers: Askers | None = None,
-                 planner: VaultPlanner | None = None, banter: Banter | None = None) -> None:
+                 planner: VaultPlanner | None = None, banter: Banter | None = None,
+                 kept: cleanup.Kept | None = None, archive_log: Path | None = None) -> None:
         self._index = index
         self._writer = writer
         # The whole vault and its writer. A group chat's turn (`scoped`) swaps `_index` and
@@ -279,6 +291,10 @@ class VaultPipeline:
         self._answerer = answerer
         # Jokes for a group that may have them (the "banter" right); None: its stock lines.
         self._banter = banter
+        # The undated tasks the owner chose to keep as they are, and when the weekly archive
+        # last ran and moved how many (for the morning's line).
+        self._kept_tasks = kept or cleanup.Kept(None)
+        self._archive_log = archive_log
         # Obsidian's own search, while the app runs: what it finds that ours did not is read
         # by the answerer too (app/vault/omnisearch.py).
         self._omni = omni
@@ -574,6 +590,10 @@ class VaultPipeline:
                 return VaultTurn(error=texts.PLAN_STEP_UNCLEAR, model=model)
             actions = [a for a in actions if a.action != "inbox"]
         actions, refused = self._gated(actions)
+        if any(a.action == "cleanup" for a in actions):
+            # Going through the undated tasks is a talk the orchestrator holds, card by card.
+            return VaultTurn(cleanup=True, model=model, prompt_tokens=prompt_tokens,
+                             output_tokens=output_tokens)
         if self._scope is not None and not actions:
             # A group chat never falls back to the owner's inbox: it is told what it may not
             # do here, or that the bot did not understand, and nothing is written.
@@ -1366,10 +1386,138 @@ class VaultPipeline:
         self._index.refresh()
         day = today or self._now().date()
         text = agenda_mod.digest(agenda_mod.build(self._index, day, self._date_props()), day)
-        shopping = agenda_mod.groceries_line(self._index)
-        if not shopping:
-            return text
-        return f"{text}\n\n{shopping}" if text else shopping
+        extra = [line for line in (agenda_mod.groceries_line(self._index),
+                                   self._archived_line(day)) if line]
+        return "\n\n".join([text, *extra] if text else extra)
+
+    # ---- going through the undated tasks, and the weekly archive -------------------------
+
+    TASKS = f"{texts.VAULT_TASKS_NOTE}.md"
+    ARCHIVE = f"{texts.VAULT_ARCHIVE_NOTE}.md"
+    CLEANUP_KINDS = ("date", "done", "drop", "keep", "stop", "change", "other")
+
+    def _tasks_text(self) -> str:
+        try:
+            return self._writer.read(self.TASKS)
+        except OSError:
+            return ""
+
+    def cleanup_cards(self) -> list[cleanup.Card]:
+        """The undated tasks to go through, in file order, the kept ones left out."""
+        self._index.refresh()
+        return cleanup.cards(self._tasks_text(), self._kept_tasks.all())
+
+    async def cleanup_read(self, card: cleanup.Card, answer: str) -> tuple[dict, str, int, int]:
+        """What an answer in words means for this card: (fields, model, tokens in, out). A
+        reader that cannot be asked reads it as being about something else."""
+        ask = getattr(self._filer, "ask", None)
+        nothing = {"kind": "other"}
+        if ask is None:
+            return nothing, "", 0, 0
+        today = self._now().date()
+        text = self._tasks_text()
+        sections = cleanup.headings(text)
+        tags = self._index.tags()
+        schema = {"type": "object", "additionalProperties": False,
+                  "required": ["kind", "due", "time", "text", "heading", "tag"],
+                  "properties": {"kind": {"type": "string", "enum": list(self.CLEANUP_KINDS)},
+                                 **{k: {"type": "string"}
+                                    for k in ("due", "time", "text", "heading", "tag")}}}
+        week = ", ".join(f"{RU_WEEKDAYS[(today.weekday() + i) % 7]} "
+                         f"{(today + timedelta(days=i)).isoformat()}" for i in range(8))
+        try:
+            data, used_in, used_out = await ask(
+                P.CLEANUP_PROMPT, schema,
+                P.cleanup_message(card.line, card.heading, week, sections, tags, answer), 400)
+        except FilerError as e:
+            log.warning("cleanup: the answer could not be read (%s)", e)
+            return nothing, "", 0, 0
+        kind = str(data.get("kind", ""))
+        due = str(data.get("due", "")).strip()
+        time = str(data.get("time", "")).strip()
+        fields = {
+            "kind": kind if kind in self.CLEANUP_KINDS else "other",
+            "due": due if _iso_date(due) else "",
+            "time": time if re.fullmatch(r"\d{1,2}:\d{2}", time) else "",
+            "text": str(data.get("text", "")).strip(),
+            "heading": next((h for h in sections
+                             if h.casefold() == str(data.get("heading", "")).strip().casefold()),
+                            ""),
+            "tag": next((t for t in tags if t.casefold()
+                         == str(data.get("tag", "")).strip().lstrip("#").casefold()), ""),
+        }
+        if fields["heading"] and not fields["tag"]:
+            # A move names the section; its tag is the one the tasks there already wear.
+            fields["tag"] = cleanup.section_tag(text, fields["heading"])
+        if fields["kind"] == "date" and not (fields["due"] or fields["time"]):
+            fields["kind"] = "other"  # a date it could not name is no answer
+        if fields["kind"] == "change" and not any(
+                fields[k] for k in ("text", "heading", "tag", "due", "time")):
+            fields["kind"] = "other"
+        return fields, self._filer.model, used_in, used_out
+
+    def cleanup_apply(self, card: cleanup.Card, kind: str,
+                      fields: dict | None = None) -> list[VaultUndo] | None:
+        """Carry one answer out. The writes to undo it ([] when nothing was written), or None
+        when the task is no longer as it was shown (changed or gone since)."""
+        fields = fields or {}
+        today = self._now().date()
+        if kind == "keep":
+            if cleanup.changed(self._tasks_text(), card.line) is None:
+                return None
+            self._kept_tasks.add(card.line)
+            return []
+        if kind == "drop":
+            found = cleanup.dropped(self._tasks_text(), card.line, today)
+            if found is None:
+                return None
+            # The archive first: a failure after it leaves a copy, never a lost task.
+            archived = self._writer.edit(self.ARCHIVE,
+                                         lambda t: cleanup.prepended(t, [found[1]]))
+            taken = self._writer.edit(
+                self.TASKS, lambda t: (cleanup.dropped(t, card.line, today) or (None,))[0])
+            if taken is None:
+                if archived is not None:
+                    self._writer.undo(archived)
+                return None
+            return [u for u in (archived, taken) if u is not None]
+        if kind == "done":
+            change = lambda t: cleanup.done(t, card.line, today)  # noqa: E731
+        else:  # date or change
+            change = lambda t: cleanup.changed(  # noqa: E731
+                t, card.line, words=fields.get("text", ""), heading=fields.get("heading", ""),
+                tag=fields.get("tag", ""), due=fields.get("due", ""),
+                time=fields.get("time", ""))
+        written = self._writer.edit(self.TASKS, change)
+        return [written] if written is not None else None
+
+    def archive_week(self, today: date | None = None) -> int:
+        """Move the ticked tasks to the archive (the archive first, so a failure halfway leaves
+        a copy rather than a lost line). How many moved; remembered for the morning's line."""
+        day = today or self._now().date()
+        _, rows = cleanup.archive_done(self._tasks_text(), day)
+        if rows:
+            self._writer.edit(self.ARCHIVE, lambda t: cleanup.prepended(t, rows))
+            self._writer.edit(self.TASKS, lambda t: cleanup.without(t, rows))
+        log.info("archive: %d done task(s) moved", len(rows))
+        if self._archive_log is not None:
+            try:
+                self._archive_log.write_text(
+                    json.dumps({"day": day.isoformat(), "count": len(rows)}), encoding="utf-8")
+            except OSError as e:
+                log.warning("could not remember the archive run (%s)", e)
+        return len(rows)
+
+    def _archived_line(self, day: date) -> str:
+        if self._archive_log is None:
+            return ""
+        try:
+            seen = json.loads(self._archive_log.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return ""
+        if seen.get("day") == day.isoformat() and seen.get("count"):
+            return texts.ARCHIVE_LINE.format(n=seen["count"])
+        return ""
 
     def _write_all(self, actions: list[VaultAction]) -> tuple[list[VaultWrite], list[str]]:
         """What was written, and the error of each action that could not be. One file that

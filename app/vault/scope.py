@@ -37,7 +37,7 @@ log = logging.getLogger(__name__)
 NEEDS = {"search": "ask", "agenda": "ask", "link_answer": "ask", "task": "tasks",
          "note": "add", "append": "add", "rewrite": "change", "move": "move",
          "reminder": "remind", "reminder_list": "remind", "reminder_cancel": "remind"}
-NEVER = ("log", "grocery", "inbox")
+NEVER = ("log", "grocery", "inbox", "cleanup")
 MAX_SUFFIX = 20
 _HEADING = re.compile(r"^#{1,6}\s+(\S.*?)\s*$")
 _TASK = re.compile(r"^\s*[-*+]\s+\[.\]\s+")

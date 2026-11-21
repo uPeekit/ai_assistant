@@ -62,6 +62,10 @@ class FakeOrchestrator:
         self.calls.append(("handle_callback", chat_id, user_id, data))
         return self.reply
 
+    async def cleanup(self, chat_id, user_id=0):
+        self.calls.append(("cleanup", chat_id))
+        return self.reply
+
     async def undo(self, chat_id, execution_id=None, user_id=0):
         self.calls.append(("undo", chat_id, execution_id))
         return self.reply
@@ -449,6 +453,13 @@ async def test_help_command_replies_with_help_text():
     assert await dispatch(hs.app, update, hs.context)
 
     assert hs.bot.sent[0]["text"] == texts.HELP_TEXT
+
+
+async def test_the_cleanup_command_starts_it_in_the_private_chat():
+    hs = build(reply=Reply("card"))
+    assert await dispatch(hs.app, command_update(ALLOWED_USER, "cleanup", hs.bot), hs.context)
+    assert hs.orch.calls == [("cleanup", CHAT_ID)]
+    assert hs.bot.sent[0]["text"] == "card"
 
 
 @pytest.mark.parametrize("name", ["refresh", "targets", "cancel"])

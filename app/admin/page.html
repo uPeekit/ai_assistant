@@ -141,6 +141,12 @@
   <p class="hint">
     Из каких свойств заметки брать дату события — встречи клуба, поездки, дни рождения.
   </p>
+  <label class="field">Архив сделанных задач, раз в неделю
+    <input type="text" id="tuning-archive_at" placeholder="пн 04:00">
+  </label>
+  <p class="hint">
+    День недели и время: сделанные задачи переезжают в «Задачи — архив». Пусто — не переносить.
+  </p>
   <h3>Дополнение к промпту связей</h3>
   <p class="hint">
     Добавляется к инструкции, по которой бот расставляет ссылки между заметками. Например:
@@ -294,7 +300,7 @@ function load() {
     })
     .then(function (data) {
       var tuning = data.tuning || {};
-      ["bot_name", "agenda_at", "mail_at", "folders_at", "web_words", "countdown_tag",
+      ["bot_name", "agenda_at", "archive_at", "mail_at", "folders_at", "web_words", "countdown_tag",
        "date_props", "research_note", "linker_note", "banter_note",
        "never_open", "sync_after"].forEach(
         function (name) {
@@ -967,7 +973,7 @@ document.getElementById("add-rule").addEventListener("click", function () {
 
 function collectBody() {
   var body = {
-    tuning: ["bot_name", "agenda_at", "mail_at", "folders_at", "web_words", "countdown_tag",
+    tuning: ["bot_name", "agenda_at", "archive_at", "mail_at", "folders_at", "web_words", "countdown_tag",
              "date_props", "research_note", "linker_note", "banter_note",
        "never_open", "sync_after"].reduce(
       function (acc, name) {

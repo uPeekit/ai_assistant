@@ -10,6 +10,11 @@ from __future__ import annotations
 
 BTN_UNDO = "Отменить"
 BTN_FIX = "Поправить"
+# Under a cleanup card (app/vault/cleanup.py).
+BTN_CLEANUP_DONE = "Сделано"
+BTN_CLEANUP_DROP = "Не нужно"
+BTN_CLEANUP_KEEP = "Оставить"
+BTN_CLEANUP_STOP = "Стоп"
 # Under a mail digest: mark every letter it listed as read, and the way back.
 BTN_MAIL_READ = "✓ Отметить прочитанными"
 BTN_MAIL_UNREAD = "↩ Вернуть непрочитанными"
@@ -54,7 +59,8 @@ HELP_TEXT = (
     "Команды:\n"
     "/start — начать работу\n"
     "/help — это сообщение\n"
-    "/undo — отменить последнее действие\n\n"
+    "/undo — отменить последнее действие\n"
+    "/cleanup — разобрать задачи без срока\n\n"
     "Любую запись можно отменить или поправить кнопками под ответом. Умею и искать в "
     "интернете: «найди рецепт борща и запиши в заметки»."
 )
@@ -67,7 +73,29 @@ COMMANDS: dict[str, str] = {
     "start": "Начать работу",
     "help": "Что умеет бот и какие есть команды",
     "undo": "Отменить последнее действие",
+    "cleanup": "Разобрать задачи без срока",
 }
+
+# ---- going through the undated tasks (app/vault/cleanup.py) ----------------------------------
+
+CLEANUP_CARD = "🧹 {n} из {total} · {heading}\n{task}"
+CLEANUP_DID = {
+    "done": "✅ Сделано: {task}",
+    "drop": "🗑 В архив: {task}",
+    "keep": "📌 Оставил без срока: {task}",
+    "date": "📅 {task} → {when}",
+    "change": "✏️ Поменял: {task}",
+}
+CLEANUP_NOTHING = "🧹 Задач без срока нет — разбирать нечего."
+CLEANUP_STOPPED = "🧹 Остановились: разобрано {done} из {total}. Продолжить — /cleanup."
+CLEANUP_END = "🧹 Готово: разобрано {done} из {total}."
+CLEANUP_OVER = "Этот разбор уже закончился — /cleanup, чтобы начать заново."
+CLEANUP_GONE = "Эту задачу уже поменяли — пропускаю."
+CLEANUP_PRIVATE = "Разбирать задачи можно только в личном чате."
+# The weekly move of done tasks to the archive: its line in that morning's agenda, and when it
+# runs unless the admin page says otherwise.
+ARCHIVE_LINE = "📦 В архив: {n}"
+ARCHIVE_AT_DEFAULT = "пн 04:00"
 
 # ---- when Claude cannot be used (app/llm/health.py) -------------------------------------------
 
@@ -298,7 +326,7 @@ SCOPE_KINDS = {
     "append": "дописывать в эту заметку", "note": "новые заметки", "task": "новые задачи",
     "search": "вопросы", "agenda": "вопросы", "link_answer": "вопросы",
     "reminder": "напоминания", "reminder_list": "напоминания",
-    "reminder_cancel": "напоминания",
+    "reminder_cancel": "напоминания", "cleanup": "разбор задач",
 }
 # Said in place of the Obsidian line when a rewrite was asked for and there is no model to
 # do it with.

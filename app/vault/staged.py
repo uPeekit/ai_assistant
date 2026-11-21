@@ -52,7 +52,7 @@ log = logging.getLogger(__name__)
 # tokens)
 Ask = Callable[[str, dict, str, int], Awaitable[tuple[dict, int, int]]]
 
-INTENTS = ("add", "done", "change", "move", "ask", "remind", "unclear")
+INTENTS = ("add", "done", "change", "move", "ask", "remind", "cleanup", "unclear")
 MAX_TITLE_WORDS = 8  # a note saved from what was said, without a title of its own
 MAX_TASK_WORDS = 300  # characters of a task made from what was said
 ASK_KINDS = ("day", "overdue", "now", "groceries", "search")
@@ -318,6 +318,12 @@ class StagedFiler:
         self._lookup = lookup
         self._close = close
 
+    @property
+    def ask(self) -> Ask:
+        """The reader's own question to its model, for a question asked outside a message
+        (an answer during the task cleanup, app/vault/pipeline.py)."""
+        return self._ask_model
+
     @classmethod
     def claude(cls, api_key: str, model: str, *, timeout_s: float = 30.0,
                lookup_model: str = "", client: anthropic.AsyncAnthropic | None = None,
@@ -552,6 +558,8 @@ class _Run:
             await target_task
         if intent == "unclear":
             return [self._inbox(self.message)]
+        if intent == "cleanup":
+            return [{"action": "cleanup"}]
         handler = {"done": self._done, "change": self._change, "move": self._move,
                    "ask": self._question, "remind": self._remind}[intent]
         actions = await handler(self.message)

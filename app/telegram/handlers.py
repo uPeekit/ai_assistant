@@ -58,6 +58,7 @@ from app.pointing import clean_answer, points_back
 from app.speech.base import SpeechEmpty, SpeechError, SpeechToText
 from app.telegram.auth import (
     GROUPS,
+    allowed_filter,
     chat_filter,
     deny,
     is_allowed,
@@ -111,6 +112,9 @@ def register(
     gate = chat_filter(settings, chats, names, recent)
     app.add_handler(CommandHandler(["start", "help"], _cmd_help, filters=gate))
     app.add_handler(CommandHandler("undo", _cmd_undo, filters=gate))
+    # The owner's task file: their private chat only.
+    app.add_handler(CommandHandler(
+        "cleanup", _cmd_cleanup, filters=allowed_filter(settings) & filters.ChatType.PRIVATE))
     # `gate` is the outermost (rightmost) operand of every `&` below, not the leftmost: PTB's
     # `_MergedFilter.filter` always evaluates its `base_filter` first and short-circuits the
     # `and_filter` when that base is falsy, so putting the cheap type check first means `gate`
@@ -399,6 +403,12 @@ async def _clear_keyboard(query) -> None:
 
 async def _cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _send(update, context, Reply(texts.HELP_TEXT), context.bot_data[_STORE])
+
+
+async def _cmd_cleanup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    orch: Orchestrator = context.bot_data[_ORCH]
+    reply = await orch.cleanup(update.effective_chat.id, user_id=update.effective_user.id)
+    await _send(update, context, reply, context.bot_data[_STORE])
 
 
 async def _cmd_undo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

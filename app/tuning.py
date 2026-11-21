@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from app import texts
 from app.web.links import NEVER_OPEN_DEFAULT
 
 log = logging.getLogger(__name__)
@@ -94,6 +95,7 @@ class Tuning:
         return {
             "bot_name": self.bot_name,
             "agenda_at": self.agenda_at,
+            "archive_at": self.archive_at,
             "mail_at": self.mail_at,
             "folders_at": self._text("folders_at", ""),  # empty: the mail digest's times
             "web_words": ", ".join(self.web_words),
@@ -128,6 +130,12 @@ class Tuning:
     @property
     def agenda_at(self) -> str:
         return self._text("agenda_at", self._defaults.agenda_at)
+
+    @property
+    def archive_at(self) -> str:
+        """When the done tasks move to the archive each week: a weekday and a time
+        (app/vault/cleanup.py)."""
+        return self._text("archive_at", texts.ARCHIVE_AT_DEFAULT)
 
     @property
     def mail_at(self) -> str:
@@ -191,5 +199,6 @@ def _site(entry: str) -> str:
 def _clean(key: str, value: object) -> str:
     if not isinstance(value, str):
         raise ValueError(f"{key!r} must be a string")
-    one_line = ("bot_name", "agenda_at", "mail_at", "folders_at", "countdown_tag")
+    one_line = ("bot_name", "agenda_at", "archive_at", "mail_at", "folders_at",
+                "countdown_tag")
     return " ".join(value.split()) if key in one_line else value.strip()[:MAX_TEXT]
