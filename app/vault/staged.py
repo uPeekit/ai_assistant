@@ -734,10 +734,12 @@ class _Run:
         return query, media if media in MEDIA else "text"
 
     async def _expand(self, prompt: str, schema: dict, lookup: str, *context: str) -> list:
-        """The items of a set the user named without listing it, from the lookup model."""
+        """The items of a set the user named without listing it, from the lookup model. It is
+        told the day like every other stage: "on 4 January", said in November, came back as a
+        January two years gone, the year taken from memory."""
         self.trail.append("lookup")
         answer = await self._ask(
-            prompt, schema, P.message(*context, P.section(P.H_LOOKUP, lookup),
+            prompt, schema, P.message(*context, self._today(), P.section(P.H_LOOKUP, lookup),
                                       text=self.message), model=self._lookup_model,
             max_tokens=LOOKUP_MAX_TOKENS)
         return list(answer.get("items") or [])[:MAX_LOOKUP]

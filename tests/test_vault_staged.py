@@ -544,6 +544,26 @@ async def test_titles_the_user_never_said_are_a_set_to_look_up_not_notes():
     assert message in strong.asked[0][2]  # asked with the user's words, having none of its own
 
 
+async def test_a_lookup_knows_what_day_it_is():
+    """e335: «мероприятие в клуб … вегетарианка на 4 января», said in November. The details
+    stage had 2027-01-04 right, but its title «Книга» was never said, so the lookup made the
+    note — and with no date before it, it took the year from memory: «2025-01-04»."""
+    light = Script(
+        INTENT_PROMPT={"intent": "add"}, TARGET_PROMPT={"target": "f3"},
+        FOLDER_PROMPT={"items": [{"title": "2027-01-04 Книга", "props": [], "body": [],
+                                  "tags": []}], "lookup": "", "web": "", "media": "text"})
+    strong = Script(LOOKUP_NOTES_PROMPT={"items": [{"title": "2027-01-04 Вегетарианка",
+                                                    "props": []}]})
+
+    await StagedFiler(light, "haiku", lookup=strong).file(
+        "Создай мероприятие в клуб Топ ханган вегетарианка на 4 января",
+        ctx(today="2026-11-24", weekday="вторник"))
+
+    shown = strong.asked[0][2]
+    assert "2026-11-24 (вторник)" in shown
+    assert "2026-11-25" in shown  # the coming week too, as every other stage sees it
+
+
 async def test_a_note_is_named_when_most_of_its_name_is_there_despite_dictation():
     """e93: «Найди мне страницу мою проворота тории … каждый вид и подвид» — «про» glued onto
     «ворота», and «виды» said as «вид». Two of three words is naming the note."""
